@@ -682,7 +682,7 @@ static int map_sg_list(struct scsi_cmnd *cmd, int nseg,
 
 /**
  * map_sg_data: - Maps dma for a scatterlist and initializes decriptor fields
- * @cmd:	struct scsi_cmnd with the scatterlist
+ * @cmd:	Scsi_Cmnd with the scatterlist
  * @srp_cmd:	srp_cmd that contains the memory descriptor
  * @dev:	device for which to map dma memory
  *
@@ -838,9 +838,8 @@ static void ibmvscsi_reset_host(struct ibmvscsi_host_data *hostdata)
  *
  * Called when an internally generated command times out
 */
-static void ibmvscsi_timeout(struct timer_list *t)
+static void ibmvscsi_timeout(struct srp_event_struct *evt_struct)
 {
-	struct srp_event_struct *evt_struct = from_timer(evt_struct, t, timer);
 	struct ibmvscsi_host_data *hostdata = evt_struct->hostdata;
 
 	dev_err(hostdata->dev, "Command timed out (%x). Resetting connection\n",
@@ -929,9 +928,11 @@ static int ibmvscsi_send_srp_event(struct srp_event_struct *evt_struct,
 	 */
 	list_add_tail(&evt_struct->list, &hostdata->sent);
 
-	timer_setup(&evt_struct->timer, ibmvscsi_timeout, 0);
+	init_timer(&evt_struct->timer);
 	if (timeout) {
+		evt_struct->timer.data = (unsigned long) evt_struct;
 		evt_struct->timer.expires = jiffies + (timeout * HZ);
+		evt_struct->timer.function = (void (*)(unsigned long))ibmvscsi_timeout;
 		add_timer(&evt_struct->timer);
 	}
 
@@ -1275,12 +1276,14 @@ static void send_mad_capabilities(struct ibmvscsi_host_data *hostdata)
 	if (hostdata->client_migrated)
 		hostdata->caps.flags |= cpu_to_be32(CLIENT_MIGRATED);
 
-	strlcpy(hostdata->caps.name, dev_name(&hostdata->host->shost_gendev),
+	strncpy(hostdata->caps.name, dev_name(&hostdata->host->shost_gendev),
 		sizeof(hostdata->caps.name));
+	hostdata->caps.name[sizeof(hostdata->caps.name) - 1] = '\0';
 
 	location = of_get_property(of_node, "ibm,loc-code", NULL);
 	location = location ? location : dev_name(hostdata->dev);
-	strlcpy(hostdata->caps.loc, location, sizeof(hostdata->caps.loc));
+	strncpy(hostdata->caps.loc, location, sizeof(hostdata->caps.loc));
+	hostdata->caps.loc[sizeof(hostdata->caps.loc) - 1] = '\0';
 
 	req->common.type = cpu_to_be32(VIOSRP_CAPABILITIES_TYPE);
 	req->buffer = cpu_to_be64(hostdata->caps_addr);

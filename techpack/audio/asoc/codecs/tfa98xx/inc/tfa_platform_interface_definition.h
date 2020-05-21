@@ -1,6 +1,6 @@
 /*
  * Copyright 2015-2018 NXP Semiconductors
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 
 
 
-#define TFA_USING_PRIMARY_MI2S
+#define TFA_USING_QUATERNARY_MI2S
 
 
 #if defined(TFA_USING_SECONDARY_MI2S)
@@ -94,23 +94,7 @@
 	#define TFA_TX_HOSTLESS_STREAM_NAME			"Quinary MI2S_TX Hostless"
 	#define TFA_TX_HOSTLESS_CPU_DAI_NAME		"QUIN_MI2S_TX_HOSTLESS"
 
-
-#elif defined(TFA_USING_PRIMARY_MI2S)
-	/*Attention: port_id =	AFE_PORT_ID_SECONDARY_MI2S_RX/TX, AFE_PORT_ID_TERTIARY_MI2S_RX/TX,
-							AFE_PORT_ID_QUATERNARY_MI2S_RX/TX or AFE_PORT_ID_QUINARY_MI2S_RX/TX*/
-	#define AFE_PORT_ID_TFADSP_RX				(AFE_PORT_ID_PRIMARY_MI2S_RX)
-	#define AFE_PORT_ID_TFADSP_TX				(AFE_PORT_ID_PRIMARY_MI2S_TX)
-
-	#define PLATFORM_RX_VI_FB_RX_MUX_TEXT		"PRI_MI2S_RX"
-	#define PLATFORM_RX_VI_FB_TX_MUX_TEXT		"PRI_MI2S_TX"
-	#define PLATFORM_RX_VI_FB_MUX_NAME			"PRI_MI2S_RX_VI_FB_MUX"
-	#define PLATFORM_RX_VI_FB_TX_VALUE			MSM_BACKEND_DAI_PRI_MI2S_TX
-	#define PLATFORM_RX_VI_FB_MUX_ENUM			MSM_BACKEND_DAI_PRI_MI2S_RX
-
-	#define TFA_TX_HOSTLESS_CODEC_NAME			"Primary MI2S_TX Hostless"
-	#define TFA_TX_HOSTLESS_STREAM_NAME			"Primary MI2S_TX Hostless"
-	#define TFA_TX_HOSTLESS_CPU_DAI_NAME		"PRI_MI2S_TX_HOSTLESS"
 #else
 	#error you should define which mi2s will be used for TFA device.
 #endif
-#endif /* _TFA_PLATFORM_INTERFACE_DEFINITION_H_ */
+#endif /* _TFA_PLATFORM_INTERFACE_DEFINITION_H_ */ 

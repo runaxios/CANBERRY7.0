@@ -27,6 +27,7 @@
 #endif
 
 #include <linux/types.h>
+#include <linux/sched.h>
 
 struct wake_irq;
 
@@ -70,6 +71,7 @@ struct wakeup_source {
 	unsigned long		wakeup_count;
 	bool			active:1;
 	bool			autosleep_enabled:1;
+	char comm[TASK_COMM_LEN];
 };
 
 #ifdef CONFIG_PM_SLEEP
@@ -86,11 +88,6 @@ static inline bool device_can_wakeup(struct device *dev)
 static inline bool device_may_wakeup(struct device *dev)
 {
 	return dev->power.can_wakeup && !!dev->power.wakeup;
-}
-
-static inline void device_set_wakeup_path(struct device *dev)
-{
-	dev->power.wakeup_path = true;
 }
 
 /* drivers/base/power/wakeup.c */
@@ -178,8 +175,6 @@ static inline bool device_may_wakeup(struct device *dev)
 {
 	return dev->power.can_wakeup && dev->power.should_wakeup;
 }
-
-static inline void device_set_wakeup_path(struct device *dev) {}
 
 static inline void __pm_stay_awake(struct wakeup_source *ws) {}
 

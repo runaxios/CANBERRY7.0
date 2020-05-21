@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #include <asm/dma-iommu.h>
 #include <linux/delay.h>
@@ -23,7 +30,7 @@ int msm_slim_rx_enqueue(struct msm_slim_ctrl *dev, u32 *buf, u8 len)
 	spin_lock(&dev->rx_lock);
 	if ((dev->tail + 1) % MSM_CONCUR_MSG == dev->head) {
 		spin_unlock(&dev->rx_lock);
-		dev_err(dev->dev, "RX QUEUE full!\n");
+		dev_err(dev->dev, "RX QUEUE full!");
 		return -EXFULL;
 	}
 	memcpy((u8 *)dev->rx_msgs[dev->tail], (u8 *)buf, len);
@@ -161,6 +168,55 @@ void msm_slim_free_endpoint(struct msm_slim_endp *ep)
 	ep->sps = NULL;
 }
 
+static int msm_slim_iommu_attach(struct msm_slim_ctrl *ctrl_dev)
+{
+	struct dma_iommu_mapping *iommu_map;
+	dma_addr_t va_start = MSM_SLIM_VA_START;
+	size_t va_size = MSM_SLIM_VA_SIZE;
+	int bypass = 1;
+	struct device *dev;
+
+	if (unlikely(!ctrl_dev))
+		return -EINVAL;
+
+	if (!ctrl_dev->iommu_desc.cb_dev)
+		return 0;
+
+	if (!IS_ERR_OR_NULL(ctrl_dev->iommu_desc.iommu_map)) {
+		arm_iommu_detach_device(ctrl_dev->iommu_desc.cb_dev);
+		arm_iommu_release_mapping(ctrl_dev->iommu_desc.iommu_map);
+		ctrl_dev->iommu_desc.iommu_map = NULL;
+		SLIM_INFO(ctrl_dev, "NGD IOMMU Dettach complete\n");
+	}
+
+	dev = ctrl_dev->iommu_desc.cb_dev;
+	iommu_map = arm_iommu_create_mapping(&platform_bus_type,
+						va_start, va_size);
+	if (IS_ERR(iommu_map)) {
+		dev_err(dev, "%s iommu_create_mapping failure\n", __func__);
+		return PTR_ERR(iommu_map);
+	}
+
+	if (ctrl_dev->iommu_desc.s1_bypass) {
+		if (iommu_domain_set_attr(iommu_map->domain,
+					DOMAIN_ATTR_S1_BYPASS, &bypass)) {
+			dev_err(dev, "%s Can't bypass s1 translation\n",
+				__func__);
+			arm_iommu_release_mapping(iommu_map);
+			return -EIO;
+		}
+	}
+
+	if (arm_iommu_attach_device(dev, iommu_map)) {
+		dev_err(dev, "%s can't arm_iommu_attach_device\n", __func__);
+		arm_iommu_release_mapping(iommu_map);
+		return -EIO;
+	}
+	ctrl_dev->iommu_desc.iommu_map = iommu_map;
+	SLIM_INFO(ctrl_dev, "NGD IOMMU Attach complete\n");
+	return 0;
+}
+
 int msm_slim_sps_mem_alloc(
 		struct msm_slim_ctrl *dev, struct sps_mem_buffer *mem, u32 len)
 {
@@ -170,37 +226,26 @@ int msm_slim_sps_mem_alloc(
 
 	mem->size = len;
 	mem->min_size = 0;
-	mem->base = dev->lpass_mem_usage ? dev->lpass.base :
-		dma_alloc_coherent(dma_dev, mem->size, &phys, GFP_KERNEL);
+	mem->base = dma_alloc_coherent(dma_dev, mem->size, &phys, GFP_KERNEL);
 
 	if (!mem->base) {
-		dev_err(dma_dev, "dma_alloc_coherent (%d) failed\n", len);
+		dev_err(dma_dev, "dma_alloc_coherent(%d) failed\n", len);
 		return -ENOMEM;
 	}
 
-	mem->phys_base = dev->lpass_mem_usage ?
-			(unsigned long long)dev->lpass_mem->start : phys;
-	if (dev->lpass_mem_usage) {
-		memset_io(mem->base, 0x00, mem->size);
-		dev->lpass.base = dev->lpass.base + mem->size;
-		dev->lpass_mem->start = dev->lpass_mem->start + mem->size;
-	} else {
-		memset(mem->base, 0x00, mem->size);
-	}
+	mem->phys_base = phys;
+	memset(mem->base, 0x00, mem->size);
 	return 0;
 }
 
 void
 msm_slim_sps_mem_free(struct msm_slim_ctrl *dev, struct sps_mem_buffer *mem)
 {
-	if (!dev->lpass_mem_usage) {
-		if (mem->base && mem->phys_base)
-			dma_free_coherent(dev->dev, mem->size, mem->base,
+	if (mem->base && mem->phys_base)
+		dma_free_coherent(dev->dev, mem->size, mem->base,
 							mem->phys_base);
-		else
-			dev_err(dev->dev, "Cannot free DMA as it is NULL\n");
-	}
-
+	else
+		dev_err(dev->dev, "cant dma free. they are NULL\n");
 	mem->size = 0;
 	mem->base = NULL;
 	mem->phys_base = 0;
@@ -374,7 +419,7 @@ int msm_slim_connect_pipe_port(struct msm_slim_ctrl *dev, u8 pn)
 	ret = msm_slim_sps_mem_alloc(dev, &cfg->desc,
 				MSM_SLIM_DESC_NUM * sizeof(struct sps_iovec));
 	if (ret)
-		pr_err("mem alloc for descr failed:%d\n", ret);
+		pr_err("mem alloc for descr failed:%d", ret);
 	else
 		ret = sps_connect(dev->pipes[pn].sps, cfg);
 
@@ -396,6 +441,10 @@ int msm_alloc_port(struct slim_controller *ctrl, u8 pn)
 		return -EPROTONOSUPPORT;
 	if (pn >= dev->port_nums)
 		return -ENODEV;
+
+	ret = msm_slim_iommu_attach(dev);
+	if (ret)
+		return ret;
 
 	endpoint = &dev->pipes[pn];
 	ret = msm_slim_init_endpoint(dev, endpoint);
@@ -551,7 +600,7 @@ static int msm_slim_post_tx_msgq(struct msm_slim_ctrl *dev, u8 *buf, int len)
 	phys_addr_t phys_addr = mem->phys_base + ix;
 
 	for (ret = 0; ret < ((len + 3) >> 2); ret++)
-		pr_debug("BAM TX buf[%d]:0x%x\n", ret, ((u32 *)buf)[ret]);
+		pr_debug("BAM TX buf[%d]:0x%x", ret, ((u32 *)buf)[ret]);
 
 	ret = sps_transfer_one(pipe, phys_addr, ((len + 3) & 0xFC), NULL,
 				SPS_IOVEC_FLAG_EOT);
@@ -586,7 +635,7 @@ void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
 		addr = DESC_FULL_ADDR(iovec.flags, iovec.addr);
 		if (ret || addr == 0) {
 			if (ret)
-				pr_err("SLIM TX get IOVEC failed:%d\n", ret);
+				pr_err("SLIM TX get IOVEC failed:%d", ret);
 			return;
 		}
 		if (addr == dev->bulk.wr_dma) {
@@ -1136,7 +1185,7 @@ init_pipes:
 		dev->pipes = kcalloc(dev->port_nums,
 				     sizeof(struct msm_slim_endp), GFP_KERNEL);
 		if (IS_ERR_OR_NULL(dev->pipes)) {
-			dev_err(dev->dev, "no memory for data ports\n");
+			dev_err(dev->dev, "no memory for data ports");
 			sps_deregister_bam_device(bam_handle);
 			return PTR_ERR(dev->pipes);
 		}
@@ -1145,6 +1194,11 @@ init_pipes:
 	}
 
 init_msgq:
+	ret = msm_slim_iommu_attach(dev);
+	if (ret) {
+		sps_deregister_bam_device(bam_handle);
+		return ret;
+	}
 
 	ret = msm_slim_init_rx_msgq(dev, pipe_reg);
 	if (ret)
@@ -1354,7 +1408,7 @@ static struct qmi_elem_info slimbus_select_inst_req_msg_v01_ei[] = {
 		.data_type = QMI_UNSIGNED_4_BYTE,
 		.elem_len  = 1,
 		.elem_size = sizeof(uint32_t),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x01,
 		.offset    = offsetof(struct slimbus_select_inst_req_msg_v01,
 				      instance),
@@ -1364,7 +1418,7 @@ static struct qmi_elem_info slimbus_select_inst_req_msg_v01_ei[] = {
 		.data_type = QMI_OPT_FLAG,
 		.elem_len  = 1,
 		.elem_size = sizeof(uint8_t),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x10,
 		.offset    = offsetof(struct slimbus_select_inst_req_msg_v01,
 				      mode_valid),
@@ -1374,7 +1428,7 @@ static struct qmi_elem_info slimbus_select_inst_req_msg_v01_ei[] = {
 		.data_type = QMI_UNSIGNED_4_BYTE,
 		.elem_len  = 1,
 		.elem_size = sizeof(enum slimbus_mode_enum_type_v01),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x10,
 		.offset    = offsetof(struct slimbus_select_inst_req_msg_v01,
 				      mode),
@@ -1384,7 +1438,7 @@ static struct qmi_elem_info slimbus_select_inst_req_msg_v01_ei[] = {
 		.data_type = QMI_EOTI,
 		.elem_len  = 0,
 		.elem_size = 0,
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x00,
 		.offset    = 0,
 		.ei_array  = NULL,
@@ -1396,7 +1450,7 @@ static struct qmi_elem_info slimbus_select_inst_resp_msg_v01_ei[] = {
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
 		.elem_size = sizeof(struct qmi_response_type_v01),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x02,
 		.offset    = offsetof(struct slimbus_select_inst_resp_msg_v01,
 				      resp),
@@ -1406,7 +1460,7 @@ static struct qmi_elem_info slimbus_select_inst_resp_msg_v01_ei[] = {
 		.data_type = QMI_EOTI,
 		.elem_len  = 0,
 		.elem_size = 0,
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x00,
 		.offset    = 0,
 		.ei_array  = NULL,
@@ -1418,7 +1472,7 @@ static struct qmi_elem_info slimbus_power_req_msg_v01_ei[] = {
 		.data_type = QMI_UNSIGNED_4_BYTE,
 		.elem_len  = 1,
 		.elem_size = sizeof(enum slimbus_pm_enum_type_v01),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x01,
 		.offset    = offsetof(struct slimbus_power_req_msg_v01, pm_req),
 		.ei_array  = NULL,
@@ -1427,7 +1481,7 @@ static struct qmi_elem_info slimbus_power_req_msg_v01_ei[] = {
 		.data_type      = QMI_OPT_FLAG,
 		.elem_len       = 1,
 		.elem_size      = sizeof(uint8_t),
-		.array_type       = NO_ARRAY,
+		.is_array       = NO_ARRAY,
 		.tlv_type       = 0x10,
 		.offset         = offsetof(struct slimbus_power_req_msg_v01,
 					   resp_type_valid),
@@ -1436,7 +1490,7 @@ static struct qmi_elem_info slimbus_power_req_msg_v01_ei[] = {
 		.data_type      = QMI_SIGNED_4_BYTE_ENUM,
 		.elem_len       = 1,
 		.elem_size      = sizeof(enum slimbus_resp_enum_type_v01),
-		.array_type       = NO_ARRAY,
+		.is_array       = NO_ARRAY,
 		.tlv_type       = 0x10,
 		.offset         = offsetof(struct slimbus_power_req_msg_v01,
 					   resp_type),
@@ -1445,7 +1499,7 @@ static struct qmi_elem_info slimbus_power_req_msg_v01_ei[] = {
 		.data_type = QMI_EOTI,
 		.elem_len  = 0,
 		.elem_size = 0,
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x00,
 		.offset    = 0,
 		.ei_array  = NULL,
@@ -1457,7 +1511,7 @@ static struct qmi_elem_info slimbus_power_resp_msg_v01_ei[] = {
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
 		.elem_size = sizeof(struct qmi_response_type_v01),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x02,
 		.offset    = offsetof(struct slimbus_power_resp_msg_v01, resp),
 		.ei_array  = qmi_response_type_v01_ei,
@@ -1466,7 +1520,7 @@ static struct qmi_elem_info slimbus_power_resp_msg_v01_ei[] = {
 		.data_type = QMI_EOTI,
 		.elem_len  = 0,
 		.elem_size = 0,
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x00,
 		.offset    = 0,
 		.ei_array  = NULL,
@@ -1478,7 +1532,7 @@ static struct qmi_elem_info slimbus_chkfrm_resp_msg_v01_ei[] = {
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
 		.elem_size = sizeof(struct qmi_response_type_v01),
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x02,
 		.offset    = offsetof(struct slimbus_chkfrm_resp_msg, resp),
 		.ei_array  = qmi_response_type_v01_ei,
@@ -1487,7 +1541,7 @@ static struct qmi_elem_info slimbus_chkfrm_resp_msg_v01_ei[] = {
 		.data_type = QMI_EOTI,
 		.elem_len  = 0,
 		.elem_size = 0,
-		.array_type  = NO_ARRAY,
+		.is_array  = NO_ARRAY,
 		.tlv_type  = 0x00,
 		.offset    = 0,
 		.ei_array  = NULL,
@@ -1499,7 +1553,7 @@ static struct qmi_elem_info slimbus_deferred_status_resp_msg_v01_ei[] = {
 		.data_type      = QMI_STRUCT,
 		.elem_len       = 1,
 		.elem_size      = sizeof(struct qmi_response_type_v01),
-		.array_type       = NO_ARRAY,
+		.is_array       = NO_ARRAY,
 		.tlv_type       = 0x02,
 		.offset         = offsetof(struct slimbus_deferred_status_resp,
 					   resp),
@@ -1507,7 +1561,7 @@ static struct qmi_elem_info slimbus_deferred_status_resp_msg_v01_ei[] = {
 	},
 	{
 		.data_type      = QMI_EOTI,
-		.array_type       = NO_ARRAY,
+		.is_array       = NO_ARRAY,
 	},
 };
 

@@ -64,6 +64,7 @@ struct snd_compr_params {
  * @pcm_io_frames: Frames rendered or received by DSP into a mixer or an audio
  * output/input. This field should be used for A/V sync or time estimates.
  * @sampling_rate: sampling rate of audio
+ * @timestamp: timestamp of audio clips
  */
 struct snd_compr_tstamp {
 	__u32 byte_offset;
@@ -71,6 +72,7 @@ struct snd_compr_tstamp {
 	__u32 pcm_frames;
 	__u32 pcm_io_frames;
 	__u32 sampling_rate;
+	__u64 timestamp;
 } __attribute__((packed, aligned(4)));
 
 /**
@@ -131,8 +133,6 @@ struct snd_compr_audio_info {
 	__u32 frame_size;
 	__u32 reserved[15];
 } __attribute__((packed, aligned(4)));
-
-#define SND_COMPR_AUDIO_INFO
 
 #define SNDRV_COMPRESS_RENDER_MODE_AUDIO_MASTER 0
 #define SNDRV_COMPRESS_RENDER_MODE_STC_MASTER 1

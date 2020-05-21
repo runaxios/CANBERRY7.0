@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -11,7 +19,6 @@
 #include <linux/vmalloc.h>
 #include "tsens.h"
 #include "thermal_core.h"
-#include <soc/qcom/scm.h>
 
 #define TSENS_DRIVER_NAME			"msm-tsens"
 
@@ -43,15 +50,12 @@
 #define TSENS_TM_UPPER_LOWER_INT_MASK(n)	((n) + 0x10)
 #define TSENS_TM_UPPER_INT_SET(n)		(1 << (n + 16))
 #define TSENS_TM_SN_CRITICAL_THRESHOLD_MASK	0xfff
-#define TSENS_TM_MIN_TEMP_VALID_BIT		BIT(16)
 #define TSENS_TM_SN_STATUS_VALID_BIT		BIT(21)
 #define TSENS_TM_SN_STATUS_CRITICAL_STATUS	BIT(19)
 #define TSENS_TM_SN_STATUS_UPPER_STATUS		BIT(18)
 #define TSENS_TM_SN_STATUS_LOWER_STATUS		BIT(17)
 #define TSENS_TM_SN_LAST_TEMP_MASK		0xfff
 #define TSENS_TM_CODE_BIT_MASK			0xfff
-#define TSENS_TM_0C_THR_MASK			0xfff
-#define TSENS_TM_0C_THR_OFFSET			12
 #define TSENS_TM_CODE_SIGN_BIT			0x800
 #define TSENS_TM_SCALE_DECI_MILLIDEG		100
 #define TSENS_DEBUG_WDOG_TRIGGER_COUNT		5
@@ -62,13 +66,6 @@
 #define TSENS_TM_TRDY(n)			((n) + 0xe4)
 #define TSENS_TM_TRDY_FIRST_ROUND_COMPLETE	BIT(3)
 #define TSENS_TM_TRDY_FIRST_ROUND_COMPLETE_SHIFT	3
-#define TSENS_TM_0C_INT_STATUS(n)	((n) + 0xe0)
-#define TSENS_TM_MIN_TEMP(n)	((n) + 0xec)
-#define TSENS_TM_0C_THRESHOLDS(n)		((n) + 0x1c)
-#define TSENS_MAX_READ_FAIL			50
-
-#define TSENS_INIT_ID	0x5
-#define TSENS_RECOVERY_LOOP_COUNT 5
 
 static void msm_tsens_convert_temp(int last_temp, int *temp)
 {
@@ -84,10 +81,10 @@ static void msm_tsens_convert_temp(int last_temp, int *temp)
 
 static int tsens2xxx_get_temp(struct tsens_sensor *sensor, int *temp)
 {
-	struct tsens_device *tmdev = NULL, *tmdev_itr;
-	unsigned int code, ret, tsens_ret;
+	struct tsens_device *tmdev = NULL;
+	unsigned int code;
 	void __iomem *sensor_addr, *trdy;
-	int last_temp = 0, last_temp2 = 0, last_temp3 = 0, count = 0;
+	int last_temp = 0, last_temp2 = 0, last_temp3 = 0;
 
 	if (!sensor)
 		return -EINVAL;
@@ -97,65 +94,21 @@ static int tsens2xxx_get_temp(struct tsens_sensor *sensor, int *temp)
 	trdy = TSENS_TM_TRDY(tmdev->tsens_tm_addr);
 
 	code = readl_relaxed_no_log(trdy);
-
 	if (!((code & TSENS_TM_TRDY_FIRST_ROUND_COMPLETE) >>
 			TSENS_TM_TRDY_FIRST_ROUND_COMPLETE_SHIFT)) {
-		pr_err("%s: tsens device first round not complete0x%x\n",
-			__func__, code);
-		/* Wait for 2.5 ms for tsens controller to recover */
-		do {
-			udelay(500);
-			code = readl_relaxed_no_log(trdy);
-			if (code & TSENS_TM_TRDY_FIRST_ROUND_COMPLETE) {
-				TSENS_DUMP(tmdev, "%s",
-					"tsens controller recovered\n");
-				goto sensor_read;
-			}
-		} while (++count < TSENS_RECOVERY_LOOP_COUNT);
+		pr_err("tsens device first round not complete0x%x, ctr is %d\n",
+			code, tmdev->trdy_fail_ctr);
+		tmdev->trdy_fail_ctr++;
 
-		/*
-		 * TSENS controller did not recover,
-		 * proceed with SCM call to re-init it
-		 */
-		if (tmdev->tsens_reinit_wa) {
-			struct scm_desc desc = { 0 };
-
+		if (tmdev->trdy_fail_ctr >= 50) {
 			if (tmdev->ops->dbg)
 				tmdev->ops->dbg(tmdev, 0,
 					TSENS_DBG_LOG_BUS_ID_DATA, NULL);
-			/* Make an scm call to re-init TSENS */
-			TSENS_DBG(tmdev, "%s",
-				   "Calling TZ to re-init TSENS\n");
-			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_TSENS,
-							TSENS_INIT_ID), &desc);
-			TSENS_DBG(tmdev, "%s",
-				   "return from scm call\n");
-			if (ret) {
-				pr_err("%s: scm call failed %d\n",
-					__func__, ret);
-				BUG();
-			}
-			tsens_ret = desc.ret[0];
-			if (tsens_ret) {
-				pr_err("%s: scm call failed to init tsens %d\n",
-					__func__, tsens_ret);
-				BUG();
-			}
-			/* Notify thermal fwk */
-			list_for_each_entry(tmdev_itr,
-						&tsens_device_list, list) {
-				queue_work(tmdev_itr->tsens_reinit_work,
-					&tmdev_itr->therm_fwk_notify);
-			}
-
-		} else {
-			pr_err("%s: tsens controller got reset\n", __func__);
 			BUG();
 		}
-		return -EAGAIN;
-	}
 
-sensor_read:
+		return -ENODATA;
+	}
 
 	tmdev->trdy_fail_ctr = 0;
 
@@ -198,75 +151,6 @@ dbg:
 	if (tmdev->ops->dbg)
 		tmdev->ops->dbg(tmdev, (u32) sensor->hw_id,
 					TSENS_DBG_LOG_TEMP_READS, temp);
-
-	return 0;
-}
-
-int tsens_2xxx_get_min_temp(struct tsens_sensor *sensor, int *temp)
-{
-	struct tsens_device *tmdev = NULL;
-	unsigned int code;
-	void __iomem *sensor_addr, *trdy;
-	int last_temp = 0, last_temp2 = 0, last_temp3 = 0, valid_bit;
-
-	if (!sensor)
-		return -EINVAL;
-
-	tmdev = sensor->tmdev;
-	trdy = TSENS_TM_TRDY(tmdev->tsens_tm_addr);
-
-	valid_bit = TSENS_TM_MIN_TEMP_VALID_BIT;
-	sensor_addr = TSENS_TM_MIN_TEMP(tmdev->tsens_tm_addr);
-
-	code = readl_relaxed_no_log(trdy);
-	if (!((code & TSENS_TM_TRDY_FIRST_ROUND_COMPLETE) >>
-			TSENS_TM_TRDY_FIRST_ROUND_COMPLETE_SHIFT)) {
-		pr_err("tsens device first round not complete0x%x, ctr is %d\n",
-			code, tmdev->trdy_fail_ctr);
-		tmdev->trdy_fail_ctr++;
-		if (tmdev->trdy_fail_ctr >= TSENS_MAX_READ_FAIL) {
-			if (tmdev->ops->dbg)
-				tmdev->ops->dbg(tmdev, 0,
-					TSENS_DBG_LOG_BUS_ID_DATA, NULL);
-			BUG();
-		}
-		return -ENODATA;
-	}
-
-	tmdev->trdy_fail_ctr = 0;
-
-	code = readl_relaxed_no_log(sensor_addr);
-	last_temp = code & TSENS_TM_SN_LAST_TEMP_MASK;
-	if (code & valid_bit) {
-		msm_tsens_convert_temp(last_temp, temp);
-		goto dbg;
-	}
-
-	code = readl_relaxed_no_log(sensor_addr);
-	last_temp2 = code & TSENS_TM_SN_LAST_TEMP_MASK;
-	if (code & valid_bit) {
-		last_temp = last_temp2;
-		msm_tsens_convert_temp(last_temp, temp);
-		goto dbg;
-	}
-
-	code = readl_relaxed_no_log(sensor_addr);
-	last_temp3 = code & TSENS_TM_SN_LAST_TEMP_MASK;
-	if (code & valid_bit) {
-		last_temp = last_temp3;
-		msm_tsens_convert_temp(last_temp, temp);
-		goto dbg;
-	}
-
-	if (last_temp == last_temp2)
-		last_temp = last_temp2;
-	else if (last_temp2 == last_temp3)
-		last_temp = last_temp3;
-
-	msm_tsens_convert_temp(last_temp, temp);
-
-dbg:
-	TSENS_DBG(tmdev, "Min temp: %d\n", *temp);
 
 	return 0;
 }
@@ -642,31 +526,6 @@ static irqreturn_t tsens_tm_irq_thread(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t tsens_tm_0C_irq_thread(int irq, void *data)
-{
-	struct tsens_device *tm = data;
-	int status, thrs, set_thr, reset_thr;
-	void __iomem *srot_addr, *addr;
-
-	addr = TSENS_TM_0C_INT_STATUS(tm->tsens_tm_addr);
-	status = readl_relaxed(addr);
-
-	srot_addr = TSENS_CTRL_ADDR(tm->tsens_srot_addr);
-	thrs = readl_relaxed(TSENS_TM_0C_THRESHOLDS(srot_addr));
-
-	msm_tsens_convert_temp(thrs & TSENS_TM_0C_THR_MASK, &reset_thr);
-	msm_tsens_convert_temp(
-		((thrs >> TSENS_TM_0C_THR_OFFSET) &
-				TSENS_TM_0C_THR_MASK), &set_thr);
-
-	if (status)
-		of_thermal_handle_trip_temp(tm->min_temp.tzd, set_thr);
-	else
-		of_thermal_handle_trip_temp(tm->min_temp.tzd, reset_thr);
-
-	return IRQ_HANDLED;
-}
-
 static int tsens2xxx_hw_sensor_en(struct tsens_device *tmdev,
 					u32 sensor_id)
 {
@@ -751,26 +610,19 @@ static int tsens2xxx_hw_init(struct tsens_device *tmdev)
 static const struct tsens_irqs tsens2xxx_irqs[] = {
 	{ "tsens-upper-lower", tsens_tm_irq_thread},
 	{ "tsens-critical", tsens_tm_critical_irq_thread},
-	{ "tsens-0C", tsens_tm_0C_irq_thread},
 };
 
 static int tsens2xxx_register_interrupts(struct tsens_device *tmdev)
 {
 	struct platform_device *pdev;
-	int i, rc, irq_no;
-	unsigned long irqflags = IRQF_TRIGGER_HIGH | IRQF_ONESHOT;
+	int i, rc;
 
 	if (!tmdev)
 		return -EINVAL;
 
-	if (tmdev->min_temp_sensor_id != MIN_TEMP_DEF_OFFSET)
-		irq_no = ARRAY_SIZE(tsens2xxx_irqs);
-	else
-		irq_no = ARRAY_SIZE(tsens2xxx_irqs) - 1;
-
 	pdev = tmdev->pdev;
 
-	for (i = 0; i < irq_no; i++) {
+	for (i = 0; i < ARRAY_SIZE(tsens2xxx_irqs); i++) {
 		int irq;
 
 		irq = platform_get_irq_byname(pdev, tsens2xxx_irqs[i].name);
@@ -780,12 +632,10 @@ static int tsens2xxx_register_interrupts(struct tsens_device *tmdev)
 			return irq;
 		}
 
-		if (i == 2)
-			irqflags = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
-
 		rc = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 				tsens2xxx_irqs[i].handler,
-				irqflags, tsens2xxx_irqs[i].name, tmdev);
+				IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+				tsens2xxx_irqs[i].name, tmdev);
 		if (rc) {
 			dev_err(&pdev->dev, "failed to get irq %s\n",
 					tsens2xxx_irqs[i].name);
@@ -834,15 +684,4 @@ const struct tsens_data data_tsens24xx = {
 	.wd_bark_mask			= 0,
 	.ops				= &ops_tsens2xxx,
 	.mtc				= false,
-};
-
-const struct tsens_data data_tsens26xx = {
-	.cycle_monitor			= true,
-	.cycle_compltn_monitor_mask	= 1,
-	.wd_bark			= true,
-	.wd_bark_mask			= 0,
-	.ops				= &ops_tsens2xxx,
-	.mtc				= false,
-	.ver_major			= 2,
-	.ver_minor			= 6,
 };

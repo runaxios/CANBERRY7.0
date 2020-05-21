@@ -13,6 +13,7 @@
 extern int register_hw_component_info(char *component_name);
 extern int add_hw_component_info(char *component_name, char *key, char *value);
 extern int unregister_hw_component_info(char *component_name);
+
 extern int register_hw_monitor_info(char *component_name);
 extern int add_hw_monitor_info(char *component_name, char *mon_key, char *mon_value);
 extern int update_hw_monitor_info(char *component_name, char *mon_key, char *mon_value);

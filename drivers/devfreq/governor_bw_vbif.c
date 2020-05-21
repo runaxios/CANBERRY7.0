@@ -1,16 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/devfreq.h>
 #include <linux/module.h>
-#include <linux/msm_adreno_devfreq.h>
-
 #include "governor.h"
 
-static getbw_func extern_get_bw;
-static void *extern_get_bw_data;
+unsigned long (*extern_get_bw)(void) = NULL;
 unsigned long *dev_ab;
 static unsigned long dev_ib;
 
@@ -25,16 +30,12 @@ static struct devfreq *df;
 static int devfreq_vbif_get_freq(struct devfreq *df,
 				unsigned long *freq)
 {
-	unsigned long ab, ib;
-
-	if (!extern_get_bw) {
-		*freq = 0;
-		return 0;
+	/* If the IB isn't set yet, check if it should be non-zero. */
+	if (!dev_ib && extern_get_bw) {
+		dev_ib = extern_get_bw();
+		if (dev_ab)
+			*dev_ab = dev_ib / 4;
 	}
-
-	extern_get_bw(&ib, &ab, extern_get_bw_data);
-	dev_ib = ib;
-	*dev_ab = ab;
 
 	*freq = dev_ib;
 	return 0;
@@ -45,19 +46,20 @@ static int devfreq_vbif_get_freq(struct devfreq *df,
  * value from legacy vbif based bus bandwidth governor.
  * This function is called by KGSL driver.
  */
-void devfreq_vbif_register_callback(getbw_func func, void *data)
+void devfreq_vbif_register_callback(void *p)
 {
-	extern_get_bw = func;
-	extern_get_bw_data = data;
+	extern_get_bw = p;
 }
 
-int devfreq_vbif_update_bw(void)
+int devfreq_vbif_update_bw(unsigned long ib, unsigned long ab)
 {
 	int ret = 0;
 
 	mutex_lock(&df_lock);
 	if (df) {
 		mutex_lock(&df->lock);
+		dev_ib = ib;
+		*dev_ab = ab;
 		ret = update_devfreq(df);
 		mutex_unlock(&df->lock);
 	}
@@ -84,10 +86,7 @@ static int devfreq_vbif_ev_handler(struct devfreq *devfreq,
 
 		mutex_unlock(&df_lock);
 
-		dev_ib = 0;
-		*dev_ab = 0;
-
-		ret = devfreq_vbif_update_bw();
+		ret = devfreq_vbif_update_bw(0, 0);
 		if (ret) {
 			pr_err("Unable to update BW! Gov start failed!\n");
 			return ret;
@@ -115,8 +114,6 @@ static int devfreq_vbif_ev_handler(struct devfreq *devfreq,
 
 static struct devfreq_governor devfreq_vbif = {
 	.name = "bw_vbif",
-	/* Restrict this governor to only gpu devfreq devices */
-	.immutable = 1,
 	.get_target_freq = devfreq_vbif_get_freq,
 	.event_handler = devfreq_vbif_ev_handler,
 };

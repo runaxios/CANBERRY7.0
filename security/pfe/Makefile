@@ -1,4 +1,7 @@
-# SPDX-License-Identifier: GPL-2.0
+#
+# Makefile for the MSM specific security device drivers.
+#
+
 ccflags-y += -Isecurity/selinux -Isecurity/selinux/include
 ccflags-y += -Ifs/crypto
 ccflags-y += -Idrivers/misc

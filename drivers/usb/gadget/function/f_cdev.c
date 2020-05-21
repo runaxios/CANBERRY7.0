@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011, 2013-2019, The Linux Foundation. All rights reserved.
  * Linux Foundation chooses to take subject only to the GPLv2 license terms,
@@ -15,6 +14,15 @@
  * drivers/usb/gadget/legacy/printer.c, which is
  * Copyright (C) 2003-2005 David Brownell
  * Copyright (C) 2006 Craig W. Nadler
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifdef pr_fmt
@@ -346,6 +354,23 @@ static inline struct f_cdev *func_to_port(struct usb_function *f)
 static inline struct f_cdev *cser_to_port(struct cserial *cser)
 {
 	return container_of(cser, struct f_cdev, port_usb);
+}
+
+static unsigned int convert_uart_sigs_to_acm(unsigned int uart_sig)
+{
+	unsigned int acm_sig = 0;
+
+	/* should this needs to be in calling functions ??? */
+	uart_sig &= (TIOCM_RI | TIOCM_CD | TIOCM_DSR);
+
+	if (uart_sig & TIOCM_RI)
+		acm_sig |= ACM_CTRL_RI;
+	if (uart_sig & TIOCM_CD)
+		acm_sig |= ACM_CTRL_DCD;
+	if (uart_sig & TIOCM_DSR)
+		acm_sig |= ACM_CTRL_DSR;
+
+	return acm_sig;
 }
 
 static unsigned int convert_acm_sigs_to_uart(unsigned int acm_sig)
@@ -866,9 +891,6 @@ static void usb_cser_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_cdev *port = func_to_port(f);
 
-	/* Reset string id */
-	cser_string_defs[0].id = 0;
-
 	usb_free_all_descriptors(f);
 	usb_cser_free_req(port->port_usb.notify, port->port_usb.notify_req);
 }
@@ -880,7 +902,7 @@ static int usb_cser_alloc_requests(struct usb_ep *ep, struct list_head *head,
 	int i;
 	struct usb_request *req;
 
-	pr_debug("ep:%pK head:%p num:%d size:%d cb:%p\n",
+	pr_debug("ep:%pK head:%p num:%d size:%d cb:%p",
 				ep, head, num, size, cb);
 
 	for (i = 0; i < num; i++) {
@@ -1357,6 +1379,12 @@ static int f_cdev_tiocmget(struct f_cdev *port)
 
 	if (cser->serial_state & TIOCM_RI)
 		result |= TIOCM_RI;
+
+	if (cser->serial_state & TIOCM_DSR)
+		result |= TIOCM_DSR;
+
+	if (cser->serial_state & TIOCM_CTS)
+		result |= TIOCM_CTS;
 	return result;
 }
 
@@ -1397,6 +1425,24 @@ static int f_cdev_tiocmset(struct f_cdev *port,
 		}
 	}
 
+	if (set & TIOCM_DSR)
+		cser->serial_state |= TIOCM_DSR;
+
+	if (clear & TIOCM_DSR)
+		cser->serial_state &= ~TIOCM_DSR;
+
+	if (set & TIOCM_CTS) {
+		if (cser->send_break) {
+			cser->serial_state |= TIOCM_CTS;
+			status = cser->send_break(cser, 0);
+		}
+	}
+	if (clear & TIOCM_CTS) {
+		if (cser->send_break) {
+			cser->serial_state &= ~TIOCM_CTS;
+			status = cser->send_break(cser, 1);
+		}
+	}
 	return status;
 }
 
@@ -1447,7 +1493,9 @@ static void usb_cser_notify_modem(void *fport, int ctrl_bits)
 {
 	int temp;
 	struct f_cdev *port = fport;
+	struct cserial *cser;
 
+	cser = &port->port_usb;
 	if (!port) {
 		pr_err("port is null\n");
 		return;
@@ -1462,6 +1510,17 @@ static void usb_cser_notify_modem(void *fport, int ctrl_bits)
 
 	port->cbits_to_modem = temp;
 	port->cbits_updated = true;
+
+	 /* if DTR is high, update latest modem info to laptop */
+	if (port->cbits_to_modem & TIOCM_DTR) {
+		unsigned int result;
+		unsigned int cbits_to_laptop;
+
+		result = f_cdev_tiocmget(port);
+		cbits_to_laptop = convert_uart_sigs_to_acm(result);
+		if (cser->send_modem_ctrl_bits)
+			cser->send_modem_ctrl_bits(cser, cbits_to_laptop);
+	}
 
 	wake_up(&port->read_wq);
 }
@@ -1484,7 +1543,7 @@ int usb_cser_connect(struct f_cdev *port)
 
 	ret = usb_ep_enable(cser->in);
 	if (ret) {
-		pr_err("usb_ep_enable failed eptype:IN ep:%pK, err:%d\n",
+		pr_err("usb_ep_enable failed eptype:IN ep:%pK, err:%d",
 					cser->in, ret);
 		return ret;
 	}
@@ -1492,7 +1551,7 @@ int usb_cser_connect(struct f_cdev *port)
 
 	ret = usb_ep_enable(cser->out);
 	if (ret) {
-		pr_err("usb_ep_enable failed eptype:OUT ep:%pK, err: %d\n",
+		pr_err("usb_ep_enable failed eptype:OUT ep:%pK, err: %d",
 					cser->out, ret);
 		cser->in->driver_data = 0;
 		return ret;
@@ -1512,8 +1571,10 @@ int usb_cser_connect(struct f_cdev *port)
 
 void usb_cser_disconnect(struct f_cdev *port)
 {
+	struct cserial *cser;
 	unsigned long flags;
 
+	cser = &port->port_usb;
 	usb_cser_stop_io(port);
 
 	/* lower DTR to modem */
@@ -1521,6 +1582,7 @@ void usb_cser_disconnect(struct f_cdev *port)
 
 	spin_lock_irqsave(&port->port_lock, flags);
 	port->is_connected = false;
+	cser->notify_modem = NULL;
 	port->nbytes_from_host = port->nbytes_to_host = 0;
 	port->nbytes_to_port_bridge = 0;
 	spin_unlock_irqrestore(&port->port_lock, flags);
@@ -1592,16 +1654,16 @@ static ssize_t cser_rw_write(struct file *file, const char __user *ubuf,
 			pr_debug("Calling usb_func_wakeup\n");
 			ret = usb_func_wakeup(func);
 		} else {
-			pr_debug("Calling usb_gadget_wakeup\n");
+			pr_debug("Calling usb_gadget_wakeup");
 			ret = usb_gadget_wakeup(gadget);
 		}
 
 		if ((ret == -EBUSY) || (ret == -EAGAIN))
-			pr_debug("RW delayed due to LPM exit.\n");
+			pr_debug("RW delayed due to LPM exit.");
 		else if (ret)
-			pr_err("wakeup failed. ret=%d.\n", ret);
+			pr_err("wakeup failed. ret=%d.", ret);
 	} else {
-		pr_debug("RW disabled.\n");
+		pr_debug("RW disabled.");
 	}
 err:
 	return count;

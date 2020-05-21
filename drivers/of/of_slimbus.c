@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2017-2018 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 /* OF helpers for SLIMbus */
@@ -29,7 +36,7 @@ int of_register_slim_devices(struct slim_controller *ctrl)
 
 		prop = of_find_property(node, "elemental-addr", NULL);
 		if (!prop || prop->length != 6) {
-			dev_err(&ctrl->dev, "of_slim: invalid E-addr\n");
+			dev_err(&ctrl->dev, "of_slim: invalid E-addr");
 			continue;
 		}
 		name = kzalloc(SLIMBUS_NAME_SIZE, GFP_KERNEL);
@@ -54,7 +61,7 @@ int of_register_slim_devices(struct slim_controller *ctrl)
 		temp = krealloc(binfo, (n + 1) * sizeof(struct slim_boardinfo),
 					GFP_KERNEL);
 		if (!temp) {
-			dev_err(&ctrl->dev, "out of memory\n");
+			dev_err(&ctrl->dev, "out of memory");
 			kfree(name);
 			kfree(slim);
 			ret = -ENOMEM;

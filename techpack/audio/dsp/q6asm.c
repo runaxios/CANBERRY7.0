@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
@@ -125,6 +124,8 @@ static int q6asm_memory_map_regions(struct audio_client *ac, int dir,
 static int q6asm_memory_unmap_regions(struct audio_client *ac, int dir);
 static void q6asm_reset_buf_state(struct audio_client *ac);
 
+static int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
+				bool use_back_flavor);
 void *q6asm_mmap_apr_reg(void);
 
 static int q6asm_is_valid_session(struct apr_client_data *data, void *priv);
@@ -389,33 +390,6 @@ static const struct file_operations audio_input_latency_debug_fops = {
 	.write = audio_input_latency_dbgfs_write
 };
 
-/*
- * get_monotonic_timeval -
- *       This method returns a structure in timeval
- *       format (sec,microsec) by using ktime kernel
- *       API to get time in nano secs and then converts
- *       it to timeval format
- *
- * ktime_get [nsec]-> ktime_to_timespec [sec,nsec]-> timeval[sec,usec]
- *
- * Returns struct timeval
-*/
-static struct timeval get_monotonic_timeval(void)
-{
-	static struct timeval out_tval;
-
-	/* Get time from monotonic clock in nanoseconds */
-	ktime_t kTimeNsec = ktime_get();
-
-	/* Convert it to timespec format and later to timeval as expected by audio HAL */
-	struct timespec temp_tspec = ktime_to_timespec(kTimeNsec);
-
-	/* Time returned above is in sec,nanosec format, needs to convert to sec,microsec */
-	out_tval.tv_usec = temp_tspec.tv_nsec/1000;
-	out_tval.tv_sec = temp_tspec.tv_sec;
-	return out_tval;
-}
-
 static void config_debug_fs_write_cb(void)
 {
 	if (out_enable_flag) {
@@ -423,7 +397,7 @@ static void config_debug_fs_write_cb(void)
 		 * out_cold_index
 		 */
 		if (out_cold_index != 1) {
-			out_cold_tv = get_monotonic_timeval();
+			do_gettimeofday(&out_cold_tv);
 			pr_debug("COLD: apr_send_pkt at %ld sec %ld microsec\n",
 				out_cold_tv.tv_sec,
 				out_cold_tv.tv_usec);
@@ -448,7 +422,7 @@ static void config_debug_fs_read_cb(void)
 		 * Hence continuous input latency
 		 */
 		if (in_cont_index == 7) {
-			in_cont_tv = get_monotonic_timeval();
+			do_gettimeofday(&in_cont_tv);
 			pr_info("%s: read buffer at %ld sec %ld microsec\n",
 				__func__,
 				in_cont_tv.tv_sec, in_cont_tv.tv_usec);
@@ -465,7 +439,7 @@ static void config_debug_fs_reset_index(void)
 static void config_debug_fs_run(void)
 {
 	if (out_enable_flag) {
-		out_cold_tv = get_monotonic_timeval();
+		do_gettimeofday(&out_cold_tv);
 		pr_debug("%s: COLD apr_send_pkt at %ld sec %ld microsec\n",
 			__func__, out_cold_tv.tv_sec, out_cold_tv.tv_usec);
 	}
@@ -480,7 +454,7 @@ static void config_debug_fs_write(struct audio_buffer *ab)
 		 */
 		if ((strcmp(((char *)ab->data), zero_pattern)) &&
 		(!strcmp(((char *)ab->data + 2), zero_pattern))) {
-			out_warm_tv = get_monotonic_timeval();
+			do_gettimeofday(&out_warm_tv);
 			pr_debug("%s: WARM:apr_send_pkt at %ld sec %ld microsec\n",
 			 __func__,
 			 out_warm_tv.tv_sec,
@@ -492,7 +466,7 @@ static void config_debug_fs_write(struct audio_buffer *ab)
 		 */
 		else if ((!strcmp(((char *)ab->data), zero_pattern))
 		&& (strcmp(((char *)ab->data + 2), zero_pattern))) {
-			out_cont_tv = get_monotonic_timeval();
+			do_gettimeofday(&out_cont_tv);
 			pr_debug("%s: CONT:apr_send_pkt at %ld sec %ld microsec\n",
 			__func__,
 			out_cont_tv.tv_sec,
@@ -1581,7 +1555,7 @@ int q6asm_audio_client_buf_alloc_contiguous(unsigned int dir,
 			__func__, ac->session,
 			bufsz, bufcnt);
 
-	if (ac->session <= 0 || ac->session > ASM_ACTIVE_STREAMS_ALLOWED) {
+	if (ac->session <= 0 || ac->session > 8) {
 		pr_err("%s: Session ID is invalid, session = %d\n", __func__,
 			ac->session);
 		goto fail;
@@ -1868,20 +1842,12 @@ static void q6asm_process_mtmx_get_param_rsp(struct audio_client *ac,
 		switch (cmdrsp->param_info.param_id) {
 		case ASM_SESSION_MTMX_STRTR_PARAM_SESSION_TIME_V3:
 			time = &cmdrsp->param_data.session_time;
-			dev_vdbg(ac->dev, "%s: GET_TIME_V3, time_lsw=%x, time_msw=%x, abs l %x, m %x\n",
+			dev_vdbg(ac->dev, "%s: GET_TIME_V3, time_lsw=%x, time_msw=%x\n",
 				 __func__, time->session_time_lsw,
-				 time->session_time_msw,
-				 time->absolute_time_lsw,
-				 time->absolute_time_msw);
-			ac->dsp_ts.abs_time_stamp = (uint64_t)(((uint64_t)
-					time->absolute_time_msw << 32) |
-					time->absolute_time_lsw);
-			ac->dsp_ts.time_stamp = (uint64_t)(((uint64_t)
+				 time->session_time_msw);
+			ac->time_stamp = (uint64_t)(((uint64_t)
 					 time->session_time_msw << 32) |
 					 time->session_time_lsw);
-			ac->dsp_ts.last_time_stamp = (uint64_t)(((uint64_t)
-					 time->time_stamp_msw << 32) |
-					 time->time_stamp_lsw);
 			if (time->flags &
 			    ASM_SESSION_MTMX_STRTR_PARAM_STIME_TSTMP_FLG_BMASK)
 				dev_warn_ratelimited(ac->dev,
@@ -2203,7 +2169,7 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 			buf_index = asm_token._token.buf_index;
 			if (buf_index < 0 || buf_index >= port->max_buf_cnt) {
 				pr_debug("%s: Invalid buffer index %u\n",
-					__func__, buf_index);
+				__func__, buf_index);
 				spin_unlock_irqrestore(&port->dsp_lock,
 								dsp_flags);
 				spin_unlock_irqrestore(
@@ -2211,9 +2177,9 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 					flags);
 				return -EINVAL;
 			}
-			if ( data->payload_size >= 2 * sizeof(uint32_t) &&
+			if (data->payload_size >= 2 * sizeof(uint32_t) &&
 				(lower_32_bits(port->buf[buf_index].phys) !=
-				payload[0] || 
+				payload[0] ||
 				msm_audio_populate_upper_32_bits(
 					port->buf[buf_index].phys) != payload[1])) {
 				pr_debug("%s: Expected addr %pK\n",
@@ -2315,7 +2281,7 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 			buf_index = asm_token._token.buf_index;
 			if (buf_index < 0 || buf_index >= port->max_buf_cnt) {
 				pr_debug("%s: Invalid buffer index %u\n",
-					__func__, buf_index);
+				__func__, buf_index);
 				spin_unlock_irqrestore(&port->dsp_lock,
 								dsp_flags);
 				spin_unlock_irqrestore(
@@ -2369,9 +2335,8 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 			dev_vdbg(ac->dev, "%s: ASM_SESSION_CMDRSP_GET_SESSIONTIME_V3, payload[0] = %d, payload[1] = %d, payload[2] = %d\n",
 					 __func__,
 					 payload[0], payload[1], payload[2]);
-			ac->dsp_ts.time_stamp =
-				(uint64_t)(((uint64_t)payload[2] << 32) |
-				payload[1]);
+			ac->time_stamp = (uint64_t)(((uint64_t)payload[2] << 32) |
+					payload[1]);
 		} else {
 			dev_err(ac->dev, "%s: payload size of %x is less than expected.n",
 				__func__, data->payload_size);
@@ -2399,13 +2364,10 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 		break;
 	case ASM_STREAM_PP_EVENT:
 	case ASM_STREAM_CMD_ENCDEC_EVENTS:
-	case ASM_IEC_61937_MEDIA_FMT_EVENT:
+	case ASM_STREAM_CMD_REGISTER_IEC_61937_FMT_UPDATE:
 		if (data->payload_size >= 2 * sizeof(uint32_t))
 			pr_debug("%s: ASM_STREAM_EVENT payload[0][0x%x] payload[1][0x%x]",
 					 __func__, payload[0], payload[1]);
-		else if (data->payload_size >= sizeof(uint32_t))
-			pr_debug("%s: ASM_STREAM_EVENT payload[0][0x%x]",
-				__func__, payload[0]);
 		else
 			pr_debug("%s: payload size of %x is less than expected.\n",
 				__func__, data->payload_size);
@@ -2440,34 +2402,6 @@ static int32_t q6asm_callback(struct apr_client_data *data, void *priv)
 		pp_event_package->payload_len = payload_size;
 		memcpy((void *)pp_event_package->payload,
 			data->payload, payload_size);
-		if ((data->opcode == ASM_IEC_61937_MEDIA_FMT_EVENT) &&
-		    (payload_size == 4)) {
-			switch (payload[0]) {
-			case ASM_MEDIA_FMT_AC3:
-				((uint32_t *)pp_event_package->payload)[0] =
-					SND_AUDIOCODEC_AC3;
-				break;
-			case ASM_MEDIA_FMT_EAC3:
-				((uint32_t *)pp_event_package->payload)[0] =
-					SND_AUDIOCODEC_EAC3;
-				break;
-			case ASM_MEDIA_FMT_DTS:
-				((uint32_t *)pp_event_package->payload)[0] =
-					SND_AUDIOCODEC_DTS;
-				break;
-			case ASM_MEDIA_FMT_TRUEHD:
-				((uint32_t *)pp_event_package->payload)[0] =
-					SND_AUDIOCODEC_TRUEHD;
-				break;
-			case ASM_MEDIA_FMT_AAC_V2:
-				((uint32_t *)pp_event_package->payload)[0] =
-					SND_AUDIOCODEC_AAC;
-				break;
-			default:
-				pr_debug("%s: Event with unknown media_fmt 0x%x\n",
-					__func__, payload[0]);
-			}
-		}
 		ac->cb(data->opcode, data->token,
 			(void *)pp_event_package, ac->priv);
 		kfree(pp_event_package);
@@ -2552,7 +2486,7 @@ void *q6asm_is_cpu_buf_avail(int dir, struct audio_client *ac, uint32_t *size,
 			/* To make it more robust, we could loop and get the
 			 * next avail buf, its risky though
 			 */
-			pr_err("%s: Next buf idx[0x%x] not available, dir[%d]\n",
+			pr_err_ratelimited("%s: Next buf idx[0x%x] not available, dir[%d]\n",
 			 __func__, idx, dir);
 			mutex_unlock(&port->lock);
 			return NULL;
@@ -2663,7 +2597,7 @@ void *q6asm_is_cpu_buf_avail_nolock(int dir, struct audio_client *ac,
 		 * To make it more robust, we could loop and get the
 		 * next avail buf, its risky though
 		 */
-		pr_err("%s: Next buf idx[0x%x] not available, dir[%d]\n",
+		pr_err_ratelimited("%s: Next buf idx[0x%x] not available, dir[%d]\n",
 		 __func__, idx, dir);
 		return NULL;
 	}
@@ -2706,7 +2640,7 @@ int q6asm_is_dsp_buf_avail(int dir, struct audio_client *ac)
 			/* To make it more robust, we could loop and get the
 			 * next avail buf, its risky though
 			 */
-			pr_err("%s: Next buf idx[0x%x] not available, dir[%d]\n",
+			pr_err_ratelimited("%s: Next buf idx[0x%x] not available, dir[%d]\n",
 				__func__, idx, dir);
 			mutex_unlock(&port->lock);
 			return ret;
@@ -3094,7 +3028,6 @@ int q6asm_open_read_compressed(struct audio_client *ac, uint32_t format,
 	 */
 	if (format == FORMAT_IEC61937) {
 		open.mode_flags = 0x1;
-		open.frames_per_buf = 1;
 		pr_debug("%s: Flag 1 IEC61937 output\n", __func__);
 	} else {
 		open.mode_flags = 0;
@@ -3541,15 +3474,6 @@ static int __q6asm_open_write(struct audio_client *ac, uint32_t format,
 		break;
 	case FORMAT_WMA_V10PRO:
 		open.dec_fmt_id = ASM_MEDIA_FMT_WMA_V10PRO_V2;
-		break;
-	case FORMAT_AMRNB:
-		open.dec_fmt_id = ASM_MEDIA_FMT_AMRNB_FS;
-		break;
-	case FORMAT_AMRWB:
-		open.dec_fmt_id = ASM_MEDIA_FMT_AMRWB_FS;
-		break;
-	case FORMAT_AMR_WB_PLUS:
-		open.dec_fmt_id = ASM_MEDIA_FMT_AMR_WB_PLUS_V2;
 		break;
 	case FORMAT_MP3:
 		open.dec_fmt_id = ASM_MEDIA_FMT_MP3;
@@ -5648,16 +5572,7 @@ fail_cmd:
 }
 EXPORT_SYMBOL(q6asm_enc_cfg_blk_pcm_native);
 
-/*
- * q6asm_map_channels:
- *     Provide default asm channel mapping for given channel count.
- *
- * @channel_mapping: buffer pointer to write back channel maps.
- * @channels: channel count for which channel map is required.
- * @use_back_flavor: use back channels instead of surround channels.
- * Returns 0 for success, -EINVAL for unsupported channel count.
- */
-int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
+static int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
 		bool use_back_flavor)
 {
 	u8 *lchannel_mapping;
@@ -5720,17 +5635,6 @@ int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
 		lchannel_mapping[5] = PCM_CHANNEL_RB;
 		lchannel_mapping[6] = PCM_CHANNEL_LS;
 		lchannel_mapping[7] = PCM_CHANNEL_RS;
-	} else if (channels == 10) {
-		lchannel_mapping[0] = PCM_CHANNEL_FL;
-		lchannel_mapping[1] = PCM_CHANNEL_FR;
-		lchannel_mapping[2] = PCM_CHANNEL_LFE;
-		lchannel_mapping[3] = PCM_CHANNEL_FC;
-		lchannel_mapping[4] = PCM_CHANNEL_LB;
-		lchannel_mapping[5] = PCM_CHANNEL_RB;
-		lchannel_mapping[6] = PCM_CHANNEL_LS;
-		lchannel_mapping[7] = PCM_CHANNEL_RS;
-		lchannel_mapping[8] = PCM_CHANNEL_TFL;
-		lchannel_mapping[9] = PCM_CHANNEL_TFR;
 	} else if (channels == 12) {
 		/*
 		 * Configured for 7.1.4 channel mapping
@@ -5748,21 +5652,6 @@ int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
 		lchannel_mapping[9] = PCM_CHANNEL_TFR;
 		lchannel_mapping[10] = PCM_CHANNEL_TSL;
 		lchannel_mapping[11] = PCM_CHANNEL_TSR;
-	} else if (channels == 14) {
-		lchannel_mapping[0] = PCM_CHANNEL_FL;
-		lchannel_mapping[1] = PCM_CHANNEL_FR;
-		lchannel_mapping[2] = PCM_CHANNEL_LFE;
-		lchannel_mapping[3] = PCM_CHANNEL_FC;
-		lchannel_mapping[4] = PCM_CHANNEL_LB;
-		lchannel_mapping[5] = PCM_CHANNEL_RB;
-		lchannel_mapping[6] = PCM_CHANNEL_LS;
-		lchannel_mapping[7] = PCM_CHANNEL_RS;
-		lchannel_mapping[8] = PCM_CHANNEL_TFL;
-		lchannel_mapping[9] = PCM_CHANNEL_TFR;
-		lchannel_mapping[10] = PCM_CHANNEL_TSL;
-		lchannel_mapping[11] = PCM_CHANNEL_TSR;
-		lchannel_mapping[12] = PCM_CHANNEL_FLC;
-		lchannel_mapping[13] = PCM_CHANNEL_FRC;
 	} else if (channels == 16) {
 		/*
 		 * Configured for 7.1.8 channel mapping
@@ -5784,39 +5673,6 @@ int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
 		lchannel_mapping[13] = PCM_CHANNEL_FRC;
 		lchannel_mapping[14] = PCM_CHANNEL_RLC;
 		lchannel_mapping[15] = PCM_CHANNEL_RRC;
-	} else if (channels == 32) {
-		lchannel_mapping[0] = PCM_CHANNEL_FL;
-		lchannel_mapping[1] = PCM_CHANNEL_FR;
-		lchannel_mapping[2] = PCM_CHANNEL_LFE;
-		lchannel_mapping[3] = PCM_CHANNEL_FC;
-		lchannel_mapping[4] = PCM_CHANNEL_LS;
-		lchannel_mapping[5] = PCM_CHANNEL_RS;
-		lchannel_mapping[6] = PCM_CHANNEL_LB;
-		lchannel_mapping[7] = PCM_CHANNEL_RB;
-		lchannel_mapping[8] = PCM_CHANNEL_CS;
-		lchannel_mapping[9] = PCM_CHANNEL_TS;
-		lchannel_mapping[10] = PCM_CHANNEL_CVH;
-		lchannel_mapping[11] = PCM_CHANNEL_MS;
-		lchannel_mapping[12] = PCM_CHANNEL_FLC;
-		lchannel_mapping[13] = PCM_CHANNEL_FRC;
-		lchannel_mapping[14] = PCM_CHANNEL_RLC;
-		lchannel_mapping[15] = PCM_CHANNEL_RRC;
-		lchannel_mapping[16] = PCM_CHANNEL_LFE2;
-		lchannel_mapping[17] = PCM_CHANNEL_SL;
-		lchannel_mapping[18] = PCM_CHANNEL_SR;
-		lchannel_mapping[19] = PCM_CHANNEL_TFL;
-		lchannel_mapping[20] = PCM_CHANNEL_TFR;
-		lchannel_mapping[21] = PCM_CHANNEL_TC;
-		lchannel_mapping[22] = PCM_CHANNEL_TBL;
-		lchannel_mapping[23] = PCM_CHANNEL_TBR;
-		lchannel_mapping[24] = PCM_CHANNEL_TSL;
-		lchannel_mapping[25] = PCM_CHANNEL_TSR;
-		lchannel_mapping[26] = PCM_CHANNEL_TBC;
-		lchannel_mapping[27] = PCM_CHANNEL_BFC;
-		lchannel_mapping[28] = PCM_CHANNEL_BFL;
-		lchannel_mapping[29] = PCM_CHANNEL_BFR;
-		lchannel_mapping[30] = PCM_CHANNEL_LW;
-		lchannel_mapping[31] = PCM_CHANNEL_RW;
 	} else {
 		pr_err("%s: ERROR.unsupported num_ch = %u\n",
 		 __func__, channels);
@@ -5824,7 +5680,6 @@ int q6asm_map_channels(u8 *channel_mapping, uint32_t channels,
 	}
 	return 0;
 }
-EXPORT_SYMBOL(q6asm_map_channels);
 
 /**
  * q6asm_enable_sbrps -
@@ -9813,17 +9668,15 @@ fail_cmd:
 EXPORT_SYMBOL(q6asm_write_nolock);
 
 /**
- * q6asm_get_session_time_v2 -
+ * q6asm_get_session_time -
  *       command to retrieve timestamp info
  *
  * @ac: Audio client handle
- * @ses_time: pointer to fill with session timestamp info
- * @abs_time: pointer to fill with AVS timestamp info
+ * @tstamp: pointer to fill with timestamp info
  *
  * Returns 0 on success or error on failure
  */
-int q6asm_get_session_time_v2(struct audio_client *ac, uint64_t *ses_time,
-			      uint64_t *abs_time)
+int q6asm_get_session_time(struct audio_client *ac, uint64_t *tstamp)
 {
 	struct asm_mtmx_strtr_get_params mtmx_params;
 	int rc;
@@ -9836,8 +9689,8 @@ int q6asm_get_session_time_v2(struct audio_client *ac, uint64_t *ses_time,
 		pr_err("%s: AC APR handle NULL\n", __func__);
 		return -EINVAL;
 	}
-	if (ses_time == NULL) {
-		pr_err("%s: tstamp args are NULL\n", __func__);
+	if (tstamp == NULL) {
+		pr_err("%s: tstamp NULL\n", __func__);
 		return -EINVAL;
 	}
 
@@ -9875,28 +9728,11 @@ int q6asm_get_session_time_v2(struct audio_client *ac, uint64_t *ses_time,
 		goto fail_cmd;
 	}
 
-	*ses_time = ac->dsp_ts.time_stamp;
-	if (abs_time != NULL)
-		*abs_time = ac->dsp_ts.abs_time_stamp;
+	*tstamp = ac->time_stamp;
 	return 0;
 
 fail_cmd:
 	return -EINVAL;
-}
-EXPORT_SYMBOL(q6asm_get_session_time_v2);
-
-/**
- * q6asm_get_session_time -
- *       command to retrieve timestamp info
- *
- * @ac: Audio client handle
- * @tstamp: pointer to fill with timestamp info
- *
- * Returns 0 on success or error on failure
- */
-int q6asm_get_session_time(struct audio_client *ac, uint64_t *tstamp)
-{
-	return q6asm_get_session_time_v2(ac, tstamp, NULL);
 }
 EXPORT_SYMBOL(q6asm_get_session_time);
 
@@ -9949,7 +9785,7 @@ int q6asm_get_session_time_legacy(struct audio_client *ac, uint64_t *tstamp)
 		goto fail_cmd;
 	}
 
-	*tstamp = ac->dsp_ts.time_stamp;
+	*tstamp = ac->time_stamp;
 	return 0;
 
 fail_cmd:
@@ -10915,26 +10751,6 @@ int q6asm_get_apr_service_id(int session_id)
 	}
 
 	return ((struct apr_svc *)(session[session_id].ac)->apr)->id;
-}
-
-uint8_t q6asm_get_asm_stream_id(int session_id)
-{
-	uint8_t stream_id = 1;
-	pr_debug("%s:\n", __func__);
-
-	if (session_id <= 0 || session_id > ASM_ACTIVE_STREAMS_ALLOWED) {
-		pr_err("%s: invalid session_id = %d\n", __func__, session_id);
-		goto done;
-	}
-	if (session[session_id].ac == NULL) {
-		pr_err("%s: session not created for session id = %d\n",
-		       __func__, session_id);
-		goto done;
-	}
-	stream_id = (session[session_id].ac)->stream_id;
-
-done:
-	return stream_id;
 }
 
 int q6asm_get_asm_topology(int session_id)

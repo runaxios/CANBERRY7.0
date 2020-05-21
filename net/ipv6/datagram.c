@@ -31,7 +31,6 @@
 #include <net/ip6_route.h>
 #include <net/tcp_states.h>
 #include <net/dsfield.h>
-#include <net/sock_reuseport.h>
 
 #include <linux/errqueue.h>
 #include <linux/uaccess.h>
@@ -107,7 +106,14 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 		}
 	}
 
-	ip6_sk_dst_store_flow(sk, dst, &fl6);
+	ip6_dst_store(sk, dst,
+		      ipv6_addr_equal(&fl6.daddr, &sk->sk_v6_daddr) ?
+		      &sk->sk_v6_daddr : NULL,
+#ifdef CONFIG_IPV6_SUBTREES
+		      ipv6_addr_equal(&fl6.saddr, &np->saddr) ?
+		      &np->saddr :
+#endif
+		      NULL);
 
 out:
 	fl6_sock_release(flowlabel);
@@ -217,7 +223,8 @@ ipv4_connected:
 	if (__ipv6_addr_needs_scope_id(addr_type)) {
 		if (addr_len >= sizeof(struct sockaddr_in6) &&
 		    usin->sin6_scope_id) {
-			if (!sk_dev_equal_l3scope(sk, usin->sin6_scope_id)) {
+			if (sk->sk_bound_dev_if &&
+			    sk->sk_bound_dev_if != usin->sin6_scope_id) {
 				err = -EINVAL;
 				goto out;
 			}
@@ -259,7 +266,6 @@ ipv4_connected:
 		goto out;
 	}
 
-	reuseport_has_conns(sk, true);
 	sk->sk_state = TCP_ESTABLISHED;
 	sk_set_txhash(sk);
 out:
@@ -740,7 +746,7 @@ EXPORT_SYMBOL_GPL(ip6_datagram_recv_ctl);
 
 int ip6_datagram_send_ctl(struct net *net, struct sock *sk,
 			  struct msghdr *msg, struct flowi6 *fl6,
-			  struct ipcm6_cookie *ipc6)
+			  struct ipcm6_cookie *ipc6, struct sockcm_cookie *sockc)
 {
 	struct in6_pktinfo *src_info;
 	struct cmsghdr *cmsg;
@@ -759,7 +765,7 @@ int ip6_datagram_send_ctl(struct net *net, struct sock *sk,
 		}
 
 		if (cmsg->cmsg_level == SOL_SOCKET) {
-			err = __sock_cmsg_send(sk, msg, cmsg, &ipc6->sockc);
+			err = __sock_cmsg_send(sk, msg, cmsg, sockc);
 			if (err)
 				return err;
 			continue;
@@ -804,10 +810,9 @@ int ip6_datagram_send_ctl(struct net *net, struct sock *sk,
 
 			if (addr_type != IPV6_ADDR_ANY) {
 				int strict = __ipv6_addr_src_scope(addr_type) <= IPV6_ADDR_SCOPE_LINKLOCAL;
-				if (!ipv6_can_nonlocal_bind(net, inet_sk(sk)) &&
-				    !ipv6_chk_addr_and_flags(net, &src_info->ipi6_addr,
-							     dev, !strict, 0,
-							     IFA_F_TENTATIVE) &&
+				if (!(inet_sk(sk)->freebind || inet_sk(sk)->transparent) &&
+				    !ipv6_chk_addr(net, &src_info->ipi6_addr,
+						   strict ? dev : NULL, 0) &&
 				    !ipv6_chk_acast_addr_src(net, dev,
 							     &src_info->ipi6_addr))
 					err = -EINVAL;

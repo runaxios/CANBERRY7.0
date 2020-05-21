@@ -4,7 +4,7 @@
  * FTS Capacitive touch screen controller (FingerTipS)
  *
  * Copyright (C) 2017, STMicroelectronics
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  * Authors: AMG(Analog Mems Group)
  *
  * 		marco.cali@st.com
@@ -47,8 +47,8 @@
 
 /**** CODE CONFIGURATION ****/
 #define FTS_TS_DRV_NAME                     "fts"			/*driver name*/
-#define FTS_TS_DRV_VERSION                  "5.2.4.1"			/*driver version string format*/
-#define FTS_TS_DRV_VER						0x05020401		/*driver version u32 format*/
+#define FTS_TS_DRV_VERSION                  "5.2.4"			/*driver version string format*/
+#define FTS_TS_DRV_VER						0x05020400		/*driver version u32 format*/
 
 #define PINCTRL_STATE_ACTIVE		"pmx_ts_active"
 #define PINCTRL_STATE_SUSPEND		"pmx_ts_suspend"
@@ -121,8 +121,6 @@
 
 #define AREA_MIN                            PRESSURE_MIN
 #define AREA_MAX                            PRESSURE_MAX
-#define TXNODE_MAX							40
-#define RXNODE_MAX							40
 /**** END ****/
 /**@}*/
 /*********************************************************/
@@ -153,6 +151,11 @@ do {\
 
 #define TSP_BUF_SIZE						PAGE_SIZE
 
+#define CONFIG_FTS_TOUCH_COUNT_DUMP
+
+#ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
+#define TOUCH_COUNT_FILE_MAXSIZE 50
+#endif
 
 /**
  * Struct which contains information about the HW platform and set up
@@ -161,18 +164,16 @@ do {\
 #define FTS_RESULT_INVALID 0
 #define FTS_RESULT_PASS 2
 #define FTS_RESULT_FAIL 1
-#define FTS_SELFTEST_FORCE_CAL
 
-#define GRIP_MODE_DEBUG
-#define GRIP_RECT_NUM 12
-#define GRIP_PARAMETER_NUM 8
 struct fts_config_info {
 	u8 tp_vendor;
 	u8 tp_color;
 	u8 tp_hw_version;
-	u8 tp_module;
 	const char *fts_cfg_name;
 	const char *fts_limit_name;
+#ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
+		const char *clicknum_file_name;
+#endif
 };
 
 struct fts_hw_platform_data {
@@ -192,35 +193,10 @@ struct fts_hw_platform_data {
 	size_t nbuttons;
 	int *key_code;
 #endif
-	unsigned long keystates;
-	bool swap_x;
-	bool swap_y;
-	unsigned int fod_lx;
-	unsigned int fod_ly;
-	unsigned int fod_x_size;
-	unsigned int fod_y_size;
-#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
-	u32 touch_up_threshold_min;
-	u32 touch_up_threshold_max;
-	u32 touch_up_threshold_def;
-	u32 touch_tolerance_min;
-	u32 touch_tolerance_max;
-	u32 touch_tolerance_def;
-	u32 touch_idletime_min;
-	u32 touch_idletime_max;
-	u32 touch_idletime_def;
-	u32 cornerfilter_area_step1;
-	u32 cornerfilter_area_step2;
-	u32 cornerfilter_area_step3;
-	u32 deadzone_filter_ver[4 * GRIP_PARAMETER_NUM];
-	u32 deadzone_filter_hor[4 * GRIP_PARAMETER_NUM];
-	u32 edgezone_filter_ver[4 * GRIP_PARAMETER_NUM];
-	u32 edgezone_filter_hor[4 * GRIP_PARAMETER_NUM];
-	u32 cornerzone_filter_ver[4 * GRIP_PARAMETER_NUM];
-	u32 cornerzone_filter_hor1[4 * GRIP_PARAMETER_NUM];
-	u32 cornerzone_filter_hor2[4 * GRIP_PARAMETER_NUM];
+#ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
+	bool dump_click_count;
 #endif
-	bool support_fod;
+	unsigned long keystates;
 };
 
 /*
@@ -318,6 +294,7 @@ struct fts_ts_info {
 	unsigned long touch_id;
 	unsigned long sleep_finger;
 	unsigned long touch_skip;
+	int coor[TOUCH_ID_MAX][2];
 #ifdef STYLUS_MODE
 	unsigned long stylus_id;
 #endif
@@ -357,8 +334,12 @@ struct fts_ts_info {
 #ifdef CONFIG_TOUCHSCREEN_ST_DEBUG_FS
 	struct dentry *debugfs;
 #endif
+	int dbclick_count;
+#ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
 	struct class *fts_tp_class;
 	struct device *fts_touch_dev;
+	char *current_clicknum_file;
+#endif
 #ifdef CONFIG_SECURE_TOUCH
 	struct fts_secure_info *secure_info;
 #endif
@@ -370,7 +351,7 @@ struct fts_ts_info {
 	wait_queue_head_t 	wait_queue;
 	struct completion tp_reset_completion;
 	atomic_t system_is_resetting;
-	int fod_status;
+	unsigned int fod_status;
 	unsigned int fod_overlap;
 	unsigned long fod_id;
 	unsigned long fod_x;
@@ -378,22 +359,20 @@ struct fts_ts_info {
 	struct mutex fod_mutex;
 	struct mutex cmd_update_mutex;
 	bool fod_coordinate_update;
+	bool fod_status_set;
 	bool fod_pressed;
 	bool p_sensor_changed;
 	bool p_sensor_switch;
 	bool palm_sensor_changed;
 	bool palm_sensor_switch;
-	char *data_dump_buf;
-	int aod_status;
 	bool tp_pm_suspend;
 	struct completion pm_resume_completion;
-	bool gamemode_enable;
-	int width_major;
-	int width_minor;
-	int orientation;
+};
+
+struct fts_mode_switch {
+	struct fts_ts_info *info;
+	unsigned char mode;
 	struct work_struct switch_mode_work;
-	struct work_struct grip_mode_work;
-	bool big_area_fod;
 };
 
 int fts_chip_powercycle(struct fts_ts_info *info);
@@ -404,11 +383,16 @@ extern int fts_proc_init(void);
 extern int fts_proc_remove(void);
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 #define CENTER_X 540
-#define CENTER_Y 1910
+#define CENTER_Y 2005
+#define CIRCLE_R 87
+#define FOD_LX 420
+#define FOD_LY 1885
+#define FOD_SIDE 242
 bool fts_is_infod(void);
+void fts_get_pointer(int *touch_flag, int *x, int *y);
 #endif
 void fts_restore_regvalues(void);
-const char *fts_get_limit(struct fts_ts_info *info);
+
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 int fts_palm_sensor_cmd(int input);
 int fts_p_sensor_cmd(int input);

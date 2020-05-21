@@ -1,9 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
+#include <asm/dma-iommu.h>
 #include <linux/atomic.h>
 #include <linux/completion.h>
 #include <linux/debugfs.h>
@@ -434,7 +441,7 @@ struct gpi_dev {
 	struct device *dev;
 	struct resource *res;
 	void __iomem *regs;
-	void *ee_base; /*ee register base address*/
+	void __iomem *ee_base; /*ee register base address*/
 	u32 max_gpii; /* maximum # of gpii instances available per gpi block */
 	u32 gpii_mask; /* gpii instances available for apps */
 	u32 ev_factor; /* ev ring length factor */
@@ -446,83 +453,6 @@ struct gpi_dev {
 	u32 ipc_log_lvl;
 	u32 klog_lvl;
 	struct dentry *dentry;
-};
-
-static struct gpi_dev *gpi_dev_dbg;
-
-struct reg_info {
-	char *name;
-	u32 offset;
-	u32 val;
-};
-
-static const struct reg_info gpi_debug_ev_cntxt[] = {
-	{ "CONFIG", CNTXT_0_CONFIG },
-	{ "R_LENGTH", CNTXT_1_R_LENGTH },
-	{ "BASE_LSB", CNTXT_2_RING_BASE_LSB },
-	{ "BASE_MSB", CNTXT_3_RING_BASE_MSB },
-	{ "RP_LSB", CNTXT_4_RING_RP_LSB },
-	{ "RP_MSB", CNTXT_5_RING_RP_MSB },
-	{ "WP_LSB", CNTXT_6_RING_WP_LSB },
-	{ "WP_MSB", CNTXT_7_RING_WP_MSB },
-	{ "INT_MOD", CNTXT_8_RING_INT_MOD },
-	{ "INTVEC", CNTXT_9_RING_INTVEC },
-	{ "MSI_LSB", CNTXT_10_RING_MSI_LSB },
-	{ "MSI_MSB", CNTXT_11_RING_MSI_MSB },
-	{ "RP_UPDATE_LSB", CNTXT_12_RING_RP_UPDATE_LSB },
-	{ "RP_UPDATE_MSB", CNTXT_13_RING_RP_UPDATE_MSB },
-	{ NULL },
-};
-
-static const struct reg_info gpi_debug_ch_cntxt[] = {
-	{ "CONFIG", CNTXT_0_CONFIG },
-	{ "R_LENGTH", CNTXT_1_R_LENGTH },
-	{ "BASE_LSB", CNTXT_2_RING_BASE_LSB },
-	{ "BASE_MSB", CNTXT_3_RING_BASE_MSB },
-	{ "RP_LSB", CNTXT_4_RING_RP_LSB },
-	{ "RP_MSB", CNTXT_5_RING_RP_MSB },
-	{ "WP_LSB", CNTXT_6_RING_WP_LSB },
-	{ "WP_MSB", CNTXT_7_RING_WP_MSB },
-	{ NULL },
-};
-
-static const struct reg_info gpi_debug_regs[] = {
-	{ "DEBUG_PC", GPI_DEBUG_PC_FOR_DEBUG },
-	{ "SW_RF_10", GPI_DEBUG_SW_RF_n_READ(10) },
-	{ "SW_RF_11", GPI_DEBUG_SW_RF_n_READ(11) },
-	{ "SW_RF_12", GPI_DEBUG_SW_RF_n_READ(12) },
-	{ "SW_RF_21", GPI_DEBUG_SW_RF_n_READ(21) },
-	{ NULL },
-};
-
-static const struct reg_info gpi_debug_qsb_regs[] = {
-	{ "QSB_LOG_SEL", GPI_DEBUG_QSB_LOG_SEL },
-	{ "QSB_LOG_CLR", GPI_DEBUG_QSB_LOG_CLR },
-	{ "QSB_LOG_ERR_TRNS_ID", GPI_DEBUG_QSB_LOG_ERR_TRNS_ID },
-	{ "QSB_LOG_0", GPI_DEBUG_QSB_LOG_0 },
-	{ "QSB_LOG_1", GPI_DEBUG_QSB_LOG_1 },
-	{ "QSB_LOG_2", GPI_DEBUG_QSB_LOG_2 },
-	{ "LAST_MISC_ID_0", GPI_DEBUG_QSB_LOG_LAST_MISC_ID(0) },
-	{ "LAST_MISC_ID_1", GPI_DEBUG_QSB_LOG_LAST_MISC_ID(1) },
-	{ "LAST_MISC_ID_2", GPI_DEBUG_QSB_LOG_LAST_MISC_ID(2) },
-	{ "LAST_MISC_ID_3", GPI_DEBUG_QSB_LOG_LAST_MISC_ID(3) },
-	{ NULL },
-};
-
-struct gpi_reg_table {
-	u64 timestamp;
-	struct reg_info *ev_cntxt_info;
-	struct reg_info *chan[MAX_CHANNELS_PER_GPII];
-	struct reg_info *gpi_debug_regs;
-	struct reg_info *gpii_cntxt;
-	struct reg_info *gpi_debug_qsb_regs;
-	u32 ev_scratch_0;
-	u32 ch_scratch_0[MAX_CHANNELS_PER_GPII];
-	void *ev_ring;
-	u32 ev_ring_len;
-	void *ch_ring[MAX_CHANNELS_PER_GPII];
-	u32 ch_ring_len[MAX_CHANNELS_PER_GPII];
-	u32 error_log;
 };
 
 struct gpii_chan {
@@ -579,9 +509,6 @@ struct gpii {
 	atomic_t dbg_index;
 	char label[GPI_LABEL_SIZE];
 	struct dentry *dentry;
-	struct gpi_reg_table dbg_reg_table;
-	bool reg_table_dump;
-	u32 dbg_gpi_irq_cnt;
 };
 
 struct gpi_desc {
@@ -689,156 +616,6 @@ static inline void gpi_write_reg_field(struct gpii *gpii,
 	tmp &= ~mask;
 	val = tmp | ((val << shift) & mask);
 	gpi_write_reg(gpii, addr, val);
-}
-
-static void gpi_dump_debug_reg(struct gpii *gpii)
-{
-	struct gpi_reg_table *dbg_reg_table = &gpii->dbg_reg_table;
-	struct reg_info *reg_info;
-	int chan;
-	const gfp_t gfp = GFP_ATOMIC;
-	const struct reg_info gpii_cntxt[] = {
-		{ "TYPE_IRQ", GPI_GPII_n_CNTXT_TYPE_IRQ_OFFS
-					(gpii->gpii_id) },
-		{ "TYPE_IRQ_MSK", GPI_GPII_n_CNTXT_TYPE_IRQ_MSK_OFFS
-					(gpii->gpii_id) },
-		{ "CH_IRQ", GPI_GPII_n_CNTXT_SRC_GPII_CH_IRQ_OFFS
-					(gpii->gpii_id) },
-		{ "EV_IRQ", GPI_GPII_n_CNTXT_SRC_EV_CH_IRQ_OFFS
-					(gpii->gpii_id) },
-		{ "CH_IRQ_MSK", GPI_GPII_n_CNTXT_SRC_CH_IRQ_MSK_OFFS
-					(gpii->gpii_id) },
-		{ "EV_IRQ_MSK", GPI_GPII_n_CNTXT_SRC_EV_CH_IRQ_MSK_OFFS
-					(gpii->gpii_id) },
-		{ "IEOB_IRQ", GPI_GPII_n_CNTXT_SRC_IEOB_IRQ_OFFS
-					(gpii->gpii_id) },
-		{ "IEOB_IRQ_MSK", GPI_GPII_n_CNTXT_SRC_IEOB_IRQ_MSK_OFFS
-					(gpii->gpii_id) },
-		{ "GLOB_IRQ", GPI_GPII_n_CNTXT_GLOB_IRQ_STTS_OFFS
-					(gpii->gpii_id) },
-		{ NULL },
-	};
-
-	dbg_reg_table->timestamp = sched_clock();
-
-	if (!dbg_reg_table->gpii_cntxt) {
-		dbg_reg_table->gpii_cntxt = kzalloc(sizeof(gpii_cntxt), gfp);
-		if (!dbg_reg_table->gpii_cntxt)
-			return;
-		memcpy((void *)dbg_reg_table->gpii_cntxt, (void *)gpii_cntxt,
-		       sizeof(gpii_cntxt));
-	}
-
-	/* log gpii cntxt */
-	reg_info = dbg_reg_table->gpii_cntxt;
-	for (; reg_info->name; reg_info++)
-		reg_info->val = readl_relaxed(gpii->regs + reg_info->offset);
-
-	if (!dbg_reg_table->ev_cntxt_info) {
-		dbg_reg_table->ev_cntxt_info =
-			kzalloc(sizeof(gpi_debug_ev_cntxt), gfp);
-		if (!dbg_reg_table->ev_cntxt_info)
-			return;
-		memcpy((void *)dbg_reg_table->ev_cntxt_info,
-			(void *)gpi_debug_ev_cntxt, sizeof(gpi_debug_ev_cntxt));
-	}
-
-	/* log ev cntxt */
-	reg_info = dbg_reg_table->ev_cntxt_info;
-	for (; reg_info->name; reg_info++)
-		reg_info->val = readl_relaxed(gpii->ev_cntxt_base_reg +
-					      reg_info->offset);
-
-	/* dump channel cntxt registers */
-	for (chan = 0; chan < MAX_CHANNELS_PER_GPII; chan++) {
-		if (!dbg_reg_table->chan[chan]) {
-			dbg_reg_table->chan[chan] =
-				kzalloc(sizeof(gpi_debug_ch_cntxt), gfp);
-			if (!dbg_reg_table->chan[chan])
-				return;
-			memcpy((void *)dbg_reg_table->chan[chan],
-				(void *)gpi_debug_ch_cntxt,
-				sizeof(gpi_debug_ch_cntxt));
-		}
-		reg_info = dbg_reg_table->chan[chan];
-		for (; reg_info->name; reg_info++)
-			reg_info->val =
-			readl_relaxed(
-			gpii->gpii_chan[chan].ch_cntxt_base_reg +
-							reg_info->offset);
-	}
-
-	if (!dbg_reg_table->gpi_debug_regs) {
-		dbg_reg_table->gpi_debug_regs =
-			kzalloc(sizeof(gpi_debug_regs), gfp);
-		if (!dbg_reg_table->gpi_debug_regs)
-			return;
-		memcpy((void *)dbg_reg_table->gpi_debug_regs,
-			(void *)gpi_debug_regs, sizeof(gpi_debug_regs));
-	}
-
-	/* log debug register */
-	reg_info = dbg_reg_table->gpi_debug_regs;
-	for (; reg_info->name; reg_info++)
-		reg_info->val = readl_relaxed(gpii->gpi_dev->regs +
-					reg_info->offset);
-
-	if (!dbg_reg_table->gpi_debug_qsb_regs) {
-		dbg_reg_table->gpi_debug_qsb_regs =
-			kzalloc(sizeof(gpi_debug_qsb_regs), gfp);
-		if (!dbg_reg_table->gpi_debug_qsb_regs)
-			return;
-		memcpy((void *)dbg_reg_table->gpi_debug_qsb_regs,
-			(void *)gpi_debug_qsb_regs,
-				sizeof(gpi_debug_qsb_regs));
-	}
-
-	/* log QSB register */
-	reg_info = dbg_reg_table->gpi_debug_qsb_regs;
-	for (; reg_info->name; reg_info++)
-		reg_info->val = readl_relaxed(gpii->gpi_dev->regs +
-					reg_info->offset);
-
-	/* dump scratch registers */
-	dbg_reg_table->ev_scratch_0 = readl_relaxed(gpii->regs +
-			GPI_GPII_n_CNTXT_SCRATCH_0_OFFS(gpii->gpii_id));
-	for (chan = 0; chan < MAX_CHANNELS_PER_GPII; chan++)
-		dbg_reg_table->ch_scratch_0[chan] = readl_relaxed(gpii->regs +
-				GPI_GPII_n_CH_k_SCRATCH_0_OFFS(gpii->gpii_id,
-						gpii->gpii_chan[chan].chid));
-
-	/* Copy the ev ring */
-	if (!dbg_reg_table->ev_ring) {
-		dbg_reg_table->ev_ring_len = gpii->ev_ring.len;
-		dbg_reg_table->ev_ring =
-				kzalloc(dbg_reg_table->ev_ring_len, gfp);
-		if (!dbg_reg_table->ev_ring)
-			return;
-	}
-	memcpy(dbg_reg_table->ev_ring, gpii->ev_ring.base,
-		dbg_reg_table->ev_ring_len);
-
-	/* Copy Transfer rings */
-	for (chan = 0; chan < MAX_CHANNELS_PER_GPII; chan++) {
-		struct gpii_chan *gpii_chan = &gpii->gpii_chan[chan];
-
-		if (!dbg_reg_table->ch_ring[chan]) {
-			dbg_reg_table->ch_ring_len[chan] =
-					gpii_chan->ch_ring.len;
-			dbg_reg_table->ch_ring[chan] =
-				kzalloc(dbg_reg_table->ch_ring_len[chan], gfp);
-			if (!dbg_reg_table->ch_ring[chan])
-				return;
-		}
-
-		memcpy(dbg_reg_table->ch_ring[chan], gpii_chan->ch_ring.base,
-		       dbg_reg_table->ch_ring_len[chan]);
-	}
-
-	dbg_reg_table->error_log = readl_relaxed(gpii->regs +
-				GPI_GPII_n_ERROR_LOG_OFFS(gpii->gpii_id));
-
-	GPII_ERR(gpii, GPI_DBG_COMMON, "Global IRQ handling Exit\n");
 }
 
 static void gpi_disable_interrupts(struct gpii *gpii)
@@ -1023,7 +800,7 @@ static int gpi_config_interrupts(struct gpii *gpii,
 		  (settings == DEFAULT_IRQ_SETTINGS) ? "default" : "user_spec",
 		  (mask) ? 'T' : 'F');
 
-	if (!gpii->configured_irq) {
+	if (gpii->configured_irq == false) {
 		ret = devm_request_irq(gpii->gpi_dev->dev, gpii->irq,
 				       gpi_handle_irq, IRQF_TRIGGER_HIGH,
 				       gpii->label, gpii);
@@ -1059,7 +836,7 @@ static int gpi_config_interrupts(struct gpii *gpii,
 					    default_reg[i].shift,
 					    default_reg[i].val);
 		gpii->cntxt_type_irq_msk = def_type;
-	}
+	};
 
 	gpii->configured_irq = true;
 
@@ -1227,37 +1004,6 @@ static void gpi_process_ch_ctrl_irq(struct gpii *gpii)
 	}
 }
 
-/* processing gpi general error interrupts */
-static void gpi_process_gen_err_irq(struct gpii *gpii)
-{
-	u32 gpii_id = gpii->gpii_id;
-	u32 offset = GPI_GPII_n_CNTXT_GPII_IRQ_STTS_OFFS(gpii_id);
-	u32 irq_stts = gpi_read_reg(gpii, gpii->regs + offset);
-	u32 chid;
-	struct gpii_chan *gpii_chan;
-
-	/* clear the status */
-	GPII_ERR(gpii, GPI_DBG_COMMON, "irq_stts:0x%x\n", irq_stts);
-
-	/* Notify the client about error */
-	for (chid = 0, gpii_chan = gpii->gpii_chan;
-	     chid < MAX_CHANNELS_PER_GPII; chid++, gpii_chan++)
-		if (gpii_chan->client_info.callback)
-			gpi_generate_cb_event(gpii_chan, MSM_GPI_QUP_FW_ERROR,
-					      irq_stts);
-
-	/* Clear the register */
-	offset = GPI_GPII_n_CNTXT_GPII_IRQ_CLR_OFFS(gpii_id);
-	gpi_write_reg(gpii, gpii->regs + offset, irq_stts);
-
-	gpii->dbg_gpi_irq_cnt++;
-
-	if (!gpii->reg_table_dump) {
-		gpi_dump_debug_reg(gpii);
-		gpii->reg_table_dump = true;
-	}
-}
-
 /* processing gpi level error interrupts */
 static void gpi_process_glob_err_irq(struct gpii *gpii)
 {
@@ -1413,7 +1159,6 @@ static irqreturn_t gpi_handle_irq(int irq, void *data)
 		if (type) {
 			GPII_CRITIC(gpii, GPI_DBG_COMMON,
 				 "Unhandled interrupt status:0x%x\n", type);
-			gpi_process_gen_err_irq(gpii);
 			goto exit_irq;
 		}
 		offset = GPI_GPII_n_CNTXT_TYPE_IRQ_OFFS(gpii->gpii_id);
@@ -2796,19 +2541,120 @@ static void gpi_setup_debug(struct gpi_dev *gpi_dev)
 	}
 }
 
+static struct dma_iommu_mapping *gpi_create_mapping(struct gpi_dev *gpi_dev)
+{
+	dma_addr_t base;
+	size_t size;
+
+	/*
+	 * If S1_BYPASS enabled then iommu space is not used, however framework
+	 * still require clients to create a mapping space before attaching. So
+	 * set to smallest size required by iommu framework.
+	 */
+	if (gpi_dev->smmu_cfg & GPI_SMMU_S1_BYPASS) {
+		base = 0;
+		size = PAGE_SIZE;
+	} else {
+		base = gpi_dev->iova_base;
+		size = gpi_dev->iova_size;
+	}
+
+	GPI_LOG(gpi_dev, "Creating iommu mapping of base:0x%llx size:%lu\n",
+		base, size);
+
+	return arm_iommu_create_mapping(&platform_bus_type, base, size);
+}
+
+static int gpi_smmu_init(struct gpi_dev *gpi_dev)
+{
+	struct dma_iommu_mapping *mapping = NULL;
+	int ret;
+
+	if (gpi_dev->smmu_cfg) {
+
+		/* create mapping table */
+		mapping = gpi_create_mapping(gpi_dev);
+		if (IS_ERR(mapping)) {
+			GPI_ERR(gpi_dev,
+				"Failed to create iommu mapping, ret:%ld\n",
+				PTR_ERR(mapping));
+			return PTR_ERR(mapping);
+		}
+
+		if (gpi_dev->smmu_cfg & GPI_SMMU_S1_BYPASS) {
+			int s1_bypass = 1;
+
+			ret = iommu_domain_set_attr(mapping->domain,
+					DOMAIN_ATTR_S1_BYPASS, &s1_bypass);
+			if (ret) {
+				GPI_ERR(gpi_dev,
+					"Failed to set attr S1_BYPASS, ret:%d\n",
+					ret);
+				goto release_mapping;
+			}
+		}
+
+		if (gpi_dev->smmu_cfg & GPI_SMMU_FAST) {
+			int fast = 1;
+
+			ret = iommu_domain_set_attr(mapping->domain,
+						    DOMAIN_ATTR_FAST, &fast);
+			if (ret) {
+				GPI_ERR(gpi_dev,
+					"Failed to set attr FAST, ret:%d\n",
+					ret);
+				goto release_mapping;
+			}
+		}
+
+		if (gpi_dev->smmu_cfg & GPI_SMMU_ATOMIC) {
+			int atomic = 1;
+
+			ret = iommu_domain_set_attr(mapping->domain,
+						DOMAIN_ATTR_ATOMIC, &atomic);
+			if (ret) {
+				GPI_ERR(gpi_dev,
+					"Failed to set attr ATOMIC, ret:%d\n",
+					ret);
+				goto release_mapping;
+			}
+		}
+
+		ret = arm_iommu_attach_device(gpi_dev->dev, mapping);
+		if (ret) {
+			GPI_ERR(gpi_dev,
+				"Failed with iommu_attach, ret:%d\n", ret);
+			goto release_mapping;
+		}
+	}
+
+	GPI_LOG(gpi_dev, "Setting dma mask to 64\n");
+	ret = dma_set_mask(gpi_dev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		GPI_ERR(gpi_dev, "Error setting dma_mask to 64, ret:%d\n", ret);
+		goto error_set_mask;
+	}
+
+	return ret;
+
+error_set_mask:
+	if (gpi_dev->smmu_cfg)
+		arm_iommu_detach_device(gpi_dev->dev);
+release_mapping:
+	if (mapping)
+		arm_iommu_release_mapping(mapping);
+	return ret;
+}
+
 static int gpi_probe(struct platform_device *pdev)
 {
 	struct gpi_dev *gpi_dev;
 	int ret, i;
-	const char *mode = NULL;
 	u32 gpi_ee_offset;
 
 	gpi_dev = devm_kzalloc(&pdev->dev, sizeof(*gpi_dev), GFP_KERNEL);
 	if (!gpi_dev)
 		return -ENOMEM;
-
-	/* debug purpose */
-	gpi_dev_dbg = gpi_dev;
 
 	gpi_dev->dev = &pdev->dev;
 	gpi_dev->klog_lvl = DEFAULT_KLOG_LVL;
@@ -2847,7 +2693,7 @@ static int gpi_probe(struct platform_device *pdev)
 		GPI_LOG(gpi_dev, "No variable ee offset present\n");
 	else
 		gpi_dev->ee_base =
-		(void *)((u64)gpi_dev->ee_base - gpi_ee_offset);
+			gpi_dev->ee_base - gpi_ee_offset;
 
 	ret = of_property_read_u32(gpi_dev->dev->of_node, "qcom,ev-factor",
 				   &gpi_dev->ev_factor);
@@ -2856,13 +2702,39 @@ static int gpi_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	ret = of_property_read_string(gpi_dev->dev->of_node,
-			"qcom,iommu-dma", &mode);
-
-	ret = dma_set_mask(gpi_dev->dev, DMA_BIT_MASK(64));
+	ret = of_property_read_u32(gpi_dev->dev->of_node, "qcom,smmu-cfg",
+				   &gpi_dev->smmu_cfg);
 	if (ret) {
-		GPI_ERR(gpi_dev,
-		"Error setting dma_mask to 64, ret:%d\n", ret);
+		GPI_ERR(gpi_dev, "missing 'qcom,smmu-cfg' DT node\n");
+		return ret;
+	}
+	if (gpi_dev->smmu_cfg && !(gpi_dev->smmu_cfg & GPI_SMMU_S1_BYPASS)) {
+		u64 iova_range[2];
+
+		ret = of_property_count_elems_of_size(gpi_dev->dev->of_node,
+						      "qcom,iova-range",
+						      sizeof(iova_range));
+		if (ret != 1) {
+			GPI_ERR(gpi_dev,
+				"missing or incorrect 'qcom,iova-range' DT node ret:%d\n",
+				ret);
+		}
+
+		ret = of_property_read_u64_array(gpi_dev->dev->of_node,
+					"qcom,iova-range", iova_range,
+					sizeof(iova_range) / sizeof(u64));
+		if (ret) {
+			GPI_ERR(gpi_dev,
+				"could not read DT prop 'qcom,iova-range\n");
+			return ret;
+		}
+		gpi_dev->iova_base = iova_range[0];
+		gpi_dev->iova_size = iova_range[1];
+	}
+
+	ret = gpi_smmu_init(gpi_dev);
+	if (ret) {
+		GPI_ERR(gpi_dev, "error configuring smmu, ret:%d\n", ret);
 		return ret;
 	}
 

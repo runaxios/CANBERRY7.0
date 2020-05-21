@@ -1,9 +1,26 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  of-thermal.c - Generic Thermal Management device tree support.
  *
  *  Copyright (C) 2013 Texas Instruments
  *  Copyright (C) 2013 Eduardo Valentin <eduardo.valentin@ti.com>
+ *
+ *
+ *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful, but
+ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 #include <linux/thermal.h>
 #include <linux/slab.h>
@@ -210,6 +227,7 @@ static int of_thermal_set_trips(struct thermal_zone_device *tz,
 	mutex_unlock(&data->senps->lock);
 	return ret;
 }
+
 /**
  * of_thermal_get_ntrips - function to export number of available trip
  *			   points.
@@ -569,46 +587,6 @@ static int of_thermal_aggregate_trip_types(struct thermal_zone_device *tz,
 	return 0;
 }
 
-static bool of_thermal_is_trips_triggered(struct thermal_zone_device *tz,
-		int temp)
-{
-	int tt, th, trip, last_temp;
-	struct __thermal_zone *data = tz->devdata;
-	bool triggered = false;
-
-	mutex_lock(&tz->lock);
-	last_temp = tz->temperature;
-	for (trip = 0; trip < data->ntrips; trip++) {
-
-		if (!tz->tzp->tracks_low) {
-			tt = data->trips[trip].temperature;
-			if (temp >= tt && last_temp < tt) {
-				triggered = true;
-				break;
-			}
-			th = tt - data->trips[trip].hysteresis;
-			if (temp <= th && last_temp > th) {
-				triggered = true;
-				break;
-			}
-		} else {
-			tt = data->trips[trip].temperature;
-			if (temp <= tt && last_temp > tt) {
-				triggered = true;
-				break;
-			}
-			th = tt + data->trips[trip].hysteresis;
-			if (temp >= th && last_temp < th) {
-				triggered = true;
-				break;
-			}
-		}
-	}
-	mutex_unlock(&tz->lock);
-
-	return triggered;
-}
-
 /*
  * of_thermal_aggregate_trip - aggregate trip temperatures across sibling
  *				thermal zones.
@@ -645,8 +623,6 @@ static void handle_thermal_trip(struct thermal_zone_device *tz,
 			thermal_zone_device_update(zone,
 				THERMAL_EVENT_UNSPECIFIED);
 		} else {
-			if (!of_thermal_is_trips_triggered(zone, trip_temp))
-				continue;
 			thermal_zone_device_update_temp(zone,
 				THERMAL_EVENT_UNSPECIFIED, trip_temp);
 		}
@@ -1340,7 +1316,7 @@ __init *thermal_of_build_thermal_zone(struct device_node *np)
 	if (tz->ntrips == 0) /* must have at least one child */
 		goto finish;
 
-	tz->trips = kcalloc(tz->ntrips, sizeof(*tz->trips), GFP_KERNEL);
+	tz->trips = kzalloc(tz->ntrips * sizeof(*tz->trips), GFP_KERNEL);
 	if (!tz->trips) {
 		ret = -ENOMEM;
 		goto free_tz;
@@ -1366,7 +1342,7 @@ __init *thermal_of_build_thermal_zone(struct device_node *np)
 	if (tz->num_tbps == 0)
 		goto finish;
 
-	tz->tbps = kcalloc(tz->num_tbps, sizeof(*tz->tbps), GFP_KERNEL);
+	tz->tbps = kzalloc(tz->num_tbps * sizeof(*tz->tbps), GFP_KERNEL);
 	if (!tz->tbps) {
 		ret = -ENOMEM;
 		goto free_trips;

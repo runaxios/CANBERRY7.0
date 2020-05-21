@@ -34,7 +34,6 @@ static int ghash_setkey(struct crypto_shash *tfm,
 			const u8 *key, unsigned int keylen)
 {
 	struct ghash_ctx *ctx = crypto_shash_ctx(tfm);
-	be128 k;
 
 	if (keylen != GHASH_BLOCK_SIZE) {
 		crypto_shash_set_flags(tfm, CRYPTO_TFM_RES_BAD_KEY_LEN);
@@ -43,12 +42,7 @@ static int ghash_setkey(struct crypto_shash *tfm,
 
 	if (ctx->gf128)
 		gf128mul_free_4k(ctx->gf128);
-
-	BUILD_BUG_ON(sizeof(k) != GHASH_BLOCK_SIZE);
-	memcpy(&k, key, GHASH_BLOCK_SIZE); /* avoid violating alignment rules */
-	ctx->gf128 = gf128mul_init_4k_lle(&k);
-	memzero_explicit(&k, GHASH_BLOCK_SIZE);
-
+	ctx->gf128 = gf128mul_init_4k_lle((be128 *)key);
 	if (!ctx->gf128)
 		return -ENOMEM;
 
@@ -61,6 +55,9 @@ static int ghash_update(struct shash_desc *desc,
 	struct ghash_desc_ctx *dctx = shash_desc_ctx(desc);
 	struct ghash_ctx *ctx = crypto_shash_ctx(desc->tfm);
 	u8 *dst = dctx->buffer;
+
+	if (!ctx->gf128)
+		return -ENOKEY;
 
 	if (dctx->bytes) {
 		int n = min(srclen, dctx->bytes);
@@ -114,6 +111,9 @@ static int ghash_final(struct shash_desc *desc, u8 *dst)
 	struct ghash_ctx *ctx = crypto_shash_ctx(desc->tfm);
 	u8 *buf = dctx->buffer;
 
+	if (!ctx->gf128)
+		return -ENOKEY;
+
 	ghash_flush(ctx, dctx);
 	memcpy(dst, buf, GHASH_BLOCK_SIZE);
 
@@ -138,6 +138,7 @@ static struct shash_alg ghash_alg = {
 		.cra_name		= "ghash",
 		.cra_driver_name	= "ghash-generic",
 		.cra_priority		= 100,
+		.cra_flags		= CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize		= GHASH_BLOCK_SIZE,
 		.cra_ctxsize		= sizeof(struct ghash_ctx),
 		.cra_module		= THIS_MODULE,

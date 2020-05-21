@@ -21,7 +21,7 @@
  * Data Sheet:
  *   http://www.silabs.com/Support%20Documents/TechnicalDocs/CP2112.pdf
  * Programming Interface Specification:
- *   https://www.silabs.com/documents/public/application-notes/an495-cp2112-interface-specification.pdf
+ *   http://www.silabs.com/Support%20Documents/TechnicalDocs/AN495.pdf
  */
 
 #include <linux/gpio.h>
@@ -696,16 +696,8 @@ static int cp2112_xfer(struct i2c_adapter *adap, u16 addr,
 					      (u8 *)&word, 2);
 		break;
 	case I2C_SMBUS_I2C_BLOCK_DATA:
-		if (read_write == I2C_SMBUS_READ) {
-			read_length = data->block[0];
-			count = cp2112_write_read_req(buf, addr, read_length,
-						      command, NULL, 0);
-		} else {
-			count = cp2112_write_req(buf, addr, command,
-						 data->block + 1,
-						 data->block[0]);
-		}
-		break;
+		size = I2C_SMBUS_BLOCK_DATA;
+		/* fallthrough */
 	case I2C_SMBUS_BLOCK_DATA:
 		if (I2C_SMBUS_READ == read_write) {
 			count = cp2112_write_read_req(buf, addr,
@@ -792,9 +784,6 @@ static int cp2112_xfer(struct i2c_adapter *adap, u16 addr,
 		break;
 	case I2C_SMBUS_WORD_DATA:
 		data->word = le16_to_cpup((__le16 *)buf);
-		break;
-	case I2C_SMBUS_I2C_BLOCK_DATA:
-		memcpy(data->block + 1, buf, read_length);
 		break;
 	case I2C_SMBUS_BLOCK_DATA:
 		if (read_length > I2C_SMBUS_BLOCK_MAX) {
@@ -1160,6 +1149,8 @@ static unsigned int cp2112_gpio_irq_startup(struct irq_data *d)
 
 	INIT_DELAYED_WORK(&dev->gpio_poll_worker, cp2112_gpio_poll_callback);
 
+	cp2112_gpio_direction_input(gc, d->hwirq);
+
 	if (!dev->gpio_poll) {
 		dev->gpio_poll = true;
 		schedule_delayed_work(&dev->gpio_poll_worker, 0);
@@ -1205,12 +1196,6 @@ static int __maybe_unused cp2112_allocate_irq(struct cp2112_device *dev,
 	if (IS_ERR(dev->desc[pin])) {
 		dev_err(dev->gc.parent, "Failed to request GPIO\n");
 		return PTR_ERR(dev->desc[pin]);
-	}
-
-	ret = cp2112_gpio_direction_input(&dev->gc, pin);
-	if (ret < 0) {
-		dev_err(dev->gc.parent, "Failed to set GPIO to input dir\n");
-		goto err_desc;
 	}
 
 	ret = gpiochip_lock_as_irq(&dev->gc, pin);

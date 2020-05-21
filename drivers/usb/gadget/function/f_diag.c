@@ -1,10 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* drivers/usb/gadget/f_diag.c
  * Diag Function Device - Route ARM9 and ARM11 DIAG messages
  * between HOST and DEVICE.
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 #include <linux/init.h>
 #include <linux/module.h>

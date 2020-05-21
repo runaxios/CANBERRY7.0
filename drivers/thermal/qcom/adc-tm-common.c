@@ -1,6 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -50,7 +59,7 @@ static const struct adc_tm_map_pt adcmap_100k_104ef_104fb_1875_vref[] = {
 static void adc_tm_map_voltage_temp(const struct adc_tm_map_pt *pts,
 				      size_t tablesize, int input, int *output)
 {
-	unsigned int descending = 1;
+	bool descending = true;
 	u32 i = 0;
 
 	/* Check if table is descending or ascending */
@@ -90,7 +99,8 @@ static void adc_tm_map_voltage_temp(const struct adc_tm_map_pt *pts,
 static void adc_tm_map_temp_voltage(const struct adc_tm_map_pt *pts,
 		size_t tablesize, int input, int64_t *output)
 {
-	unsigned int i = 0, descending = 1;
+	bool descending = true;
+	unsigned int i = 0;
 
 	/* Check if table is descending or ascending */
 	if (tablesize > 1) {

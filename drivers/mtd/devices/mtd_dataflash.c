@@ -140,7 +140,7 @@ static int dataflash_waitready(struct spi_device *spi)
 		if (status & (1 << 7))	/* RDY/nBSY */
 			return status;
 
-		usleep_range(3000, 4000);
+		msleep(3);
 	}
 }
 
@@ -219,6 +219,10 @@ static int dataflash_erase(struct mtd_info *mtd, struct erase_info *instr)
 		}
 	}
 	mutex_unlock(&priv->lock);
+
+	/* Inform MTD subsystem that erase is complete */
+	instr->state = MTD_ERASE_DONE;
+	mtd_erase_callback(instr);
 
 	return 0;
 }

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 
@@ -686,7 +693,7 @@ int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
 		head_descr = list_first_entry(&cons_sys->head_desc_list,
 					struct ipa3_dma_xfer_wrapper, link);
 		/* Unexpected transfer sent from HW */
-		ipa_assert_on(xfer_descr != head_descr);
+		BUG_ON(xfer_descr != head_descr);
 	}
 	mutex_unlock(&ipa3_dma_ctx->sync_lock);
 
@@ -1186,13 +1193,19 @@ static ssize_t ipa3_dma_debugfs_reset_statistics(struct file *file,
 					size_t count,
 					loff_t *ppos)
 {
+	unsigned long missing;
 	s8 in_num = 0;
-	int ret;
 
-	ret = kstrtos8_from_user(ubuf, count, 0, &in_num);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
 
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &in_num))
+		return -EFAULT;
 	switch (in_num) {
 	case 0:
 		if (ipa3_dma_work_pending())

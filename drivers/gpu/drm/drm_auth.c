@@ -165,6 +165,8 @@ static int drm_new_set_master(struct drm_device *dev, struct drm_file *fpriv)
 	if (old_master)
 		drm_master_put(&old_master);
 
+	pr_info("%s: pid=%d, task_name=%s\n", __func__, task_pid_nr(current), current->comm);
+
 	return 0;
 
 out_err:
@@ -231,12 +233,6 @@ int drm_dropmaster_ioctl(struct drm_device *dev, void *data,
 
 	if (!dev->master)
 		goto out_unlock;
-
-	if (file_priv->master->lessor != NULL) {
-		DRM_DEBUG_LEASE("Attempt to drop lessee %d as master\n", file_priv->master->lessee_id);
-		ret = -EINVAL;
-		goto out_unlock;
-	}
 
 	ret = 0;
 	drm_drop_master(dev, file_priv);

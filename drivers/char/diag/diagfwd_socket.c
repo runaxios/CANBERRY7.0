@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -16,8 +23,6 @@
 #include <linux/diagchar.h>
 #include <linux/of.h>
 #include <linux/kmemleak.h>
-#include <linux/net.h>
-#include <linux/socket.h>
 #include <asm/current.h>
 #include <net/sock.h>
 #include <linux/notifier.h>
@@ -40,7 +45,6 @@
 #define SENSORS_INST_BASE	192
 #define CDSP_INST_BASE		256
 #define WDSP_INST_BASE		320
-#define NPU_INST_BASE		384
 
 #define INST_ID_CNTL		0
 #define INST_ID_CMD		1
@@ -48,7 +52,7 @@
 #define INST_ID_DCI_CMD		3
 #define INST_ID_DCI		4
 
-#define MAX_BUF_SIZE		0x4400
+#define MAX_BUF_SIZE 		0x4400
 #define MAX_NO_PACKETS		10
 #define DIAG_SO_RCVBUF_SIZE	(MAX_BUF_SIZE * MAX_NO_PACKETS)
 
@@ -85,11 +89,6 @@ struct diag_socket_info socket_data[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_CDSP,
 		.type = TYPE_DATA,
 		.name = "CDSP_DATA"
-	},
-	{
-		.peripheral = PERIPHERAL_NPU,
-		.type = TYPE_DATA,
-		.name = "NPU_DATA"
 	}
 };
 
@@ -123,11 +122,6 @@ struct diag_socket_info socket_cntl[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_CDSP,
 		.type = TYPE_CNTL,
 		.name = "CDSP_CNTL"
-	},
-	{
-		.peripheral = PERIPHERAL_NPU,
-		.type = TYPE_CNTL,
-		.name = "NPU_CNTL"
 	}
 };
 
@@ -161,11 +155,6 @@ struct diag_socket_info socket_dci[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_CDSP,
 		.type = TYPE_DCI,
 		.name = "CDSP_DCI"
-	},
-	{
-		.peripheral = PERIPHERAL_NPU,
-		.type = TYPE_DCI,
-		.name = "NPU_DCI"
 	}
 };
 
@@ -199,11 +188,6 @@ struct diag_socket_info socket_cmd[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_CDSP,
 		.type = TYPE_CMD,
 		.name = "CDSP_CMD"
-	},
-	{
-		.peripheral = PERIPHERAL_NPU,
-		.type = TYPE_CMD,
-		.name = "NPU_CMD"
 	}
 };
 
@@ -238,11 +222,6 @@ struct diag_socket_info socket_dci_cmd[NUM_PERIPHERALS] = {
 		.type = TYPE_DCI_CMD,
 		.name = "CDSP_DCI_CMD"
 	},
-	{
-		.peripheral = PERIPHERAL_NPU,
-		.type = TYPE_DCI_CMD,
-		.name = "NPU_DCI_CMD"
-	}
 };
 
 struct restart_notifier_block {
@@ -324,7 +303,6 @@ static struct restart_notifier_block restart_notifiers[] = {
 	{SOCKET_WCNSS, "wcnss", .nb.notifier_call = restart_notifier_cb},
 	{SOCKET_SLPI, "slpi", .nb.notifier_call = restart_notifier_cb},
 	{SOCKET_CDSP, "cdsp", .nb.notifier_call = restart_notifier_cb},
-	{SOCKET_NPU, "npu", .nb.notifier_call = restart_notifier_cb},
 };
 
 void diag_socket_invalidate(void *ctxt, struct diagfwd_info *fwd_ctxt)
@@ -472,6 +450,7 @@ static void socket_open_server(struct diag_socket_info *info)
 	struct msghdr msg = {0};
 	struct kvec iv = { &pkt, sizeof(pkt) };
 	int ret;
+	int sl = sizeof(sq);
 	unsigned int size = DIAG_SO_RCVBUF_SIZE;
 
 	if (!info || info->port_type != PORT_TYPE_SERVER)
@@ -483,7 +462,7 @@ static void socket_open_server(struct diag_socket_info *info)
 		       info->name);
 		return;
 	}
-	ret = kernel_getsockname(info->hdl, (struct sockaddr *)&sq);
+	ret = kernel_getsockname(info->hdl, (struct sockaddr *)&sq, &sl);
 	if (ret < 0) {
 		pr_err("diag: In %s, getsockname failed %d\n", __func__,
 		       ret);
@@ -543,8 +522,8 @@ static void __socket_close_channel(struct diag_socket_info *info)
 	sock_release(info->hdl);
 	info->hdl = NULL;
 	mutex_unlock(&info->socket_info_mutex);
+	cancel_work(&info->read_work);
 	wake_up_interruptible(&info->read_wait_q);
-	cancel_work_sync(&info->read_work);
 
 	spin_lock_irqsave(&info->lock, flags);
 	info->data_ready = 0;
@@ -705,7 +684,7 @@ static void diag_socket_drop_data(struct diag_socket_info *info)
 		iov.iov_len = PERIPHERAL_BUF_SZ;
 		read_msg.msg_name = &src_addr;
 		read_msg.msg_namelen = sizeof(src_addr);
-		err = info->hdl->ops->ioctl(info->hdl, TIOCINQ,
+		err = kernel_sock_ioctl(info->hdl, TIOCINQ,
 					(unsigned long)&pkt_len);
 		if (err || pkt_len < 0)
 			break;
@@ -797,7 +776,7 @@ static int diag_socket_read(void *ctxt, unsigned char *buf, int buf_len)
 			mutex_unlock(&info->socket_info_mutex);
 			goto fail;
 		}
-		err =  info->hdl->ops->ioctl(info->hdl, TIOCINQ,
+		err = kernel_sock_ioctl(info->hdl, TIOCINQ,
 					(unsigned long)&pkt_len);
 		if (err || pkt_len < 0) {
 			mutex_unlock(&info->socket_info_mutex);
@@ -1008,9 +987,6 @@ static void __diag_socket_init(struct diag_socket_info *info)
 		break;
 	case PERIPHERAL_CDSP:
 		ins_base = CDSP_INST_BASE;
-		break;
-	case PERIPHERAL_NPU:
-		ins_base = NPU_INST_BASE;
 		break;
 	}
 

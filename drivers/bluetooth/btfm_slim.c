@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -18,7 +24,7 @@
 #include <sound/soc-dapm.h>
 #include <sound/tlv.h>
 #include "btfm_slim.h"
-#include "btfm_slim_slave.h"
+#include "btfm_slim_wcn3990.h"
 #include <linux/bluetooth-power.h>
 
 int btfm_slim_write(struct btfmslim *btfmslim,
@@ -132,7 +138,7 @@ int btfm_slim_enable_ch(struct btfmslim *btfmslim, struct btfmslim_ch *ch,
 		(rates == 88200) || (rates == 96000)) ?
 			SLIM_CH_DATAF_NOT_DEFINED : SLIM_CH_DATAF_LPCM_AUDIO;
 
-	/* for feedback channel, PCM bit should not be set */
+	/* for feedback channel PCM bit should not be set */
 	if (btfm_feedback_ch_setting) {
 		BTFMSLIM_DBG("port open for feedback ch, not setting PCM bit");
 		prop.dataf = SLIM_CH_DATAF_NOT_DEFINED;
@@ -314,12 +320,12 @@ static int btfm_slim_alloc_port(struct btfmslim *btfmslim)
 	rx_chs = btfmslim->rx_chs;
 	tx_chs = btfmslim->tx_chs;
 	if ((chipset_ver >=  QCA_CHEROKEE_SOC_ID_0300) &&
-		(chipset_ver <=  QCA_CHEROKEE_SOC_ID_0320)) {
+		chipset_ver <=  QCA_CHEROKEE_SOC_ID_0320) {
 		for (i = 0; (tx_chs->port != BTFM_SLIM_PGD_PORT_LAST) &&
 		(i < BTFM_SLIM_NUM_CODEC_DAIS); i++, tx_chs++) {
-			if (tx_chs->port == SLAVE_SB_PGD_PORT_TX1_FM)
+			if (tx_chs->port == CHRK_SB_PGD_PORT_TX1_FM)
 				tx_chs->port = CHRKVER3_SB_PGD_PORT_TX1_FM;
-			else if (tx_chs->port == SLAVE_SB_PGD_PORT_TX2_FM)
+			else if (tx_chs->port == CHRK_SB_PGD_PORT_TX2_FM)
 				tx_chs->port = CHRKVER3_SB_PGD_PORT_TX2_FM;
 			BTFMSLIM_INFO("Tx port:%d", tx_chs->port);
 		}
@@ -564,7 +570,7 @@ static int btfm_slim_remove(struct slim_device *slim)
 	BTFMSLIM_DBG("");
 	mutex_destroy(&btfm_slim->io_lock);
 	mutex_destroy(&btfm_slim->xfer_lock);
-	snd_soc_unregister_component(&slim->dev);
+	snd_soc_unregister_codec(&slim->dev);
 
 	BTFMSLIM_DBG("slim_remove_device() - btfm_slim->slim_ifd");
 	slim_remove_device(&btfm_slim->slim_ifd);

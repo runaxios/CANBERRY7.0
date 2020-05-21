@@ -1,9 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015, Sony Mobile Communications, AB.
- */
-/*
+/* Copyright (c) 2015, Sony Mobile Communications, AB.
+ *
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"WLED: %s: " fmt, __func__
@@ -696,7 +702,7 @@ static void wled_get_ovp_delay(struct wled *wled, int *delay_time_us)
 	pr_debug("delay_time_us: %d\n", *delay_time_us);
 }
 
-#define AUTO_CALIB_BRIGHTNESS		512
+#define AUTO_CALIB_BRIGHTNESS		200
 static int wled_auto_calibrate(struct wled *wled)
 {
 	int rc = 0, i, delay_time_us;
@@ -1146,8 +1152,9 @@ static int wled5_setup(struct wled *wled)
 	if (rc < 0)
 		return rc;
 
-	rc = regmap_write(wled->regmap,
-			wled->sink_addr + WLED_SINK_CURR_SINK_EN, sink_en);
+	rc = regmap_update_bits(wled->regmap,
+			wled->sink_addr + WLED_SINK_CURR_SINK_EN,
+			WLED_SINK_CURR_SINK_MASK, sink_en);
 	if (rc < 0)
 		return rc;
 
@@ -1256,8 +1263,9 @@ static int wled4_setup(struct wled *wled)
 	if (rc < 0)
 		return rc;
 
-	rc = regmap_write(wled->regmap,
-			wled->sink_addr + WLED_SINK_CURR_SINK_EN, sink_en);
+	rc = regmap_update_bits(wled->regmap,
+			wled->sink_addr + WLED_SINK_CURR_SINK_EN,
+			WLED_SINK_CURR_SINK_MASK, sink_en);
 	if (rc < 0)
 		return rc;
 
@@ -1354,7 +1362,7 @@ static const struct wled_config wled5_config_defaults = {
 
 struct wled_var_cfg {
 	const u32 *values;
-	u32 (*fn)(u32 idx);
+	u32 (*fn)(u32);
 	int size;
 };
 
@@ -1659,7 +1667,7 @@ int wled_flash_led_prepare(struct led_trigger *trig, int options,
 		return 0;
 	default:
 		return -EINVAL;
-	}
+	};
 
 	return 0;
 }

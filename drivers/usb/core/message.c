@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * message.c - synchronous message handling
  *
  * Released under the GPLv2 only.
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/pci.h>	/* for scatterlist macros */
@@ -18,7 +18,6 @@
 #include <linux/usb/cdc.h>
 #include <linux/usb/quirks.h>
 #include <linux/usb/hcd.h>	/* for usbcore internals */
-#include <linux/usb/of.h>
 #include <asm/byteorder.h>
 
 #include "usb.h"
@@ -269,11 +268,10 @@ static void sg_clean(struct usb_sg_request *io)
 
 static void sg_complete(struct urb *urb)
 {
-	unsigned long flags;
 	struct usb_sg_request *io = urb->context;
 	int status = urb->status;
 
-	spin_lock_irqsave(&io->lock, flags);
+	spin_lock(&io->lock);
 
 	/* In 2.5 we require hcds' endpoint queues not to progress after fault
 	 * reports, until the completion callback (this!) returns.  That lets
@@ -307,7 +305,7 @@ static void sg_complete(struct urb *urb)
 		 * unlink pending urbs so they won't rx/tx bad data.
 		 * careful: unlink can sometimes be synchronous...
 		 */
-		spin_unlock_irqrestore(&io->lock, flags);
+		spin_unlock(&io->lock);
 		for (i = 0, found = 0; i < io->entries; i++) {
 			if (!io->urbs[i])
 				continue;
@@ -324,7 +322,7 @@ static void sg_complete(struct urb *urb)
 			} else if (urb == io->urbs[i])
 				found = 1;
 		}
-		spin_lock_irqsave(&io->lock, flags);
+		spin_lock(&io->lock);
 	}
 
 	/* on the last completion, signal usb_sg_wait() */
@@ -333,7 +331,7 @@ static void sg_complete(struct urb *urb)
 	if (!io->count)
 		complete(&io->complete);
 
-	spin_unlock_irqrestore(&io->lock, flags);
+	spin_unlock(&io->lock);
 }
 
 
@@ -391,7 +389,7 @@ int usb_sg_init(struct usb_sg_request *io, struct usb_device *dev,
 	}
 
 	/* initialize all the urbs we'll use */
-	io->urbs = kmalloc_array(io->entries, sizeof(*io->urbs), mem_flags);
+	io->urbs = kmalloc(io->entries * sizeof(*io->urbs), mem_flags);
 	if (!io->urbs)
 		goto nomem;
 
@@ -782,7 +780,7 @@ static int usb_get_langid(struct usb_device *dev, unsigned char *tbuf)
 	 * deal with strings at all. Set string_langid to -1 in order to
 	 * prevent any string to be retrieved from the device */
 	if (err < 0) {
-		dev_info(&dev->dev, "string descriptor 0 read error: %d\n",
+		dev_err(&dev->dev, "string descriptor 0 read error: %d\n",
 					err);
 		dev->string_langid = -1;
 		return -EPIPE;
@@ -923,35 +921,10 @@ int usb_get_device_descriptor(struct usb_device *dev, unsigned int size)
 	return ret;
 }
 
-/*
- * usb_set_isoch_delay - informs the device of the packet transmit delay
- * @dev: the device whose delay is to be informed
- * Context: !in_interrupt()
- *
- * Since this is an optional request, we don't bother if it fails.
- */
-int usb_set_isoch_delay(struct usb_device *dev)
-{
-	/* skip hub devices */
-	if (dev->descriptor.bDeviceClass == USB_CLASS_HUB)
-		return 0;
-
-	/* skip non-SS/non-SSP devices */
-	if (dev->speed < USB_SPEED_SUPER)
-		return 0;
-
-	return usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
-			USB_REQ_SET_ISOCH_DELAY,
-			USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
-			dev->hub_delay, 0, NULL, 0,
-			USB_CTRL_SET_TIMEOUT);
-}
-
 /**
  * usb_get_status - issues a GET_STATUS call
  * @dev: the device whose status is being checked
- * @recip: USB_RECIP_*; for device, interface, or endpoint
- * @type: USB_STATUS_TYPE_*; for standard or PTM status types
+ * @type: USB_RECIP_*; for device, interface, or endpoint
  * @target: zero (for device), else interface or endpoint number
  * @data: pointer to two bytes of bitmap data
  * Context: !in_interrupt ()
@@ -970,58 +943,24 @@ int usb_set_isoch_delay(struct usb_device *dev)
  * Returns 0 and the status value in *@data (in host byte order) on success,
  * or else the status code from the underlying usb_control_msg() call.
  */
-int usb_get_status(struct usb_device *dev, int recip, int type, int target,
-		void *data)
+int usb_get_status(struct usb_device *dev, int type, int target, void *data)
 {
 	int ret;
-	void *status;
-	int length;
+	__le16 *status = kmalloc(sizeof(*status), GFP_KERNEL);
 
-	switch (type) {
-	case USB_STATUS_TYPE_STANDARD:
-		length = 2;
-		break;
-	case USB_STATUS_TYPE_PTM:
-		if (recip != USB_RECIP_DEVICE)
-			return -EINVAL;
-
-		length = 4;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	status =  kmalloc(length, GFP_KERNEL);
 	if (!status)
 		return -ENOMEM;
 
 	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-		USB_REQ_GET_STATUS, USB_DIR_IN | recip, USB_STATUS_TYPE_STANDARD,
-		target, status, length, USB_CTRL_GET_TIMEOUT);
+		USB_REQ_GET_STATUS, USB_DIR_IN | type, 0, target, status,
+		sizeof(*status), USB_CTRL_GET_TIMEOUT);
 
-	switch (ret) {
-	case 4:
-		if (type != USB_STATUS_TYPE_PTM) {
-			ret = -EIO;
-			break;
-		}
-
-		*(u32 *) data = le32_to_cpu(*(__le32 *) status);
+	if (ret == 2) {
+		*(u16 *) data = le16_to_cpu(*status);
 		ret = 0;
-		break;
-	case 2:
-		if (type != USB_STATUS_TYPE_STANDARD) {
-			ret = -EIO;
-			break;
-		}
-
-		*(u16 *) data = le16_to_cpu(*(__le16 *) status);
-		ret = 0;
-		break;
-	default:
+	} else if (ret >= 0) {
 		ret = -EIO;
 	}
-
 	kfree(status);
 	return ret;
 }
@@ -1397,7 +1336,7 @@ int usb_set_interface(struct usb_device *dev, int interface, int alternate)
 	 * so that the xHCI driver can recalculate the U1/U2 timeouts.
 	 */
 	if (usb_disable_lpm(dev)) {
-		dev_err(&iface->dev, "%s Failed to disable LPM\n", __func__);
+		dev_err(&iface->dev, "%s Failed to disable LPM\n.", __func__);
 		mutex_unlock(hcd->bandwidth_mutex);
 		return -ENOMEM;
 	}
@@ -1494,175 +1433,6 @@ int usb_set_interface(struct usb_device *dev, int interface, int alternate)
 EXPORT_SYMBOL_GPL(usb_set_interface);
 
 /**
- * usb_set_interface_timeout - Makes a particular alternate setting be current
- * and allows to set a timeout value for this control transfer.
- * @dev: the device whose interface is being updated
- * @interface: the interface being updated
- * @alternate: the setting being chosen.
- * @timeout: timeout value in ms (non-zero), before which this transfer should
- * complete.
- * Context: !in_interrupt ()
- *
- * This is used to enable data transfers on interfaces that may not
- * be enabled by default.  Not all devices support such configurability.
- * Only the driver bound to an interface may change its setting.
- *
- * Within any given configuration, each interface may have several
- * alternative settings.  These are often used to control levels of
- * bandwidth consumption.  For example, the default setting for a high
- * speed interrupt endpoint may not send more than 64 bytes per microframe,
- * while interrupt transfers of up to 3KBytes per microframe are legal.
- * Also, isochronous endpoints may never be part of an
- * interface's default setting.  To access such bandwidth, alternate
- * interface settings must be made current.
- *
- * Note that in the Linux USB subsystem, bandwidth associated with
- * an endpoint in a given alternate setting is not reserved until an URB
- * is submitted that needs that bandwidth.  Some other operating systems
- * allocate bandwidth early, when a configuration is chosen.
- *
- * This call is synchronous, and may not be used in an interrupt context.
- * Also, drivers must not change altsettings while urbs are scheduled for
- * endpoints in that interface; all such urbs must first be completed
- * (perhaps forced by unlinking).
- *
- * Return: Zero on success, or else the status code returned by the
- * underlying usb_control_msg() call.
- */
-int usb_set_interface_timeout(struct usb_device *dev, int interface,
-	int alternate, unsigned long timeout_ms)
-{
-	struct usb_interface *iface;
-	struct usb_host_interface *alt;
-	struct usb_hcd *hcd = bus_to_hcd(dev->bus);
-	int i, ret, manual = 0;
-	unsigned int epaddr;
-	unsigned int pipe;
-
-	if (dev->state == USB_STATE_SUSPENDED)
-		return -EHOSTUNREACH;
-
-	iface = usb_ifnum_to_if(dev, interface);
-	if (!iface) {
-		dev_dbg(&dev->dev, "selecting invalid interface %d\n",
-			interface);
-		return -EINVAL;
-	}
-	if (iface->unregistering)
-		return -ENODEV;
-
-	alt = usb_altnum_to_altsetting(iface, alternate);
-	if (!alt) {
-		dev_warn(&dev->dev, "selecting invalid altsetting %d\n",
-			 alternate);
-		return -EINVAL;
-	}
-
-	/* Make sure we have enough bandwidth for this alternate interface.
-	 * Remove the current alt setting and add the new alt setting.
-	 */
-	mutex_lock(hcd->bandwidth_mutex);
-	/* Disable LPM, and re-enable it once the new alt setting is installed,
-	 * so that the xHCI driver can recalculate the U1/U2 timeouts.
-	 */
-	if (usb_disable_lpm(dev)) {
-		dev_err(&iface->dev, "%s Failed to disable LPM\n", __func__);
-		mutex_unlock(hcd->bandwidth_mutex);
-		return -ENOMEM;
-	}
-	/* Changing alt-setting also frees any allocated streams */
-	for (i = 0; i < iface->cur_altsetting->desc.bNumEndpoints; i++)
-		iface->cur_altsetting->endpoint[i].streams = 0;
-
-	ret = usb_hcd_alloc_bandwidth(dev, NULL, iface->cur_altsetting, alt);
-	if (ret < 0) {
-		dev_info(&dev->dev, "Not enough bandwidth for altsetting %d\n",
-				alternate);
-		usb_enable_lpm(dev);
-		mutex_unlock(hcd->bandwidth_mutex);
-		return ret;
-	}
-
-	if (dev->quirks & USB_QUIRK_NO_SET_INTF)
-		ret = -EPIPE;
-	else
-		ret = usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
-				   USB_REQ_SET_INTERFACE, USB_RECIP_INTERFACE,
-				   alternate, interface, NULL, 0, timeout_ms);
-
-	/* 9.4.10 says devices don't need this and are free to STALL the
-	 * request if the interface only has one alternate setting.
-	 */
-	if (ret == -EPIPE && iface->num_altsetting == 1) {
-		dev_dbg(&dev->dev,
-			"manual set_interface for iface %d, alt %d\n",
-			interface, alternate);
-		manual = 1;
-	} else if (ret < 0) {
-		/* Re-instate the old alt setting */
-		usb_hcd_alloc_bandwidth(dev, NULL, alt, iface->cur_altsetting);
-		usb_enable_lpm(dev);
-		mutex_unlock(hcd->bandwidth_mutex);
-		return ret;
-	}
-	mutex_unlock(hcd->bandwidth_mutex);
-
-	/* FIXME drivers shouldn't need to replicate/bugfix the logic here
-	 * when they implement async or easily-killable versions of this or
-	 * other "should-be-internal" functions (like clear_halt).
-	 * should hcd+usbcore postprocess control requests?
-	 */
-
-	/* prevent submissions using previous endpoint settings */
-	if (iface->cur_altsetting != alt) {
-		remove_intf_ep_devs(iface);
-		usb_remove_sysfs_intf_files(iface);
-	}
-	usb_disable_interface(dev, iface, true);
-
-	iface->cur_altsetting = alt;
-
-	/* Now that the interface is installed, re-enable LPM. */
-	usb_unlocked_enable_lpm(dev);
-
-	/* If the interface only has one altsetting and the device didn't
-	 * accept the request, we attempt to carry out the equivalent action
-	 * by manually clearing the HALT feature for each endpoint in the
-	 * new altsetting.
-	 */
-	if (manual) {
-		for (i = 0; i < alt->desc.bNumEndpoints; i++) {
-			epaddr = alt->endpoint[i].desc.bEndpointAddress;
-			pipe = __create_pipe(dev,
-					USB_ENDPOINT_NUMBER_MASK & epaddr) |
-					(usb_endpoint_out(epaddr) ?
-					USB_DIR_OUT : USB_DIR_IN);
-
-			usb_clear_halt(dev, pipe);
-		}
-	}
-
-	/* 9.1.1.5: reset toggles for all endpoints in the new altsetting
-	 *
-	 * Note:
-	 * Despite EP0 is always present in all interfaces/AS, the list of
-	 * endpoints from the descriptor does not contain EP0. Due to its
-	 * omnipresence one might expect EP0 being considered "affected" by
-	 * any SetInterface request and hence assume toggles need to be reset.
-	 * However, EP0 toggles are re-synced for every individual transfer
-	 * during the SETUP stage - hence EP0 toggles are "don't care" here.
-	 * (Likewise, EP0 never "halts" on well designed devices.)
-	 */
-	usb_enable_interface(dev, iface, true);
-	if (device_is_registered(&iface->dev)) {
-		usb_create_sysfs_intf_files(iface);
-		create_intf_ep_devs(iface);
-	}
-	return 0;
-}
-EXPORT_SYMBOL(usb_set_interface_timeout);
-
-/**
  * usb_reset_configuration - lightweight device reset
  * @dev: the device whose configuration is being reset
  *
@@ -1710,7 +1480,7 @@ int usb_reset_configuration(struct usb_device *dev)
 	 * that the xHCI driver can recalculate the U1/U2 timeouts.
 	 */
 	if (usb_disable_lpm(dev)) {
-		dev_err(&dev->dev, "%s Failed to disable LPM\n", __func__);
+		dev_err(&dev->dev, "%s Failed to disable LPM\n.", __func__);
 		mutex_unlock(hcd->bandwidth_mutex);
 		return -ENOMEM;
 	}
@@ -1794,7 +1564,6 @@ static void usb_release_interface(struct device *dev)
 
 	kref_put(&intfc->ref, usb_release_interface_cache);
 	usb_put_dev(interface_to_usbdev(intf));
-	of_node_put(dev->of_node);
 	kfree(intf);
 }
 
@@ -2006,8 +1775,8 @@ int usb_set_configuration(struct usb_device *dev, int configuration)
 	n = nintf = 0;
 	if (cp) {
 		nintf = cp->desc.bNumInterfaces;
-		new_interfaces = kmalloc_array(nintf, sizeof(*new_interfaces),
-					       GFP_NOIO);
+		new_interfaces = kmalloc(nintf * sizeof(*new_interfaces),
+				GFP_NOIO);
 		if (!new_interfaces)
 			return -ENOMEM;
 
@@ -2058,7 +1827,7 @@ free_interfaces:
 	 * timeouts.
 	 */
 	if (dev->actconfig && usb_disable_lpm(dev)) {
-		dev_err(&dev->dev, "%s Failed to disable LPM\n", __func__);
+		dev_err(&dev->dev, "%s Failed to disable LPM\n.", __func__);
 		mutex_unlock(hcd->bandwidth_mutex);
 		ret = -ENOMEM;
 		goto free_interfaces;
@@ -2080,7 +1849,6 @@ free_interfaces:
 		struct usb_interface_cache *intfc;
 		struct usb_interface *intf;
 		struct usb_host_interface *alt;
-		u8 ifnum;
 
 		cp->interface[i] = intf = new_interfaces[i];
 		intfc = cp->intf_cache[i];
@@ -2099,17 +1867,11 @@ free_interfaces:
 		if (!alt)
 			alt = &intf->altsetting[0];
 
-		ifnum = alt->desc.bInterfaceNumber;
-		intf->intf_assoc = find_iad(dev, cp, ifnum);
+		intf->intf_assoc =
+			find_iad(dev, cp, alt->desc.bInterfaceNumber);
 		intf->cur_altsetting = alt;
 		usb_enable_interface(dev, intf, true);
 		intf->dev.parent = &dev->dev;
-		if (usb_of_has_combined_node(dev)) {
-			device_set_of_node_from_dev(&intf->dev, &dev->dev);
-		} else {
-			intf->dev.of_node = usb_of_get_interface_node(dev,
-					configuration, ifnum);
-		}
 		intf->dev.driver = NULL;
 		intf->dev.bus = &usb_bus_type;
 		intf->dev.type = &usb_if_device_type;
@@ -2124,8 +1886,9 @@ free_interfaces:
 		intf->minor = -1;
 		device_initialize(&intf->dev);
 		pm_runtime_no_callbacks(&intf->dev);
-		dev_set_name(&intf->dev, "%d-%s:%d.%d", dev->bus->busnum,
-				dev->devpath, configuration, ifnum);
+		dev_set_name(&intf->dev, "%d-%s:%d.%d",
+			dev->bus->busnum, dev->devpath,
+			configuration, alt->desc.bInterfaceNumber);
 		usb_get_dev(dev);
 	}
 	kfree(new_interfaces);
@@ -2380,14 +2143,14 @@ int cdc_parse_cdc_header(struct usb_cdc_parsed_header *hdr,
 				(struct usb_cdc_dmm_desc *)buffer;
 			break;
 		case USB_CDC_MDLM_TYPE:
-			if (elength < sizeof(struct usb_cdc_mdlm_desc))
+			if (elength < sizeof(struct usb_cdc_mdlm_desc *))
 				goto next_desc;
 			if (desc)
 				return -EINVAL;
 			desc = (struct usb_cdc_mdlm_desc *)buffer;
 			break;
 		case USB_CDC_MDLM_DETAIL_TYPE:
-			if (elength < sizeof(struct usb_cdc_mdlm_detail_desc))
+			if (elength < sizeof(struct usb_cdc_mdlm_detail_desc *))
 				goto next_desc;
 			if (detail)
 				return -EINVAL;

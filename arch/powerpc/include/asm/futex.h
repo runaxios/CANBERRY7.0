@@ -8,7 +8,7 @@
 #include <linux/uaccess.h>
 #include <asm/errno.h>
 #include <asm/synch.h>
-#include <asm/asm-405.h>
+#include <asm/asm-compat.h>
 
 #define __futex_atomic_op(insn, ret, oldval, uaddr, oparg) \
   __asm__ __volatile ( \
@@ -59,7 +59,8 @@ static inline int arch_futex_atomic_op_inuser(int op, int oparg, int *oval,
 
 	pagefault_enable();
 
-	*oval = oldval;
+	if (!ret)
+		*oval = oldval;
 
 	return ret;
 }

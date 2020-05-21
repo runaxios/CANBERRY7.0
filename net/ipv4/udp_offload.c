@@ -268,17 +268,9 @@ struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
 		uh->check = gso_make_checksum(seg, ~check) ? : CSUM_MANGLED_0;
 
 	/* update refcount for the packet */
-	if (copy_dtor) {
-		int delta = sum_truesize - gso_skb->truesize;
-
-		/* In some pathological cases, delta can be negative.
-		 * We need to either use refcount_add() or refcount_sub_and_test()
-		 */
-		if (likely(delta >= 0))
-			refcount_add(delta, &sk->sk_wmem_alloc);
-		else
-			WARN_ON_ONCE(refcount_sub_and_test(-delta, &sk->sk_wmem_alloc));
-	}
+	if (copy_dtor)
+		refcount_add(sum_truesize - gso_skb->truesize,
+			     &sk->sk_wmem_alloc);
 	return segs;
 }
 EXPORT_SYMBOL_GPL(__udp_gso_segment);
@@ -344,11 +336,11 @@ out:
 }
 
 #define UDP_GRO_CNT_MAX 64
-static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
-					       struct sk_buff *skb)
+static struct sk_buff **udp_gro_receive_segment(struct sk_buff **head,
+						struct sk_buff *skb)
 {
 	struct udphdr *uh = udp_hdr(skb);
-	struct sk_buff *pp = NULL;
+	struct sk_buff **pp = NULL;
 	struct udphdr *uh2;
 	struct sk_buff *p;
 
@@ -362,7 +354,7 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 	skb_gro_pull(skb, sizeof(struct udphdr));
 	skb_gro_postpull_rcsum(skb, uh, sizeof(struct udphdr));
 
-	list_for_each_entry(p, head, list) {
+	for (; (p = *head); head = &p->next) {
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
 
@@ -378,11 +370,11 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 		 * Under small packet flood GRO count could elsewhere grow a lot
 		 * leading to execessive truesize values
 		 */
-		if (!skb_gro_receive(p, skb) &&
+		if (!skb_gro_receive(head, skb) &&
 		    NAPI_GRO_CB(p)->count >= UDP_GRO_CNT_MAX)
-			pp = p;
+			pp = head;
 		else if (uh->len != uh2->len)
-			pp = p;
+			pp = head;
 
 		return pp;
 	}
@@ -391,11 +383,11 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 	return NULL;
 }
 
-struct sk_buff *udp_gro_receive(struct list_head *head, struct sk_buff *skb,
-				struct udphdr *uh, udp_lookup_t lookup)
+
+struct sk_buff **udp_gro_receive(struct sk_buff **head, struct sk_buff *skb,
+				 struct udphdr *uh, udp_lookup_t lookup)
 {
-	struct sk_buff *pp = NULL;
-	struct sk_buff *p;
+	struct sk_buff *p, **pp = NULL;
 	struct udphdr *uh2;
 	unsigned int off = skb_gro_offset(skb);
 	int flush = 1;
@@ -424,7 +416,7 @@ struct sk_buff *udp_gro_receive(struct list_head *head, struct sk_buff *skb,
 
 	flush = 0;
 
-	list_for_each_entry(p, head, list) {
+	for (p = *head; p; p = p->next) {
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
 
@@ -451,8 +443,8 @@ out_unlock:
 }
 EXPORT_SYMBOL(udp_gro_receive);
 
-static struct sk_buff *udp4_gro_receive(struct list_head *head,
-					struct sk_buff *skb)
+static struct sk_buff **udp4_gro_receive(struct sk_buff **head,
+					 struct sk_buff *skb)
 {
 	struct udphdr *uh = udp_gro_udphdr(skb);
 

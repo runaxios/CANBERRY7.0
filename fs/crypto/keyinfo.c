@@ -163,19 +163,15 @@ static struct fscrypt_mode available_modes[] = {
 		.ivsize = 32,
 	},
 	[FS_ENCRYPTION_MODE_PRIVATE] = {
-		.friendly_name = "ice",
-		.cipher_str = "xts(aes)",
+		.friendly_name = "ICE",
+		.cipher_str = "bugon",
 		.keysize = 64,
-		.ivsize = 16,
-		.inline_encryption = true,
 	},
 };
 
 static struct fscrypt_mode *
 select_encryption_mode(const struct fscrypt_info *ci, const struct inode *inode)
 {
-	struct fscrypt_mode *mode = NULL;
-
 	if (!fscrypt_valid_enc_modes(ci->ci_data_mode, ci->ci_filename_mode)) {
 		fscrypt_warn(inode->i_sb,
 			     "inode %lu uses unsupported encryption modes (contents mode %d, filenames mode %d)",
@@ -184,19 +180,8 @@ select_encryption_mode(const struct fscrypt_info *ci, const struct inode *inode)
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (S_ISREG(inode->i_mode)) {
-		mode = &available_modes[ci->ci_data_mode];
-		if (IS_ERR(mode)) {
-			fscrypt_warn(inode->i_sb, "Invalid mode");
-			return ERR_PTR(-EINVAL);
-		}
-		if (mode->inline_encryption &&
-				!fscrypt_is_ice_capable(inode->i_sb)) {
-			fscrypt_warn(inode->i_sb, "ICE support not available");
-			return ERR_PTR(-EINVAL);
-		}
-		return mode;
-	}
+	if (S_ISREG(inode->i_mode))
+		return &available_modes[ci->ci_data_mode];
 
 	if (S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode))
 		return &available_modes[ci->ci_filename_mode];
@@ -241,9 +226,16 @@ static int find_and_derive_key(const struct inode *inode,
 			memcpy(derived_key, payload->raw, mode->keysize);
 			err = 0;
 		}
-	} else if (mode->inline_encryption) {
-		memcpy(derived_key, payload->raw, mode->keysize);
-		err = 0;
+	} else if (S_ISREG(inode->i_mode) && is_private_data_mode(ctx)) {
+		/* Inline encryption: no key derivation required because IVs are
+		 * assigned based on iv_sector.
+		 */
+	         if (mode->keysize != sizeof(payload->raw)) {
+			 err = -ENOKEY;
+		 } else {
+			 memcpy(derived_key, payload->raw, mode->keysize);
+			 err = 0;
+		 }
 	} else {
 		err = derive_key_aes(payload->raw, ctx, derived_key,
 				     mode->keysize);
@@ -468,6 +460,18 @@ void __exit fscrypt_essiv_cleanup(void)
 	crypto_free_shash(essiv_hash_tfm);
 }
 
+static int fscrypt_data_encryption_mode(struct inode *inode)
+{
+	return fscrypt_should_be_processed_by_ice(inode) ?
+	FS_ENCRYPTION_MODE_PRIVATE : FS_ENCRYPTION_MODE_AES_256_XTS;
+}
+
+int fscrypt_get_mode_key_size(int mode)
+{
+	return available_modes[mode].keysize;
+}
+EXPORT_SYMBOL(fscrypt_get_mode_key_size);
+
 /*
  * Given the encryption mode and key (normally the derived key, but for
  * FS_POLICY_FLAG_DIRECT_KEY mode it's the master key), set up the inode's
@@ -519,19 +523,10 @@ static void put_crypt_info(struct fscrypt_info *ci)
 	if (ci->ci_master_key) {
 		put_master_key(ci->ci_master_key);
 	} else {
-		if (ci->ci_ctfm)
-			crypto_free_skcipher(ci->ci_ctfm);
-		if (ci->ci_essiv_tfm)
-			crypto_free_cipher(ci->ci_essiv_tfm);
+		crypto_free_skcipher(ci->ci_ctfm);
+		crypto_free_cipher(ci->ci_essiv_tfm);
 	}
-	memset(ci->ci_raw_key, 0, sizeof(ci->ci_raw_key));
 	kmem_cache_free(fscrypt_info_cachep, ci);
-}
-
-static int fscrypt_data_encryption_mode(struct inode *inode)
-{
-	return fscrypt_should_be_processed_by_ice(inode) ?
-	FS_ENCRYPTION_MODE_PRIVATE : FS_ENCRYPTION_MODE_AES_256_XTS;
 }
 
 int fscrypt_get_encryption_info(struct inode *inode)
@@ -599,18 +594,29 @@ int fscrypt_get_encryption_info(struct inode *inode)
 	if (!raw_key)
 		goto out;
 
-	res = find_and_derive_key(inode, &ctx, raw_key, mode);
+	if (S_ISREG(inode->i_mode) && is_private_data_mode(&ctx)) {
+		if (!fscrypt_is_ice_capable(inode->i_sb)) {
+			pr_warn("%s: ICE support not available\n",
+					__func__);
+			res = -EINVAL;
+			goto out;
+		}
+		res = find_and_derive_key(inode, &ctx, crypt_info->ci_raw_key, mode);
+		if (res)
+			goto out;
+		/* Let's encrypt/decrypt by ICE */
+		goto do_ice;
+	} else {
+		res = find_and_derive_key(inode, &ctx, raw_key, mode);
+		if (res)
+			goto out;
+	}
+
+	res = setup_crypto_transform(crypt_info, mode, raw_key, inode);
 	if (res)
 		goto out;
 
-	if (!mode->inline_encryption) {
-		res = setup_crypto_transform(crypt_info, mode, raw_key, inode);
-		if (res)
-			goto out;
-	} else {
-		memcpy(crypt_info->ci_raw_key, raw_key, mode->keysize);
-	}
-
+do_ice:
 	if (cmpxchg(&inode->i_crypt_info, NULL, crypt_info) == NULL)
 		crypt_info = NULL;
 out:

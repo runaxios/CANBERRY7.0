@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * FTS Capacitive touch screen controller (FingerTipS)
  *

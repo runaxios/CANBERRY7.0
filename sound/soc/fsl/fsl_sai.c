@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0+
-//
-// Freescale ALSA SoC Digital Audio Interface (SAI) driver.
-//
-// Copyright 2012-2015 Freescale Semiconductor, Inc.
+/*
+ * Freescale ALSA SoC Digital Audio Interface (SAI) driver.
+ *
+ * Copyright 2012-2015 Freescale Semiconductor, Inc.
+ *
+ * This program is free software, you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 2 of the License, or(at your
+ * option) any later version.
+ *
+ */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -268,14 +274,12 @@ static int fsl_sai_set_dai_fmt_tr(struct snd_soc_dai *cpu_dai,
 	case SND_SOC_DAIFMT_CBS_CFS:
 		val_cr2 |= FSL_SAI_CR2_BCD_MSTR;
 		val_cr4 |= FSL_SAI_CR4_FSD_MSTR;
-		sai->is_slave_mode = false;
 		break;
 	case SND_SOC_DAIFMT_CBM_CFM:
 		sai->is_slave_mode = true;
 		break;
 	case SND_SOC_DAIFMT_CBS_CFM:
 		val_cr2 |= FSL_SAI_CR2_BCD_MSTR;
-		sai->is_slave_mode = false;
 		break;
 	case SND_SOC_DAIFMT_CBM_CFS:
 		val_cr4 |= FSL_SAI_CR4_FSD_MSTR;

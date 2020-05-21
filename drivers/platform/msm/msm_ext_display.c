@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"%s: " fmt, __func__
@@ -13,9 +20,7 @@
 #include <linux/iopoll.h>
 #include <linux/types.h>
 #include <linux/of_platform.h>
-#include <linux/extcon-provider.h>
 #include <linux/msm_ext_display.h>
-#include <linux/extcon-provider.h>
 
 struct msm_ext_disp_list {
 	struct msm_ext_disp_init_data *data;
@@ -57,7 +62,7 @@ static int msm_ext_disp_extcon_register(struct msm_ext_disp *ext_disp, int id)
 	ret = devm_extcon_dev_register(&ext_disp->pdev->dev,
 		ext_disp->audio_sdev[id]);
 	if (ret) {
-		pr_err("audio registration failed\n");
+		pr_err("audio registration failed");
 		return ret;
 	}
 
@@ -90,7 +95,9 @@ static const char *msm_ext_disp_name(enum msm_ext_disp_type type)
 static int msm_ext_disp_add_intf_data(struct msm_ext_disp *ext_disp,
 		struct msm_ext_disp_init_data *data)
 {
+	int count = 0;
 	struct msm_ext_disp_list *node;
+	struct list_head *pos = NULL;
 
 	if (!ext_disp || !data) {
 		pr_err("Invalid params\n");
@@ -103,7 +110,13 @@ static int msm_ext_disp_add_intf_data(struct msm_ext_disp *ext_disp,
 
 	node->data = data;
 
+	list_for_each(pos, &ext_disp->display_list)
+		count++;
+
+	data->codec.stream_id = count;
+
 	list_add(&node->list, &ext_disp->display_list);
+
 
 	pr_debug("Added new display (%s) ctld (%d) stream (%d)\n",
 		msm_ext_disp_name(data->codec.type),

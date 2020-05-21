@@ -43,14 +43,14 @@
  * timelines.
  *
  * Fences can be created with SW_SYNC_IOC_CREATE_FENCE ioctl with struct
- * sw_sync_create_fence_data as parameter.
+ * sw_sync_ioctl_create_fence as parameter.
  *
  * To increment the timeline counter, SW_SYNC_IOC_INC ioctl should be used
  * with the increment as u32. This will update the last signaled value
  * from the timeline and signal any fence that has a seqno smaller or equal
  * to it.
  *
- * struct sw_sync_create_fence_data
+ * struct sw_sync_ioctl_create_fence
  * @value:	the seqno to initialise the fence with
  * @name:	the name of the new sync point
  * @fence:	return the fd of the new sync_file with the created fence
@@ -141,14 +141,17 @@ static void timeline_fence_release(struct dma_fence *fence)
 {
 	struct sync_pt *pt = dma_fence_to_sync_pt(fence);
 	struct sync_timeline *parent = dma_fence_parent(fence);
-	unsigned long flags;
 
-	spin_lock_irqsave(fence->lock, flags);
 	if (!list_empty(&pt->link)) {
-		list_del(&pt->link);
-		rb_erase(&pt->node, &parent->pt_tree);
+		unsigned long flags;
+
+		spin_lock_irqsave(fence->lock, flags);
+		if (!list_empty(&pt->link)) {
+			list_del(&pt->link);
+			rb_erase(&pt->node, &parent->pt_tree);
+		}
+		spin_unlock_irqrestore(fence->lock, flags);
 	}
-	spin_unlock_irqrestore(fence->lock, flags);
 
 	sync_timeline_put(parent);
 	dma_fence_free(fence);
@@ -185,6 +188,7 @@ static const struct dma_fence_ops timeline_fence_ops = {
 	.get_timeline_name = timeline_fence_get_timeline_name,
 	.enable_signaling = timeline_fence_enable_signaling,
 	.signaled = timeline_fence_signaled,
+	.wait = dma_fence_default_wait,
 	.release = timeline_fence_release,
 	.fence_value_str = timeline_fence_value_str,
 	.timeline_value_str = timeline_fence_timeline_value_str,
@@ -231,10 +235,10 @@ static void sync_timeline_signal(struct sync_timeline *obj, unsigned int inc)
 
 /**
  * sync_pt_create() - creates a sync pt
- * @obj:	parent sync_timeline
- * @value:	value of the fence
+ * @parent:	fence's parent sync_timeline
+ * @inc:	value of the fence
  *
- * Creates a new sync_pt (fence) as a child of @parent.  @size bytes will be
+ * Creates a new sync_pt as a child of @parent.  @size bytes will be
  * allocated allowing for implementation specific data to be kept after
  * the generic sync_timeline struct. Returns the sync_pt object or
  * NULL in case of error.
@@ -271,8 +275,7 @@ static struct sync_pt *sync_pt_create(struct sync_timeline *obj,
 				p = &parent->rb_left;
 			} else {
 				if (dma_fence_get_rcu(&other->base)) {
-					sync_timeline_put(obj);
-					kfree(pt);
+					dma_fence_put(&pt->base);
 					pt = other;
 					goto unlock;
 				}

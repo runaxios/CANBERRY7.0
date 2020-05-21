@@ -1,7 +1,7 @@
 /* drivers/misc/drv8846.c - drv8846 step motor soc driver
  *
  * Copyright (c) 2014-2015, Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -19,7 +19,6 @@
 
 #include <linux/delay.h>
 #include <linux/device.h>
-#include <linux/cdev.h>
 #include <linux/freezer.h>
 #include <linux/gpio.h>
 #include <linux/input.h>
@@ -44,10 +43,18 @@
 #include <linux/of_device.h>
 #include <linux/hrtimer.h>
 #include <linux/debugfs.h>
-#include <linux/drv8846.h>
+#include <uapi/misc/drv8846.h>
 
-#define EVENT_FCAM  0x2
-extern void lpm_disable_for_dev(bool on, char event_dev);
+
+#define DRV8846_DEV_NAME "ti,drv8846"
+
+#define PWM_PERIOD_DEFAULT_NS		1000000
+#define RAMP_PERIOD_DEFAULT_NS		625000
+#define RAMP_DURATION_DEFAULT_MS	50
+#define HIGH_PERIOD_DEFAULT_NS 		52083
+#define HIGH_DURATION_DEFAULT_MS	700
+#define DEFAULT_STEP_MODE			2
+
 static DECLARE_WAIT_QUEUE_HEAD(poll_wait_queue);
 
 struct pwm_setting {
@@ -57,12 +64,9 @@ struct pwm_setting {
 };
 
 struct drv8846_soc_ctrl {
-	dev_t dev_num;
-	struct cdev c_cdev;
-	struct class *chr_class;
-	struct device *chr_dev;
-
 	struct platform_device *pdev;
+	struct miscdevice miscdev;
+	struct dentry *debugfs;
 	struct device_node *of_node;
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pinctrl_default;
@@ -72,12 +76,17 @@ struct drv8846_soc_ctrl {
 	struct hrtimer		pwm_timer;
 	struct work_struct	pwm_apply_work;
 
-	struct drv8846_private_data pdata;
-
 	atomic_t move_done;
 
 	struct mutex motor_mutex;
+	struct fasync_struct *async;
 
+	uint32_t rampup_period_ns;
+	uint32_t high_period_ns;
+	uint32_t rampdown_period_ns;
+	uint32_t high_duration_ms;
+	uint32_t rampup_duration_ms;
+	uint32_t rampdown_duration_ms;
 	uint32_t step_mode;
 	uint32_t direction;
 
@@ -90,247 +99,203 @@ struct drv8846_soc_ctrl {
 	enum running_state	state;
 };
 
-static int __drv8846_config_pwm(struct drv8846_soc_ctrl *c_ctrl,
+static int __drv8846_config_pwm(struct drv8846_soc_ctrl *mctrl,
 				struct pwm_setting *pwm)
 {
 	int rc;
 	struct pwm_state pstate;
 
-	pwm_get_state(c_ctrl->pwm_dev, &pstate);
+	pwm_get_state(mctrl->pwm_dev, &pstate);
 	pstate.enabled = !!(pwm->duty_ns != 0);
 	pstate.period = pwm->period_ns;
 	pstate.duty_cycle = pwm->duty_ns;
 	pstate.output_type = PWM_OUTPUT_FIXED;
 	pstate.output_pattern = NULL;
 	pr_debug("enable %d\n", pstate.enabled);
-	rc = pwm_apply_state(c_ctrl->pwm_dev, &pstate);
+	rc = pwm_apply_state(mctrl->pwm_dev, &pstate);
 	if (rc < 0)
 		pr_err("Apply PWM state failed, rc=%d\n", rc);
 
 	if (pstate.enabled == false) {
-		gpio_direction_output(c_ctrl->gpio_sleep, 0);
-		atomic_set(&c_ctrl->move_done, 1);
+		gpio_direction_output(mctrl->gpio_sleep, 0);
+		kill_fasync(&mctrl->async, SIGIO, POLL_IN);
+		atomic_set(&mctrl->move_done, 1);
 		wake_up(&poll_wait_queue);
-		lpm_disable_for_dev(false, EVENT_FCAM);
 	} else {
-		gpio_direction_output(c_ctrl->gpio_sleep, 1);
+		gpio_direction_output(mctrl->gpio_sleep, 1);
 	}
 	return rc;
 }
 
 static void pwm_config_work(struct work_struct *work)
 {
-	struct drv8846_soc_ctrl *c_ctrl = container_of(work, struct drv8846_soc_ctrl, pwm_apply_work);
+	struct drv8846_soc_ctrl *mctrl = container_of(work, struct drv8846_soc_ctrl, pwm_apply_work);
 	struct pwm_setting setting;
 
-	setting = c_ctrl->pwm_setting;
+	setting = mctrl->pwm_setting;
 
-	__drv8846_config_pwm(c_ctrl, &setting);
+	__drv8846_config_pwm(mctrl, &setting);
 }
 
 static enum hrtimer_restart pwm_hrtimer_handler(struct hrtimer *timer)
 {
-	struct drv8846_soc_ctrl *c_ctrl = container_of(timer, struct drv8846_soc_ctrl, pwm_timer);
+	uint32_t duration_ms = 0;
+	struct drv8846_soc_ctrl *mctrl = container_of(timer, struct drv8846_soc_ctrl, pwm_timer);
 
-	switch (c_ctrl->state) {
-	case SPEEDUP: {
-		c_ctrl->state = SLOWDOWN;
-		c_ctrl->pwm_setting.period_ns = c_ctrl->pdata.slow_period;
-		c_ctrl->pwm_setting.pre_period_ns = c_ctrl->pdata.slow_period;
-		c_ctrl->pwm_setting.duty_ns = c_ctrl->pdata.slow_period >> 1;
-		hrtimer_forward_now(&c_ctrl->pwm_timer,
-			ktime_set(c_ctrl->pdata.slow_duration / MSEC_PER_SEC,
-			(c_ctrl->pdata.slow_duration % MSEC_PER_SEC) * NSEC_PER_MSEC));
+	switch (mctrl->state) {
+	case SPEEDUP:
+		mctrl->state = FULLSTEAM;
+		duration_ms = mctrl->high_duration_ms;
+		/* reconfig the pwm and timer to fast running mode. */
+		mctrl->pwm_setting.period_ns = mctrl->high_period_ns;
+		mctrl->pwm_setting.pre_period_ns = mctrl->high_period_ns;
+		mctrl->pwm_setting.duty_ns = mctrl->high_period_ns >> 1;
+		if (mctrl->direction == DOWN)
+			duration_ms += DELTAMS;
+		hrtimer_forward_now(&mctrl->pwm_timer,
+			ktime_set(duration_ms / MSEC_PER_SEC,
+			(duration_ms % MSEC_PER_SEC) * NSEC_PER_MSEC));
 		break;
-		}
+	case FULLSTEAM:
+		mctrl->state = SLOWDOWN;
+		duration_ms = mctrl->rampdown_duration_ms;
+		/* reconfig the pwm and timer to slow mode(brake down) */
+		mctrl->pwm_setting.period_ns = mctrl->rampdown_period_ns;
+		mctrl->pwm_setting.pre_period_ns = mctrl->rampdown_period_ns;
+		mctrl->pwm_setting.duty_ns = mctrl->rampdown_period_ns >> 1;
+		hrtimer_forward_now(&mctrl->pwm_timer,
+			ktime_set(duration_ms / MSEC_PER_SEC,
+			(duration_ms % MSEC_PER_SEC) * NSEC_PER_MSEC));
+		break;
 	case SLOWDOWN:
-	case STILL:
-	default: {
-		c_ctrl->state = STOP;
-		c_ctrl->pwm_setting.duty_ns = DUTY_DEFAULT;
+	case UNIFORMSPEED:
+		mctrl->state = STILL;
+		/* should stop timer and pwm. */
+		mctrl->pwm_setting.duty_ns = 0;
 		break;
-		}
+	default:
+		mctrl->pwm_setting.duty_ns = 0;
+		pr_info("default state.");
 	}
-	schedule_work(&c_ctrl->pwm_apply_work);
+	schedule_work(&mctrl->pwm_apply_work);
 
-	if (c_ctrl->state == STOP)
+	if(mctrl->state == STILL)
 		return HRTIMER_NORESTART;
 	else
 		return HRTIMER_RESTART;
 }
 
-void drv8846_move(struct drv8846_soc_ctrl *c_ctrl)
+void drv8846_move(struct drv8846_soc_ctrl *mctrl, uint8_t dir)
 {
-	pr_info("move %s\n", (c_ctrl->pdata.dir ? "up" : "down"));
+	pr_debug("move %s\n", dir ? "up" : "down");
 
-	c_ctrl->direction = c_ctrl->pdata.dir;
-
-	gpio_direction_output(c_ctrl->gpio_dir, ((c_ctrl->pdata.dir == UP) ? 0 : 1));
-	gpio_direction_output(c_ctrl->gpio_sleep, 1);
-
-	c_ctrl->pwm_setting.period_ns = c_ctrl->pdata.speed_period;
-	c_ctrl->pwm_setting.pre_period_ns = c_ctrl->pdata.speed_period;
-	c_ctrl->pwm_setting.duty_ns = c_ctrl->pdata.speed_period >> 1;
-
-	lpm_disable_for_dev(true, EVENT_FCAM);
-	hrtimer_start(&c_ctrl->pwm_timer,
-			ktime_set(c_ctrl->pdata.speed_duration / MSEC_PER_SEC,
-			(c_ctrl->pdata.speed_duration % MSEC_PER_SEC) * NSEC_PER_MSEC),
+	hrtimer_start(&mctrl->pwm_timer,
+			ktime_set(mctrl->rampup_duration_ms / MSEC_PER_SEC,
+			(mctrl->rampup_duration_ms % MSEC_PER_SEC) * NSEC_PER_MSEC),
 			HRTIMER_MODE_REL);
+	mctrl->state = SPEEDUP;
+	mctrl->direction = dir;
 
-	schedule_work(&c_ctrl->pwm_apply_work);
+	gpio_direction_output(mctrl->gpio_dir, (dir == UP) ? 0 : 1);
+	gpio_direction_output(mctrl->gpio_sleep, 1);
 
-	return;
+	mctrl->pwm_setting.period_ns = mctrl->rampup_period_ns;
+	mctrl->pwm_setting.pre_period_ns = mctrl->rampup_period_ns;
+	mctrl->pwm_setting.duty_ns = mctrl->rampup_period_ns >> 1;
+	schedule_work(&mctrl->pwm_apply_work);
 }
 
+static int drv8846_fasync(int fd, struct file *filp, int mode)
+{
+	struct drv8846_soc_ctrl *mctrl = filp->private_data;
+
+	pr_debug("mctrl %p, application  fasync!", mctrl);
+	return fasync_helper(fd, filp, mode, &mctrl->async);
+}
 
 static unsigned int drv8846_poll(struct file *filp, poll_table *wait)
 {
 	unsigned int mask = 0;
-	struct drv8846_soc_ctrl *c_ctrl = filp->private_data;
+	struct drv8846_soc_ctrl *mctrl = filp->private_data;
 
 	pr_debug("Poll enter\n");
 
 	poll_wait(filp, &poll_wait_queue, wait);
-	if (atomic_read(&c_ctrl->move_done)) {
-		atomic_set(&c_ctrl->move_done, 0);
+	if (atomic_read(&mctrl->move_done)) {
+		atomic_set(&mctrl->move_done, 0);
 		mask = POLLIN | POLLRDNORM;
 	}
 
 	return mask;
 }
 
-static ssize_t drv8846_debug_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
-
-	return snprintf(buf, PAGE_SIZE, "period:%d, duration:%d\n", c_ctrl->pdata.speed_period, c_ctrl->pdata.speed_duration);
-}
-
-static ssize_t drv8846_debug_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned int enable;
-	int ret = 0;
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
-
-	ret = sscanf(buf, "%d", &enable);
-	if (0 == ret)
-		pr_err("Input %d\n", enable);
-
-	c_ctrl->pdata.speed_period = 52083;
-	c_ctrl->pdata.speed_duration = 550;
-
-	if (99 == enable) {
-		c_ctrl->pdata.dir = UP;
-	} else {
-		c_ctrl->pdata.dir = DOWN;
-	}
-	c_ctrl->state = STILL;
-	drv8846_move(c_ctrl);
-
-	return count;
-}
-static DEVICE_ATTR(debug, S_IRUGO | S_IWUSR, drv8846_debug_show, drv8846_debug_store);
-
-static ssize_t drv8846_tuning_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
-
-	return snprintf(buf, PAGE_SIZE, "period:%d, duration:%d, slow_period = %d, slow_duration = %d\n", c_ctrl->pdata.speed_period, c_ctrl->pdata.speed_duration, c_ctrl->pdata.slow_period, c_ctrl->pdata.slow_duration);
-}
-
-static ssize_t drv8846_tuning_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned int enable;
-	int ret = 0;
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
-
-	ret = sscanf(buf, "%d %d %d %d %d", &enable, &c_ctrl->pdata.speed_period, &c_ctrl->pdata.speed_duration, &c_ctrl->pdata.slow_period, &c_ctrl->pdata.slow_duration);
-	if (0 == ret)
-		pr_err("Input %d\n", enable);
-
-	pr_err("enable = %d, speed_period = %d, speed_duration = %d, slow_period = %d, slow_duration = %d\n", enable, c_ctrl->pdata.speed_period, c_ctrl->pdata.speed_duration, c_ctrl->pdata.slow_period, c_ctrl->pdata.slow_duration);
-
-	if (99 == enable) {
-		c_ctrl->pdata.dir = UP;
-	} else {
-		c_ctrl->pdata.dir = DOWN;
-	}
-	c_ctrl->state = SPEEDUP;
-	drv8846_move(c_ctrl);
-
-	return count;
-}
-static DEVICE_ATTR(tuning, S_IRUGO | S_IWUSR, drv8846_tuning_show, drv8846_tuning_store);
-
-static struct device_attribute *drv8846_attrs[] = {
-	&dev_attr_debug,
-	&dev_attr_tuning,
-};
-
 static long drv8846_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int rc = 0;
-	//ktime_t time_rem;
-	struct drv8846_soc_ctrl *c_ctrl = filp->private_data;
+	uint8_t direction = 0;
+	ktime_t time_rem;
+	long time_ms = 0;
+	struct op_parameter parameters;
+	struct drv8846_soc_ctrl *mctrl = filp->private_data;
 
-	if (NULL == c_ctrl) {
-		pr_err("Private data is NULL\n");
+	pr_debug("enter, mctrl %p", mctrl);
+
+	if (mctrl == NULL)
 		return -EFAULT;
-	}
-
-	if (_IOC_TYPE(cmd) != MOTOR_IOC_MAGIC) {
-		pr_err("Magic number is worng\n");
-		return -ENODEV;
-	}
-
-	if (_IOC_DIR(cmd) & _IOC_READ)
-		rc = !access_ok(VERIFY_WRITE, (void __user *)arg, _IOC_SIZE(cmd));
-	else if (_IOC_DIR(cmd) & _IOC_WRITE)
-		rc = !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
-	if (rc) {
-		pr_err("IOCTL cd access failed\n");
-		return -EFAULT;
-	}
-
-	if (_IOC_DIR(cmd) & _IOC_WRITE) {
-		memset(&c_ctrl->pdata, 0, sizeof(struct drv8846_private_data));
-		if (copy_from_user(&c_ctrl->pdata, (void __user *)arg, sizeof(struct drv8846_private_data))) {
-			pr_err("Copy data from user space failed");
-			return -EFAULT;
-		}
-	}
 
 	switch (cmd) {
-	case MOTOR_IOC_SET_AUTO:
-		c_ctrl->state = SPEEDUP;
-		drv8846_move(c_ctrl);
+	case MOTOR_IOC_SET_AUTORUN:
+		pr_debug("MOTOR_IOCAUTORUN.");
+		if (copy_from_user(&direction, (uint8_t *)arg, sizeof(uint8_t))) {
+			pr_err("Failed to copy direction from user to kernel\n");
+			rc = -EFAULT;
+			break;
+		}
+		drv8846_move(mctrl, direction);
 		break;
-	case MOTOR_IOC_SET_MANUAL:
-		c_ctrl->state = STILL;
-		drv8846_move(c_ctrl);
+	case MOTOR_IOC_SET_MANUALRUN:
+		pr_debug("MOTOR_IOCMANUAL\n");
+		if (copy_from_user(&parameters, (struct op_parameter *)arg, sizeof(struct op_parameter))) {
+			pr_err("Failed to copy target position from user to kernel\n");
+			rc = -EFAULT;
+			break;
+		}
+		pr_debug("dir %d, duration %dms, period %dns.", parameters.dir, parameters.duration_ms, parameters.period_ns);
+
+		/* configure pwm */
+		gpio_direction_output(mctrl->gpio_dir, (parameters.dir == UP) ? 0 : 1);
+		gpio_direction_output(mctrl->gpio_sleep, 1);
+
+		mctrl->pwm_setting.period_ns = parameters.period_ns;
+		mctrl->pwm_setting.pre_period_ns = parameters.period_ns;
+		mctrl->pwm_setting.duty_ns = parameters.period_ns >> 1;
+		schedule_work(&mctrl->pwm_apply_work);
+		/* start hrtimer */
+		hrtimer_start(&mctrl->pwm_timer,
+			ktime_set(parameters.duration_ms / MSEC_PER_SEC,
+			(parameters.duration_ms % MSEC_PER_SEC) * NSEC_PER_MSEC),
+			HRTIMER_MODE_REL);
+		mctrl->state = UNIFORMSPEED;
 		break;
 	case MOTOR_IOC_GET_REMAIN_TIME:
-#if 0
-		if (hrtimer_active(&c_ctrl->pwm_timer)) {
-			time_rem = hrtimer_get_remaining(&c_ctrl->pwm_timer);
-			c_ctrl->pwm_time = (long)ktime_to_ms(time_rem);
+		if (hrtimer_active(&mctrl->pwm_timer)) {
+			time_rem = hrtimer_get_remaining(&mctrl->pwm_timer);
+			time_ms = (long)ktime_to_ms(time_rem);
 		}
-#endif
+		if (copy_to_user((void __user *)arg, &time_ms, sizeof(long))) {
+			pr_err("copy_to_user failed.");
+			return -EFAULT;
+		}
 		break;
 	case MOTOR_IOC_GET_STATE:
-		c_ctrl->pdata.pwm_state = c_ctrl->state;
+		if (copy_to_user((void __user *)arg, &mctrl->state, sizeof(enum running_state))) {
+			pr_err("copy_to_user failed.");
+			return -EFAULT;
+		}
 		break;
 	default:
 		pr_warn("unsupport cmd:0x%x\n", cmd);
 		break;
-	}
-
-	if (_IOC_DIR(cmd) & _IOC_READ) {
-		if (copy_to_user((void __user *)arg, &c_ctrl->pdata, sizeof(struct drv8846_private_data))) {
-			pr_err("Copy data to user space failed\n");
-			return -EFAULT;
-		}
 	}
 
 	return rc;
@@ -345,21 +310,27 @@ static long drv8846_compat_ioctl(struct file *filp, unsigned int cmd, unsigned l
 
 static int drv8846_open(struct inode *inode, struct file *filp)
 {
-	struct drv8846_soc_ctrl *c_ctrl = NULL;
+	struct drv8846_soc_ctrl *mctrl = NULL;
 
-	c_ctrl = container_of(inode->i_cdev, struct drv8846_soc_ctrl, c_cdev);
-	filp->private_data = c_ctrl;
+	pr_debug("enter\n");
 
-	atomic_set(&c_ctrl->move_done, 0);
+	mctrl = container_of(filp->private_data, struct drv8846_soc_ctrl, miscdev);
+	filp->private_data = mctrl;
+
+	atomic_set(&mctrl->move_done, 0);
+
+	pr_debug("mctrl: %p\n", mctrl);
 
 	return 0;
 }
 
 static int drv8846_release(struct inode *inode, struct file *file)
 {
-	struct drv8846_soc_ctrl *c_ctrl = file->private_data;
+	struct drv8846_soc_ctrl *mctrl = file->private_data;
 
-	atomic_set(&c_ctrl->move_done, 0);
+	atomic_set(&mctrl->move_done, 0);
+
+	pr_debug("mctrl %p.", mctrl);
 
 	return 0;
 }
@@ -372,367 +343,330 @@ static const struct file_operations drv8846_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = drv8846_compat_ioctl,
 #endif
+	.fasync = drv8846_fasync,
 	.poll = drv8846_poll,
 };
 
-static int drv8846_pinctrl_init(struct drv8846_soc_ctrl *c_ctrl)
+static int drv8846_pinctrl_init(struct drv8846_soc_ctrl *mctrl)
 {
 	int rc = 0;
 	/* Get pinctrl if target uses pinctrl */
-	c_ctrl->pinctrl = devm_pinctrl_get(&c_ctrl->pdev->dev);
-	if (IS_ERR_OR_NULL(c_ctrl->pinctrl)) {
-		rc = PTR_ERR(c_ctrl->pinctrl);
+	mctrl->pinctrl = devm_pinctrl_get(&mctrl->pdev->dev);
+
+	if (IS_ERR_OR_NULL(mctrl->pinctrl)) {
+		rc = PTR_ERR(mctrl->pinctrl);
 		pr_err("Target does not use pinctrl %d\n", rc);
-		goto get_pinctrl_err;
+		goto err_pinctrl_get;
 	}
 
-	c_ctrl->pinctrl_default	= pinctrl_lookup_state(c_ctrl->pinctrl, "default");
-	if (IS_ERR_OR_NULL(c_ctrl->pinctrl_default)) {
-		rc = PTR_ERR(c_ctrl->pinctrl_default);
+	mctrl->pinctrl_default
+		= pinctrl_lookup_state(mctrl->pinctrl, "default");
+
+	if (IS_ERR_OR_NULL(mctrl->pinctrl_default)) {
+		rc = PTR_ERR(mctrl->pinctrl_default);
 		pr_err("Can not lookup default pinstate %d\n", rc);
-		goto lookup_pinctrl_err;
+		goto err_pinctrl_lookup;
 	}
 
 	return 0;
 
-lookup_pinctrl_err:
-	devm_pinctrl_put(c_ctrl->pinctrl);
-
-get_pinctrl_err:
-	c_ctrl->pinctrl = NULL;
+err_pinctrl_lookup:
+	devm_pinctrl_put(mctrl->pinctrl);
+err_pinctrl_get:
+	mctrl->pinctrl = NULL;
 
 	return rc;
 }
 
-static int drv8846_gpio_config(struct drv8846_soc_ctrl *c_ctrl)
+static int drv8846_gpio_config(struct drv8846_soc_ctrl *mctrl)
 {
 	int32_t rc = 0;
 
-	rc = gpio_request_one(c_ctrl->gpio_mode0, GPIOF_OUT_INIT_HIGH, "motor-mode0");
+	rc = gpio_request_one(mctrl->gpio_mode0, GPIOF_OUT_INIT_HIGH, "motor-mode0");
 	if (rc < 0) {
-		pr_err("Failed to request mode0 GPIO %d\n", c_ctrl->gpio_mode0);
-		goto mode0_gpio_req_err;
+		pr_err("Failed to request mode0 GPIO %d", mctrl->gpio_mode0);
+		goto fail0;
 	}
-	gpio_direction_output(c_ctrl->gpio_mode0, (c_ctrl->step_mode & 0x01));
+	gpio_direction_output(mctrl->gpio_mode0, (mctrl->step_mode & 0x01));
 
-	rc = gpio_request_one(c_ctrl->gpio_mode1, GPIOF_OUT_INIT_HIGH, "motor-mode1");
-	if (rc < 0) {
-		pr_err("Failed to request mode1 GPIO %d\n", c_ctrl->gpio_mode1);
-		goto mode1_gpio_req_err;
+	rc = gpio_request_one(mctrl->gpio_mode1, GPIOF_OUT_INIT_HIGH, "motor-mode1");
+	if( rc < 0) {
+		pr_err("Failed to request mode1 GPIO %d", mctrl->gpio_mode1);
+		goto fail1;
 	}
-	gpio_direction_output(c_ctrl->gpio_mode1, (c_ctrl->step_mode & 0x02));
+	gpio_direction_output(mctrl->gpio_mode1, (mctrl->step_mode & 0x02));
 
-	rc = gpio_request_one(c_ctrl->gpio_dir, GPIOF_OUT_INIT_HIGH, "motor-dir");
+	rc = gpio_request_one(mctrl->gpio_dir, GPIOF_OUT_INIT_HIGH, "motor-dir");
 	if (rc < 0) {
-		pr_err("Failed to request direction GPIO %d\n", c_ctrl->gpio_dir);
-		goto dir_gpio_req_err;
+		pr_err("Failed to request dir GPIO %d\n", mctrl->gpio_dir);
+		goto fail2;
 	}
-	gpio_direction_output(c_ctrl->gpio_dir, 0);
+	gpio_direction_output(mctrl->gpio_dir, 0);
 
-	rc = gpio_request_one(c_ctrl->gpio_sleep, GPIOF_OUT_INIT_LOW, "motor-sleep");
+	rc = gpio_request_one(mctrl->gpio_sleep, GPIOF_OUT_INIT_HIGH, "motor-sleep");
 	if (rc < 0) {
-		pr_err("Failed to request sleep GPIO %d\n", c_ctrl->gpio_sleep);
-		goto sleep_gpio_req_err;
+		pr_err("Failed to request sleep GPIO %d", mctrl->gpio_sleep);
+		goto fail3;
 	}
-	gpio_direction_output(c_ctrl->gpio_sleep, 0);
+	gpio_direction_output(mctrl->gpio_sleep, 0);
 
-	rc = gpio_request_one(c_ctrl->gpio_pwren, GPIOF_OUT_INIT_HIGH, "motor-pwr");
+	rc = gpio_request_one(mctrl->gpio_pwren, GPIOF_OUT_INIT_HIGH, "motor-pwr");
 	if (rc < 0) {
-		pr_err("Failed to request power enable GPIO %d\n", c_ctrl->gpio_pwren);
-		goto pwren_gpio_req_err;
+		pr_err("Failed to request power enable GPIO %d", mctrl->gpio_pwren);
+		goto fail4;
 	}
-	gpio_direction_output(c_ctrl->gpio_pwren, 1);
+	gpio_direction_output(mctrl->gpio_pwren, 1);
 
 	return 0;
 
-pwren_gpio_req_err:
-	if (gpio_is_valid(c_ctrl->gpio_sleep))
-		gpio_free(c_ctrl->gpio_sleep);
-
-sleep_gpio_req_err:
-	if (gpio_is_valid(c_ctrl->gpio_dir))
-		gpio_free(c_ctrl->gpio_dir);
-
-dir_gpio_req_err:
-	if (gpio_is_valid(c_ctrl->gpio_mode1)) {
-		gpio_direction_output(c_ctrl->gpio_mode1, 0);
-		gpio_free(c_ctrl->gpio_mode1);
-	}
-
-mode1_gpio_req_err:
-	if (gpio_is_valid(c_ctrl->gpio_mode0)) {
-		gpio_direction_output(c_ctrl->gpio_mode0, 0);
-		gpio_free(c_ctrl->gpio_mode0);
-	}
-
-mode0_gpio_req_err:
+fail4:
+	if (gpio_is_valid(mctrl->gpio_sleep))
+		gpio_free(mctrl->gpio_sleep);
+fail3:
+	if (gpio_is_valid(mctrl->gpio_dir))
+		gpio_free(mctrl->gpio_dir);
+fail2:
+	if (gpio_is_valid(mctrl->gpio_mode1))
+		gpio_free(mctrl->gpio_mode1);
+fail1:
+	if (gpio_is_valid(mctrl->gpio_mode0))
+		gpio_free(mctrl->gpio_mode0);
+fail0:
 	return rc;
 }
 
-int drv8846_parse_dt(struct drv8846_soc_ctrl *c_ctrl)
+int drv8846_parse_dt(struct drv8846_soc_ctrl *mctrl)
 {
 	int rc = 0;
 	struct device_node *of_node = NULL;
 
-	of_node = c_ctrl->pdev->dev.of_node;
+	of_node = mctrl->pdev->dev.of_node;
 
-	c_ctrl->pwm_setting.duty_ns = DUTY_DEFAULT;
-	c_ctrl->pwm_setting.period_ns = PERIOD_DEFAULT;
-
-	c_ctrl->gpio_mode0 = of_get_named_gpio_flags(of_node, "motor,gpio-mode0", 0, NULL);
-	if (!gpio_is_valid(c_ctrl->gpio_mode0)) {
-		pr_err("Gpio mode0 pin %d is invalid.", c_ctrl->gpio_mode0);
-		goto parse_gpio_err;
+	mctrl->pwm_dev = devm_of_pwm_get(&mctrl->pdev->dev, of_node, NULL);
+	if (IS_ERR(mctrl->pwm_dev)) {
+		rc = PTR_ERR(mctrl->pwm_dev);
+		if (rc != -EPROBE_DEFER)
+			pr_err("Get pwm device for motor failed, rc=%d\n", rc);
+		return rc;
 	}
 
-	c_ctrl->gpio_mode1 = of_get_named_gpio_flags(of_node, "motor,gpio-mode1", 0, NULL);
-	if (!gpio_is_valid(c_ctrl->gpio_mode1)) {
-		pr_err("Gpio mode1 pin %d is invalid.", c_ctrl->gpio_mode1);
-		goto parse_gpio_err;
+	mctrl->pwm_setting.duty_ns = 0;
+	mctrl->pwm_setting.period_ns = PWM_PERIOD_DEFAULT_NS;
+
+	mctrl->gpio_mode0 = of_get_named_gpio_flags(of_node, "motor,gpio-mode0", 0, NULL);
+	if (!gpio_is_valid(mctrl->gpio_mode0)) {
+		pr_info("mctrl->motor_data.gpio_mode0 is invalid.");
+		return -EINVAL;
 	}
 
-	c_ctrl->gpio_sleep = of_get_named_gpio_flags(of_node, "motor,gpio-sleep", 0, NULL);
-	if (!gpio_is_valid(c_ctrl->gpio_sleep)) {
-		pr_err("Gpio sleep pin %d is invalid.", c_ctrl->gpio_sleep);
-		goto parse_gpio_err;
+	mctrl->gpio_mode1 = of_get_named_gpio_flags(of_node, "motor,gpio-mode1", 0, NULL);
+	if (!gpio_is_valid(mctrl->gpio_mode1)) {
+		pr_info("motor,mode1-gpio is invalid.");
+		return -EINVAL;
 	}
 
-	c_ctrl->gpio_dir = of_get_named_gpio_flags(of_node, "motor,gpio-dir", 0, NULL);
-	if (!gpio_is_valid(c_ctrl->gpio_dir)) {
-		pr_err("Gpio direction pin %d is invalid.", c_ctrl->gpio_dir);
-		goto parse_gpio_err;
+	mctrl->gpio_sleep = of_get_named_gpio_flags(of_node, "motor,gpio-sleep", 0, NULL);
+	if (!gpio_is_valid(mctrl->gpio_sleep)) {
+		pr_info("motor,sleep-gpio is invalid.");
+		return -EINVAL;
 	}
 
-	c_ctrl->gpio_pwren = of_get_named_gpio_flags(of_node, "motor,gpio-pwren", 0, NULL);
-	if (!gpio_is_valid(c_ctrl->gpio_pwren)) {
-		pr_err("Gpio power enable pin %d is invalid.", c_ctrl->gpio_pwren);
-		goto parse_gpio_err;
+	mctrl->gpio_dir = of_get_named_gpio_flags(of_node, "motor,gpio-dir", 0, NULL);
+	if (!gpio_is_valid(mctrl->gpio_dir)) {
+		pr_info("motor,dir-gpio is invalid.");
+		return -EINVAL;
 	}
 
-	rc = of_property_read_u32(of_node, "motor,step-mode", &c_ctrl->step_mode);
+	mctrl->gpio_pwren = of_get_named_gpio_flags(of_node, "motor,gpio-pwren", 0, NULL);
+	if (!gpio_is_valid(mctrl->gpio_pwren)) {
+		pr_info("power,en-gpio is invalid.");
+		return -EINVAL;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,rampup-pwm-period-ns", &mctrl->rampup_period_ns);
 	if (rc < 0) {
-		pr_err("Gpio step mode pin %d not set, use default.", DEFAULT_STEP_MODE);
-		c_ctrl->step_mode = DEFAULT_STEP_MODE;
+		pr_info("motor,rampup-pwm-period-ns not set, use default.");
+		mctrl->rampup_period_ns = RAMP_PERIOD_DEFAULT_NS;
 	}
-	pr_err("gpio-dir = %d\n", c_ctrl->gpio_dir);
+
+	rc = of_property_read_u32(of_node, "motor,high-pwm-period-ns", &mctrl->high_period_ns);
+	if (rc < 0) {
+		pr_info("motor,high-pwm-period-ns not set, use default.");
+		mctrl->high_period_ns = HIGH_PERIOD_DEFAULT_NS;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,rampdown-pwm-period-ns", &mctrl->rampdown_period_ns);
+	if (rc < 0) {
+		pr_info("motor,rampdown-pwm-period-ns not set, use default.");
+		mctrl->rampdown_period_ns = RAMP_PERIOD_DEFAULT_NS;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,rampup-duration-ms", &mctrl->rampup_duration_ms);
+	if (rc < 0) {
+		pr_info("motor,rampup-duration-ms not set, use default.");
+		mctrl->rampup_duration_ms = RAMP_DURATION_DEFAULT_MS;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,high-duration-ms", &mctrl->high_duration_ms);
+	if (rc < 0) {
+		pr_info("motor,high-duration-ms not set, use default.");
+		mctrl->high_duration_ms = HIGH_DURATION_DEFAULT_MS;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,rampdown-duration-ms", &mctrl->rampdown_duration_ms);
+	if (rc < 0) {
+		pr_info("motor,rampdown-duration-ms not set, use default.");
+		mctrl->rampdown_duration_ms = RAMP_DURATION_DEFAULT_MS;
+	}
+
+	rc = of_property_read_u32(of_node, "motor,step-mode", &mctrl->step_mode);
+	if (rc < 0) {
+		pr_info("motor,step-mode not set, use default.");
+		mctrl->step_mode = DEFAULT_STEP_MODE;
+	}
 
 	return 0;
-
-parse_gpio_err:
-
-	return -EINVAL;
 }
+
+static int step_mode_dbgfs_read(void *data, u64 *val)
+{
+	struct drv8846_soc_ctrl *mctrl = (struct drv8846_soc_ctrl *)data;
+
+	*val = mctrl->step_mode;
+
+	return 0;
+}
+
+static int step_mode_dbgfs_write(void *data, u64 val)
+{
+	struct drv8846_soc_ctrl *mctrl = (struct drv8846_soc_ctrl *)data;
+
+	mctrl->step_mode = val & 0x03;
+	gpio_direction_output(mctrl->gpio_mode0, (val & 0x01));
+	gpio_direction_output(mctrl->gpio_mode1, (val & 0x02));
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(step_mode_debugfs_ops,	step_mode_dbgfs_read,
+		step_mode_dbgfs_write, "%llu\n");
 
 static int drv8846_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0;
-	struct drv8846_soc_ctrl *c_ctrl = NULL;
+	struct drv8846_soc_ctrl *mctrl = NULL;
 
-	pr_info("Enter");
-
+	pr_debug("Enter");
 	if (!pdev->dev.of_node) {
 		pr_err("of_node NULL");
 		return -EINVAL;
 	}
 
-	c_ctrl = kzalloc(sizeof(struct drv8846_soc_ctrl), GFP_KERNEL);
-	if (!c_ctrl)
+	mctrl = kzalloc(sizeof(struct drv8846_soc_ctrl), GFP_KERNEL);
+	if (!mctrl)
 		return -ENOMEM;
 
-	c_ctrl->pdev = pdev;
-	platform_set_drvdata(pdev, c_ctrl);
+	pr_debug("mctrl: %p\n", mctrl);
+	mctrl->pdev = pdev;
+	platform_set_drvdata(pdev, mctrl);
 
-	pr_debug("Start parse device tree");
-	if (pdev->dev.of_node) {
-		rc = drv8846_parse_dt(c_ctrl);
+	mutex_init(&mctrl->motor_mutex);
+
+	rc = drv8846_parse_dt(mctrl);
+	if (rc < 0) {
+		pr_err("parse dt failed");
+		goto fail;
+	}
+
+	rc = drv8846_pinctrl_init(mctrl);
+	if (!rc && mctrl->pinctrl) {
+		rc = pinctrl_select_state(mctrl->pinctrl, mctrl->pinctrl_default);
 		if (rc < 0) {
-			pr_err("Parse dt failed");
-			goto parse_dt_err;
+			pr_err("Failed to select default pinstate %d\n", rc);
 		}
-	}
-
-	rc = drv8846_pinctrl_init(c_ctrl);
-	if (rc) {
-		pr_err("Failed to init pinctrl\n");
-		goto init_pinctrl_err;
 	} else {
-		if (c_ctrl->pinctrl) {
-			rc = pinctrl_select_state(c_ctrl->pinctrl, c_ctrl->pinctrl_default);
-			if (rc < 0) {
-				pr_err("Failed to select default pinstate %d\n", rc);
-				goto select_pinctrl_err;
-			}
-		}
+		pr_err("Failed to init pinctrl\n");
 	}
 
-	rc = drv8846_gpio_config(c_ctrl);
+	rc = drv8846_gpio_config(mctrl);
 	if (rc < 0) {
 		pr_err("Failed to config gpio\n");
-		goto select_pinctrl_err;
+		goto fail;
 	}
 
-	c_ctrl->pwm_dev = devm_of_pwm_get(&c_ctrl->pdev->dev, c_ctrl->pdev->dev.of_node, NULL);
-	if (IS_ERR(c_ctrl->pwm_dev)) {
-		rc = PTR_ERR(c_ctrl->pwm_dev);
-		if (rc != -EPROBE_DEFER)
-			pr_err("Get pwm device for motor failed, rc=%d\n", rc);
-		goto get_pwm_device_err;
-	}
+	INIT_WORK(&mctrl->pwm_apply_work, pwm_config_work);
 
-	mutex_init(&c_ctrl->motor_mutex);
+	hrtimer_init(&mctrl->pwm_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	mctrl->pwm_timer.function = pwm_hrtimer_handler;
 
-	INIT_WORK(&c_ctrl->pwm_apply_work, pwm_config_work);
+	mctrl->miscdev.minor = MISC_DYNAMIC_MINOR;
+	mctrl->miscdev.name	= DRV8846_MISC_NAME;
+	mctrl->miscdev.fops	= &drv8846_fops;
+	mctrl->miscdev.parent = &pdev->dev;
 
-	hrtimer_init(&c_ctrl->pwm_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	c_ctrl->pwm_timer.function = pwm_hrtimer_handler;
-
-	c_ctrl->chr_class = class_create(THIS_MODULE, DRV8846_CLASS_NAME);
-	if (c_ctrl->chr_class == NULL) {
-		pr_err("Failed to create class\n");
-		rc = -ENODEV;
-		goto create_class_err;
-	}
-
-	rc = alloc_chrdev_region(&c_ctrl->dev_num, 0, 1, DRV8846_DRV_NAME);
+	rc = misc_register(&mctrl->miscdev);
 	if (rc < 0) {
-		pr_err("Failed to allocate chrdev region\n");
-		goto alloc_dev_err;
+		pr_err("register misc device fail");
+		goto register_fail;
 	}
 
-	c_ctrl->chr_dev = device_create(c_ctrl->chr_class, NULL, c_ctrl->dev_num, c_ctrl, DRV8846_DRV_NAME);
-	if (IS_ERR(c_ctrl->chr_dev)) {
-		pr_err("Failed to create char device\n");
-		rc = PTR_ERR(c_ctrl->chr_dev);
-		goto create_device_err;
+	mctrl->debugfs = debugfs_create_dir("pwm_motor", NULL);
+	if (mctrl->debugfs) {
+		debugfs_create_u32("rampup_period_ns", 0666, mctrl->debugfs,
+			   &mctrl->rampup_period_ns);
+		debugfs_create_u32("high_period_ns", 0666, mctrl->debugfs,
+			   &mctrl->high_period_ns);
+		debugfs_create_u32("rampdown_period_ns", 0666, mctrl->debugfs,
+			   &mctrl->rampdown_period_ns);
+		debugfs_create_u32("rampup_duration_ms", 0666, mctrl->debugfs,
+			   &mctrl->rampup_duration_ms);
+		debugfs_create_u32("high_duration_ms", 0666, mctrl->debugfs,
+			   &mctrl->high_duration_ms);
+		debugfs_create_u32("rampdown_duration_ms", 0666, mctrl->debugfs,
+			   &mctrl->rampdown_duration_ms);
+		debugfs_create_file("step_mode", 0666, mctrl->debugfs, mctrl,
+			    &step_mode_debugfs_ops);
 	}
 
-	cdev_init(&(c_ctrl->c_cdev), &drv8846_fops);
-	c_ctrl->c_cdev.owner = THIS_MODULE;
-
-	rc = cdev_add(&(c_ctrl->c_cdev), c_ctrl->dev_num, 1);
-	if (rc < 0) {
-		pr_err("Failed to add cdev\n");
-		goto add_cdev_err;
-	}
-
-	rc = device_create_file(c_ctrl->chr_dev, drv8846_attrs[0]);
-	if (rc < 0)
-		pr_err("Failed to create debug file: %d\n", rc);
-
-	rc = device_create_file(c_ctrl->chr_dev, drv8846_attrs[1]);
-	if (rc < 0)
-		pr_err("Failed to create debug file: %d\n", rc);
-
-	pr_debug("Successfully probed\n");
-
+	pr_debug("successfully probed.");
 	return 0;
 
-add_cdev_err:
-	if (c_ctrl->chr_dev)
-		device_destroy(c_ctrl->chr_class, c_ctrl->dev_num);
-
-create_device_err:
-	unregister_chrdev_region(c_ctrl->dev_num, 1);
-
-alloc_dev_err:
-	if (c_ctrl->chr_class)
-		class_destroy(c_ctrl->chr_class);
-
-create_class_err:
-	cancel_work_sync(&c_ctrl->pwm_apply_work);
-	hrtimer_cancel(&c_ctrl->pwm_timer);
-	mutex_destroy(&c_ctrl->motor_mutex);
-	devm_pwm_put(&c_ctrl->pdev->dev, c_ctrl->pwm_dev);
-
-get_pwm_device_err:
-	if (gpio_is_valid(c_ctrl->gpio_pwren)) {
-		gpio_direction_output(c_ctrl->gpio_pwren, 0);
-		gpio_free(c_ctrl->gpio_pwren);
-	}
-	if (gpio_is_valid(c_ctrl->gpio_sleep))
-		gpio_free(c_ctrl->gpio_sleep);       
-	if (gpio_is_valid(c_ctrl->gpio_dir)) 
-		gpio_free(c_ctrl->gpio_dir);
-	if (gpio_is_valid(c_ctrl->gpio_mode1)) {
-		gpio_direction_output(c_ctrl->gpio_mode1, 0);
-		gpio_free(c_ctrl->gpio_mode1);
-	}
-	if (gpio_is_valid(c_ctrl->gpio_mode0)) {
-		gpio_direction_output(c_ctrl->gpio_mode0, 0);
-		gpio_free(c_ctrl->gpio_mode0);
-	}
-
-select_pinctrl_err:
-	if (c_ctrl->pinctrl) {
-		devm_pinctrl_put(c_ctrl->pinctrl);
-		c_ctrl->pinctrl = NULL;
-	}
-
-init_pinctrl_err:
-parse_dt_err:
+register_fail:
+	cancel_work_sync(&mctrl->pwm_apply_work);
+	hrtimer_cancel(&mctrl->pwm_timer);
+fail:
+	mutex_destroy(&mctrl->motor_mutex);
+	kfree(mctrl);
 	platform_set_drvdata(pdev, NULL);
-	kfree(c_ctrl);
-
 	return rc;
 }
 
 static int drv8846_remove(struct platform_device *pdev)
 {
-	struct drv8846_soc_ctrl *c_ctrl = platform_get_drvdata(pdev);
+	struct drv8846_soc_ctrl *mctrl = platform_get_drvdata(pdev);
 
-	if (c_ctrl->chr_dev)
-		device_destroy(c_ctrl->chr_class, c_ctrl->dev_num);
-
-	unregister_chrdev_region(c_ctrl->dev_num, 1);
-
-	if (c_ctrl->chr_class)
-		class_destroy(c_ctrl->chr_class);
-
-	cancel_work_sync(&c_ctrl->pwm_apply_work);
-	hrtimer_cancel(&c_ctrl->pwm_timer);
-	lpm_disable_for_dev(false, EVENT_FCAM);
-	mutex_destroy(&c_ctrl->motor_mutex);
-	devm_pwm_put(&c_ctrl->pdev->dev, c_ctrl->pwm_dev);
-
-	if (gpio_is_valid(c_ctrl->gpio_pwren)) {
-		gpio_direction_output(c_ctrl->gpio_pwren, 0);
-		gpio_free(c_ctrl->gpio_pwren);
-	}
-	if (gpio_is_valid(c_ctrl->gpio_sleep))
-		gpio_free(c_ctrl->gpio_sleep);
-	if (gpio_is_valid(c_ctrl->gpio_dir))
-		gpio_free(c_ctrl->gpio_dir);
-	if (gpio_is_valid(c_ctrl->gpio_mode1)) {
-		gpio_direction_output(c_ctrl->gpio_mode1, 0);
-		gpio_free(c_ctrl->gpio_mode1);
-	}
-	if (gpio_is_valid(c_ctrl->gpio_mode0)) {
-		gpio_direction_output(c_ctrl->gpio_mode0, 0);
-		gpio_free(c_ctrl->gpio_mode0);
-	}
-	if (c_ctrl->pinctrl) {
-		devm_pinctrl_put(c_ctrl->pinctrl);
-		c_ctrl->pinctrl = NULL;
-	}
-
+	cancel_work_sync(&mctrl->pwm_apply_work);
+	hrtimer_cancel(&mctrl->pwm_timer);
+	mutex_destroy(&mctrl->motor_mutex);
+	misc_deregister(&mctrl->miscdev);
 	platform_set_drvdata(pdev, NULL);
-	kfree(c_ctrl);
+	kfree(mctrl);
 
 	return 0;
 }
 
 static int drv8846_suspend(struct device *dev)
 {
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
+	struct drv8846_soc_ctrl *mctrl = dev_get_drvdata(dev);
 
-	return gpio_direction_output(c_ctrl->gpio_pwren, 0);
+	return gpio_direction_output(mctrl->gpio_pwren, 0);
 }
 
 static int drv8846_resume(struct device *dev)
 {
-	struct drv8846_soc_ctrl *c_ctrl = dev_get_drvdata(dev);
+	struct drv8846_soc_ctrl *mctrl = dev_get_drvdata(dev);
 
-	return gpio_direction_output(c_ctrl->gpio_pwren, 1);
+	return gpio_direction_output(mctrl->gpio_pwren, 1);
 }
 
 
@@ -741,26 +675,36 @@ static const struct dev_pm_ops drv8846_pm_ops = {
 	.resume		= drv8846_resume,
 };
 
+
 static const struct of_device_id drv8846_match_table[] = {
-        { .compatible = DRV8846_DEV_NAME },
-        {}
+	{ .compatible = DRV8846_DEV_NAME },
+	{}
 };
-MODULE_DEVICE_TABLE(of, drv8846_match_table);
 
 static struct platform_driver drv8846_driver = {
-        .driver = {
-                .name           = DRV8846_DEV_NAME,
-                .owner          = THIS_MODULE,
-                .of_match_table = of_match_ptr(drv8846_match_table),
-                .pm             = &drv8846_pm_ops,
-        },
-        .probe  = drv8846_probe,
-        .remove = drv8846_remove,
+	.driver	= {
+		.name		= DRV8846_DEV_NAME,
+		.owner		= THIS_MODULE,
+		.of_match_table	= drv8846_match_table,
+		.pm		= &drv8846_pm_ops,
+	},
+	.probe	= drv8846_probe,
+	.remove = drv8846_remove,
 };
 
-module_platform_driver(drv8846_driver);
+static int __init drv8846_init(void)
+{
+	return platform_driver_register(&drv8846_driver);
+}
 
+static void __exit drv8846_exit(void)
+{
+	return platform_driver_unregister(&drv8846_driver);
+}
+
+module_init(drv8846_init);
+module_exit(drv8846_exit);
+
+MODULE_AUTHOR("ran fei <ranfei@xiaomi.com>");
 MODULE_DESCRIPTION("TI Dual H-Bridge Stepper Motor Driver");
-MODULE_AUTHOR("Zhu Nengjin <zhunengjin@xiaomi.com>");
-MODULE_LICENSE("GPL v2");
-MODULE_VERSION("2.0");
+MODULE_LICENSE("GPL");

@@ -233,6 +233,15 @@ static netdev_tx_t vti_xmit(struct sk_buff *skb, struct net_device *dev,
 		goto tx_error;
 	}
 
+	if (tunnel->err_count > 0) {
+		if (time_before(jiffies,
+				tunnel->err_time + IPTUNNEL_ERR_TIMEO)) {
+			tunnel->err_count--;
+			dst_link_failure(skb);
+		} else
+			tunnel->err_count = 0;
+	}
+
 	mtu = dst_mtu(dst);
 	if (skb->len > mtu) {
 		skb_dst_update_pmtu(skb, mtu);
@@ -276,9 +285,6 @@ static netdev_tx_t vti_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	struct flowi fl;
 
-	if (!pskb_inet_may_pull(skb))
-		goto tx_err;
-
 	memset(&fl, 0, sizeof(fl));
 
 	switch (skb->protocol) {
@@ -291,18 +297,15 @@ static netdev_tx_t vti_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 		memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
 		break;
 	default:
-		goto tx_err;
+		dev->stats.tx_errors++;
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
 	}
 
 	/* override mark with tunnel output key */
 	fl.flowi_mark = be32_to_cpu(tunnel->parms.o_key);
 
 	return vti_xmit(skb, dev, &fl);
-
-tx_err:
-	dev->stats.tx_errors++;
-	kfree_skb(skb);
-	return NETDEV_TX_OK;
 }
 
 static int vti4_err(struct sk_buff *skb, u32 info)
@@ -428,6 +431,7 @@ static int vti_tunnel_init(struct net_device *dev)
 	memcpy(dev->dev_addr, &iph->saddr, 4);
 	memcpy(dev->broadcast, &iph->daddr, 4);
 
+	dev->mtu		= ETH_DATA_LEN;
 	dev->flags		= IFF_NOARP;
 	dev->addr_len		= 4;
 	dev->features		|= NETIF_F_LLTX;
@@ -485,19 +489,19 @@ static int __net_init vti_init_net(struct net *net)
 	if (err)
 		return err;
 	itn = net_generic(net, vti_net_id);
-	if (itn->fb_tunnel_dev)
-		vti_fb_tunnel_init(itn->fb_tunnel_dev);
+	vti_fb_tunnel_init(itn->fb_tunnel_dev);
 	return 0;
 }
 
-static void __net_exit vti_exit_batch_net(struct list_head *list_net)
+static void __net_exit vti_exit_net(struct net *net)
 {
-	ip_tunnel_delete_nets(list_net, vti_net_id, &vti_link_ops);
+	struct ip_tunnel_net *itn = net_generic(net, vti_net_id);
+	ip_tunnel_delete_net(itn, &vti_link_ops);
 }
 
 static struct pernet_operations vti_net_ops = {
 	.init = vti_init_net,
-	.exit_batch = vti_exit_batch_net,
+	.exit = vti_exit_net,
 	.id   = &vti_net_id,
 	.size = sizeof(struct ip_tunnel_net),
 };
@@ -659,9 +663,9 @@ static int __init vti_init(void)
 	return err;
 
 rtnl_link_failed:
-	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
-xfrm_tunnel_failed:
 	xfrm4_protocol_deregister(&vti_ipcomp4_protocol, IPPROTO_COMP);
+xfrm_tunnel_failed:
+	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
 xfrm_proto_comp_failed:
 	xfrm4_protocol_deregister(&vti_ah4_protocol, IPPROTO_AH);
 xfrm_proto_ah_failed:
@@ -676,7 +680,6 @@ pernet_dev_failed:
 static void __exit vti_fini(void)
 {
 	rtnl_link_unregister(&vti_link_ops);
-	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
 	xfrm4_protocol_deregister(&vti_ipcomp4_protocol, IPPROTO_COMP);
 	xfrm4_protocol_deregister(&vti_ah4_protocol, IPPROTO_AH);
 	xfrm4_protocol_deregister(&vti_esp4_protocol, IPPROTO_ESP);

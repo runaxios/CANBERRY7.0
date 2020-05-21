@@ -321,8 +321,7 @@ int snd_hdac_bus_parse_capabilities(struct hdac_bus *bus)
 			break;
 
 		default:
-			dev_err(bus->dev, "Unknown capability %d\n", cur_cap);
-			cur_cap = 0;
+			dev_dbg(bus->dev, "Unknown capability %d\n", cur_cap);
 			break;
 		}
 
@@ -442,8 +441,6 @@ static void azx_int_disable(struct hdac_bus *bus)
 	/* disable interrupts in stream descriptor */
 	list_for_each_entry(azx_dev, &bus->stream_list, list)
 		snd_hdac_stream_updateb(azx_dev, SD_CTL, SD_INT_MASK, 0);
-
-	synchronize_irq(bus->irq);
 
 	/* disable SIE for all streams */
 	snd_hdac_chip_writeb(bus, INTCTL, 0);

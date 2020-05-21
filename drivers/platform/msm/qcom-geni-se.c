@@ -1,8 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#include <asm/dma-iommu.h>
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/ipc_logging.h>
@@ -17,7 +27,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/qcom-geni-se.h>
 #include <linux/spinlock.h>
-#include <linux/pinctrl/consumer.h>
 
 #define GENI_SE_IOMMU_VA_START	(0x40000000)
 #define GENI_SE_IOMMU_VA_SIZE	(0xC0000000)
@@ -193,10 +202,10 @@ int get_se_proto(void __iomem *base)
 EXPORT_SYMBOL(get_se_proto);
 
 /**
- * get_se_m_fw() - Read the Firmware ver for the Main sequencer engine
+ * get_se_m_fw() - Read the Firmware ver for the Main seqeuncer engine
  * @base:	Base address of the serial engine's register block.
  *
- * Return:	Firmware version for the Main sequencer engine
+ * Return:	Firmware version for the Main seqeuncer engine
  */
 int get_se_m_fw(void __iomem *base)
 {
@@ -209,10 +218,10 @@ int get_se_m_fw(void __iomem *base)
 EXPORT_SYMBOL(get_se_m_fw);
 
 /**
- * get_se_s_fw() - Read the Firmware ver for the Secondry sequencer engine
+ * get_se_s_fw() - Read the Firmware ver for the Secondry seqeuncer engine
  * @base:	Base address of the serial engine's register block.
  *
- * Return:	Firmware version for the Secondry sequencer engine
+ * Return:	Firmware version for the Secondry seqeuncer engine
  */
 int get_se_s_fw(void __iomem *base)
 {
@@ -334,16 +343,11 @@ static int geni_se_select_fifo_mode(void __iomem *base)
 			M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
 		common_geni_s_irq_en |= S_CMD_DONE_EN;
 	}
-
-	if (proto == I3C)
-		common_geni_m_irq_en |=  (M_GP_SYNC_IRQ_0_EN | M_SEC_IRQ_EN);
-
 	geni_dma_mode &= ~GENI_DMA_MODE_EN;
 
 	geni_write_reg(common_geni_m_irq_en, base, SE_GENI_M_IRQ_EN);
 	geni_write_reg(common_geni_s_irq_en, base, SE_GENI_S_IRQ_EN);
 	geni_write_reg(geni_dma_mode, base, SE_GENI_DMA_MODE_EN);
-
 	return 0;
 }
 
@@ -1043,9 +1047,8 @@ EXPORT_SYMBOL(se_geni_resources_on);
 int geni_se_resources_init(struct se_geni_rsc *rsc,
 			   unsigned long ab, unsigned long ib)
 {
-	struct geni_se_device *geni_se_dev;
 	int ret = 0;
-	const char *mode = NULL;
+	struct geni_se_device *geni_se_dev;
 
 	if (unlikely(!rsc || !rsc->wrapper_dev))
 		return -EINVAL;
@@ -1093,18 +1096,10 @@ int geni_se_resources_init(struct se_geni_rsc *rsc,
 
 	INIT_LIST_HEAD(&rsc->ab_list);
 	INIT_LIST_HEAD(&rsc->ib_list);
-
-	ret = of_property_read_string(geni_se_dev->dev->of_node,
-					"qcom,iommu-dma", &mode);
-
-	if ((ret == 0) && (strcmp(mode, "disabled") == 0)) {
-		ret = geni_se_iommu_map_and_attach(geni_se_dev);
-		if (ret)
-			GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
-				"%s: Error %d iommu_map_and_attach\n",
-					 __func__, ret);
-	}
-
+	ret = geni_se_iommu_map_and_attach(geni_se_dev);
+	if (ret)
+		GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
+			"%s: Error %d iommu_map_and_attach\n", __func__, ret);
 	return ret;
 }
 EXPORT_SYMBOL(geni_se_resources_init);
@@ -1364,6 +1359,56 @@ EXPORT_SYMBOL(geni_se_qupv3_hw_version);
 
 static int geni_se_iommu_map_and_attach(struct geni_se_device *geni_se_dev)
 {
+	dma_addr_t va_start = GENI_SE_IOMMU_VA_START;
+	size_t va_size = GENI_SE_IOMMU_VA_SIZE;
+	int bypass = 1;
+	struct device *cb_dev = geni_se_dev->cb_dev;
+
+	/*Don't proceed if IOMMU node is disabled*/
+	if (!iommu_present(&platform_bus_type))
+		return 0;
+
+	mutex_lock(&geni_se_dev->iommu_lock);
+	if (likely(geni_se_dev->iommu_map)) {
+		mutex_unlock(&geni_se_dev->iommu_lock);
+		return 0;
+	}
+
+	geni_se_dev->iommu_map = arm_iommu_create_mapping(&platform_bus_type,
+							  va_start, va_size);
+	if (IS_ERR(geni_se_dev->iommu_map)) {
+		GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
+			"%s:%s iommu_create_mapping failure\n",
+			__func__, dev_name(cb_dev));
+		mutex_unlock(&geni_se_dev->iommu_lock);
+		return PTR_ERR(geni_se_dev->iommu_map);
+	}
+
+	if (geni_se_dev->iommu_s1_bypass) {
+		if (iommu_domain_set_attr(geni_se_dev->iommu_map->domain,
+					  DOMAIN_ATTR_S1_BYPASS, &bypass)) {
+			GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
+				"%s:%s Couldn't bypass s1 translation\n",
+				__func__, dev_name(cb_dev));
+			arm_iommu_release_mapping(geni_se_dev->iommu_map);
+			geni_se_dev->iommu_map = NULL;
+			mutex_unlock(&geni_se_dev->iommu_lock);
+			return -EIO;
+		}
+	}
+
+	if (arm_iommu_attach_device(cb_dev, geni_se_dev->iommu_map)) {
+		GENI_SE_ERR(geni_se_dev->log_ctx, false, NULL,
+			"%s:%s couldn't arm_iommu_attach_device\n",
+			__func__, dev_name(cb_dev));
+		arm_iommu_release_mapping(geni_se_dev->iommu_map);
+		geni_se_dev->iommu_map = NULL;
+		mutex_unlock(&geni_se_dev->iommu_lock);
+		return -EIO;
+	}
+	mutex_unlock(&geni_se_dev->iommu_lock);
+	GENI_SE_DBG(geni_se_dev->log_ctx, false, NULL, "%s:%s successful\n",
+		    __func__, dev_name(cb_dev));
 	return 0;
 }
 
@@ -1660,9 +1705,9 @@ static struct msm_bus_scale_pdata *ab_ib_register(struct platform_device *pdev,
 out:
 	if (mem_err) {
 		for ( ; i > 0; i--)
-			devm_kfree(dev, usecase[i-1].vectors);
-		devm_kfree(dev, usecase);
-		devm_kfree(dev, pdata);
+			kfree(usecase[i-1].vectors);
+		kfree(usecase);
+		kfree(pdata);
 	}
 	return NULL;
 }
@@ -1727,7 +1772,7 @@ static int geni_se_probe(struct platform_device *pdev)
 	}
 
 	geni_se_dev->dev = dev;
-	geni_se_dev->cb_dev = dev;
+
 	ret = of_property_read_u32(dev->of_node, "qcom,msm-bus,num-paths",
 					&geni_se_dev->num_paths);
 	if (!ret) {
@@ -1805,6 +1850,10 @@ static int geni_se_remove(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct geni_se_device *geni_se_dev = dev_get_drvdata(dev);
 
+	if (likely(!IS_ERR_OR_NULL(geni_se_dev->iommu_map))) {
+		arm_iommu_detach_device(geni_se_dev->cb_dev);
+		arm_iommu_release_mapping(geni_se_dev->iommu_map);
+	}
 	ipc_log_context_destroy(geni_se_dev->log_ctx);
 	devm_iounmap(dev, geni_se_dev->base);
 	devm_kfree(dev, geni_se_dev);
@@ -1824,7 +1873,7 @@ static int __init geni_se_driver_init(void)
 {
 	return platform_driver_register(&geni_se_driver);
 }
-arch_initcall(geni_se_driver_init);
+subsys_initcall(geni_se_driver_init);
 
 static void __exit geni_se_driver_exit(void)
 {

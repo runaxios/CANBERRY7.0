@@ -1,8 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- */
-
 #ifndef _UAPI_MSM_KGSL_H
 #define _UAPI_MSM_KGSL_H
 
@@ -236,7 +231,6 @@ enum kgsl_user_mem_type {
 #define KGSL_UBWC_1_0	1
 #define KGSL_UBWC_2_0	2
 #define KGSL_UBWC_3_0	3
-#define KGSL_UBWC_4_0	4
 
 /*
  * Reset status values for context
@@ -250,6 +244,12 @@ enum kgsl_ctx_reset_stat {
 
 #define KGSL_CONVERT_TO_MBPS(val) \
 	(val*1000*1000U)
+
+/* device id */
+enum kgsl_deviceid {
+	KGSL_DEVICE_3D0		= 0x00000000,
+	KGSL_DEVICE_MAX
+};
 
 struct kgsl_devinfo {
 
@@ -337,38 +337,8 @@ enum kgsl_timestamp_type {
 #define KGSL_PROP_SECURE_CTXT_SUPPORT 0x24
 #define KGSL_PROP_SPEED_BIN		0x25
 #define KGSL_PROP_GAMING_BIN		0x26
-#define KGSL_PROP_QUERY_CAPABILITIES	0x27
 #define KGSL_PROP_CONTEXT_PROPERTY	0x28
 
-/*
- * kgsl_capabilties_properties returns a list of supported properties.
- * If the user passes 0 for 'count' the kernel will set it to the number of
- * supported properties. The list is expected to be 'count * sizeof(uint32_t)'
- * bytes long. The kernel will return the actual number of entries copied into
- * list via 'count'.
- */
-struct kgsl_capabilities_properties {
-	__u64 list;
-	__u32 count;
-};
-
-/*
- * KGSL_QUERY_CAPS_PROPERTIES returns a list of the valid properties in the
- * kernel.  The subtype data should be struct kgsl_capabilities_properties
- */
-#define KGSL_QUERY_CAPS_PROPERTIES 1
-
-/*
- * kgsl_capabilities allows the user to query kernel capabiilties. The 'data'
- * type should be set appropriately for the querytype (see above). Pass 0 to
- * 'size' and the kernel will set it to the expected size of 'data' that is
- * appropriate for querytype (in bytes).
- */
-struct kgsl_capabilities {
-	__u64 data;
-	__u64 size;
-	__u32 querytype;
-};
 
 struct kgsl_shadowprop {
 	unsigned long gpuaddr;

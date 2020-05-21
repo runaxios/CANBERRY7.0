@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #include <asm/dma-iommu.h>
 #include <linux/irq.h>
 #include <linux/kernel.h>
@@ -170,10 +176,6 @@ static int ngd_slim_qmi_new_server(struct qmi_handle *hdl,
 	qmi->svc_info.sq_family = AF_QIPCRTR;
 	qmi->svc_info.sq_node = service->node;
 	qmi->svc_info.sq_port = service->port;
-	if (dev->lpass_mem_usage) {
-		dev->lpass_mem->start = dev->lpass_phy_base;
-		dev->lpass.base = dev->lpass_virt_base;
-	}
 	atomic_set(&dev->ssr_in_progress, 0);
 	schedule_work(&dev->dsp.dom_up);
 
@@ -236,7 +238,7 @@ static void ngd_reg_ssr(struct msm_slim_ctrl *dev)
 							&dev->dsp.nb);
 	if (IS_ERR_OR_NULL(dev->dsp.domr)) {
 		dev_err(dev->dev,
-			"subsys_notif_register_notifier failed %ld\n",
+			"subsys_notif_register_notifier failed %ld",
 			PTR_ERR(dev->dsp.domr));
 		return;
 	}
@@ -405,7 +407,7 @@ static int ngd_get_tid(struct slim_controller *ctrl, struct slim_msg_txn *txn,
 				break;
 		}
 		if (i >= SLIM_MAX_TXNS) {
-			dev_err(&ctrl->dev, "out of TID\n");
+			dev_err(&ctrl->dev, "out of TID");
 			spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 			return -ENOMEM;
 		}
@@ -696,12 +698,8 @@ static int ngd_xfer_msg(struct slim_controller *ctrl, struct slim_msg_txn *txn)
 		*(puc++) = (txn->ec & 0xFF);
 		*(puc++) = (txn->ec >> 8)&0xFF;
 	}
-	if (txn->wbuf) {
-		if (dev->lpass_mem_usage)
-			memcpy_toio(puc, txn->wbuf, txn->len);
-		else
-			memcpy(puc, txn->wbuf, txn->len);
-	}
+	if (txn->wbuf)
+		memcpy(puc, txn->wbuf, txn->len);
 	if (txn->mt == SLIM_MSG_MT_DEST_REFERRED_USER &&
 		(txn->mc == SLIM_USR_MC_CONNECT_SRC ||
 		 txn->mc == SLIM_USR_MC_CONNECT_SINK ||
@@ -1621,7 +1619,7 @@ static int ngd_notify_slaves(void *data)
 
 	ret = ngd_slim_qmi_svc_event_init(&dev->qmi);
 	if (ret) {
-		pr_err("Slimbus QMI service registration failed:%d\n", ret);
+		pr_err("Slimbus QMI service registration failed:%d", ret);
 		return ret;
 	}
 
@@ -1690,9 +1688,8 @@ static void ngd_dom_up(struct work_struct *work)
 	mutex_unlock(&dev->ssr_lock);
 }
 
-static ssize_t debug_mask_show(struct device *device,
-				struct device_attribute *attr,
-				char *buf)
+static ssize_t show_mask(struct device *device, struct device_attribute *attr,
+			char *buf)
 {
 	struct platform_device *pdev = to_platform_device(device);
 	struct msm_slim_ctrl *dev = platform_get_drvdata(pdev);
@@ -1700,8 +1697,7 @@ static ssize_t debug_mask_show(struct device *device,
 	return snprintf(buf, sizeof(int), "%u\n", dev->ipc_log_mask);
 }
 
-static ssize_t debug_mask_store(struct device *device,
-			struct device_attribute *attr,
+static ssize_t set_mask(struct device *device, struct device_attribute *attr,
 			const char *buf, size_t count)
 {
 	struct platform_device *pdev = to_platform_device(device);
@@ -1713,7 +1709,7 @@ static ssize_t debug_mask_store(struct device *device,
 	return count;
 }
 
-static DEVICE_ATTR_RW(debug_mask);
+static DEVICE_ATTR(debug_mask, 0644, show_mask, set_mask);
 
 static const struct of_device_id ngd_slim_dt_match[] = {
 	{
@@ -1758,7 +1754,6 @@ static int ngd_slim_probe(struct platform_device *pdev)
 	int ret;
 	struct resource		*bam_mem;
 	struct resource		*slim_mem;
-	struct resource		*lpass_mem;
 	struct resource		*irq, *bam_irq;
 	bool			rxreg_access = false;
 	bool			slim_mdm = false;
@@ -1799,26 +1794,10 @@ static int ngd_slim_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "no memory for MSM slimbus controller\n");
 		return PTR_ERR(dev);
 	}
-
-	dev->lpass_mem_usage = false;
-	lpass_mem = platform_get_resource_byname(pdev, IORESOURCE_MEM,
-						"slimbus_lpass_mem");
-	if (lpass_mem) {
-		dev_dbg(&pdev->dev, "Slimbus lpass memory is used\n");
-		dev->lpass_mem_usage = true;
-		dev->lpass_phy_base = (unsigned long long)lpass_mem->start;
-	}
-
 	dev->wr_comp = kzalloc(sizeof(struct completion *) * MSM_TX_BUFS,
 				GFP_KERNEL);
 	if (!dev->wr_comp) {
 		ret = -ENOMEM;
-		goto err_nobulk;
-	}
-
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-	if (ret) {
-		dev_err(&pdev->dev, "could not set 32 bit DMA mask\n");
 		goto err_nobulk;
 	}
 
@@ -1868,40 +1847,25 @@ static int ngd_slim_probe(struct platform_device *pdev)
 	} else
 		dev->sysfs_created = true;
 
-	dev->base = devm_ioremap(&pdev->dev, slim_mem->start,
-					resource_size(slim_mem));
+	dev->base = ioremap(slim_mem->start, resource_size(slim_mem));
 	if (!dev->base) {
 		dev_err(&pdev->dev, "IOremap failed\n");
 		ret = -ENOMEM;
 		goto err_ioremap_failed;
 	}
-	dev->bam.base = devm_ioremap(&pdev->dev, bam_mem->start,
-					resource_size(bam_mem));
+	dev->bam.base = ioremap(bam_mem->start, resource_size(bam_mem));
 	if (!dev->bam.base) {
 		dev_err(&pdev->dev, "BAM IOremap failed\n");
 		ret = -ENOMEM;
-		goto err_ioremap_failed;
+		goto err_ioremap_bam_failed;
 	}
-
-	if (lpass_mem) {
-		dev->lpass.base = devm_ioremap(&pdev->dev, lpass_mem->start,
-					resource_size(lpass_mem));
-		if (!dev->lpass.base) {
-			dev_err(&pdev->dev, "LPASS IOremap failed\n");
-			ret = -ENOMEM;
-			goto err_ioremap_failed;
-		}
-		dev->lpass_virt_base = dev->lpass.base;
-	}
-
 	if (pdev->dev.of_node) {
 
 		ret = of_property_read_u32(pdev->dev.of_node, "cell-index",
 					&dev->ctrl.nr);
 		if (ret) {
-			dev_err(&pdev->dev,
-					"Cell index not specified:%d\n", ret);
-			goto err_ioremap_failed;
+			dev_err(&pdev->dev, "Cell index not specified:%d", ret);
+			goto err_ctrl_failed;
 		}
 		rxreg_access = of_property_read_bool(pdev->dev.of_node,
 					"qcom,rxreg-access");
@@ -1922,7 +1886,7 @@ static int ngd_slim_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_err(dev->dev, "%s: Failed to of_platform_populate %d\n",
 				__func__, ret);
-			goto err_ioremap_failed;
+			goto err_ctrl_failed;
 		}
 	} else {
 		dev->ctrl.nr = pdev->id;
@@ -1951,7 +1915,6 @@ static int ngd_slim_probe(struct platform_device *pdev)
 	dev->ctrl.port_xfer = msm_slim_port_xfer;
 	dev->ctrl.port_xfer_status = msm_slim_port_xfer_status;
 	dev->bam_mem = bam_mem;
-	dev->lpass_mem = lpass_mem;
 	dev->rx_slim = ngd_slim_rx;
 
 	init_completion(&dev->reconf);
@@ -1980,7 +1943,7 @@ static int ngd_slim_probe(struct platform_device *pdev)
 	ret = slim_add_numbered_controller(&dev->ctrl);
 	if (ret) {
 		dev_err(dev->dev, "error adding controller\n");
-		goto err_ioremap_failed;
+		goto err_ctrl_failed;
 	}
 
 	dev->ctrl.dev.parent = &pdev->dev;
@@ -2002,7 +1965,7 @@ static int ngd_slim_probe(struct platform_device *pdev)
 
 	if (ret) {
 		dev_err(&pdev->dev, "request IRQ failed\n");
-		goto err_ioremap_failed;
+		goto err_request_irq_failed;
 	}
 
 	init_completion(&dev->qmi.qmi_comp);
@@ -2018,7 +1981,7 @@ static int ngd_slim_probe(struct platform_device *pdev)
 							&dev->ext_mdm.nb);
 		if (IS_ERR_OR_NULL(dev->ext_mdm.domr))
 			dev_err(dev->dev,
-				"subsys_notif_register_notifier failed %p\n",
+				"subsys_notif_register_notifier failed %p",
 				dev->ext_mdm.domr);
 	}
 
@@ -2049,6 +2012,11 @@ err_notify_thread_create_failed:
 	kthread_stop(dev->rx_msgq_thread);
 err_rx_thread_create_failed:
 	free_irq(dev->irq, dev);
+err_request_irq_failed:
+err_ctrl_failed:
+	iounmap(dev->bam.base);
+err_ioremap_bam_failed:
+	iounmap(dev->base);
 err_ioremap_failed:
 	if (dev->sysfs_created)
 		sysfs_remove_file(&dev->dev->kobj,
@@ -2065,6 +2033,10 @@ static int ngd_slim_remove(struct platform_device *pdev)
 	struct msm_slim_ctrl *dev = platform_get_drvdata(pdev);
 
 	ngd_slim_enable(dev, false);
+	if (!IS_ERR_OR_NULL(dev->iommu_desc.iommu_map)) {
+		arm_iommu_detach_device(dev->iommu_desc.cb_dev);
+		arm_iommu_release_mapping(dev->iommu_desc.iommu_map);
+	}
 	if (dev->sysfs_created)
 		sysfs_remove_file(&dev->dev->kobj,
 				&dev_attr_debug_mask.attr);
@@ -2256,6 +2228,7 @@ static struct platform_driver ngd_slim_driver = {
 	.remove = ngd_slim_remove,
 	.driver	= {
 		.name = NGD_SLIM_NAME,
+		.owner = THIS_MODULE,
 		.pm = &ngd_slim_dev_pm_ops,
 		.of_match_table = ngd_slim_dt_match,
 	},

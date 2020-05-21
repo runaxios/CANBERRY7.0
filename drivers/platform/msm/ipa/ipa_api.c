@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/ipa.h>
@@ -14,7 +21,6 @@
 #include <linux/ipa_uc_offload.h>
 #include <linux/pci.h>
 #include "ipa_api.h"
-#include "ipa_v3/ipa_i.h"
 
 /*
  * The following for adding code (ie. for EMULATION) not found on x86.
@@ -192,23 +198,23 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 	__stringify(IPA_CLIENT_ODL_DPL_CONS),
 	__stringify(IPA_CLIENT_Q6_AUDIO_DMA_MHI_PROD),
 	__stringify(IPA_CLIENT_Q6_AUDIO_DMA_MHI_CONS),
+	__stringify(RESERVED_PROD_86),
+	__stringify(IPA_CLIENT_APPS_WAN_COAL_CONS),
 	__stringify(IPA_CLIENT_WIGIG_PROD),
 	__stringify(IPA_CLIENT_WIGIG1_CONS),
-	__stringify(RESERVERD_PROD_88),
-	__stringify(IPA_CLIENT_WIGIG2_CONS),
 	__stringify(RESERVERD_PROD_90),
-	__stringify(IPA_CLIENT_WIGIG3_CONS),
+	__stringify(IPA_CLIENT_WIGIG2_CONS),
 	__stringify(RESERVERD_PROD_92),
-	__stringify(IPA_CLIENT_WIGIG4_CONS),
+	__stringify(IPA_CLIENT_WIGIG3_CONS),
 	__stringify(RESERVERD_PROD_94),
-	__stringify(IPA_CLIENT_APPS_WAN_COAL_CONS),
+	__stringify(IPA_CLIENT_WIGIG4_CONS),
+	__stringify(IPA_CLIENT_AQC_ETHERNET_PROD),
+	__stringify(IPA_CLIENT_AQC_ETHERNET_CONS),
 	__stringify(IPA_CLIENT_MHI_PRIME_RMNET_PROD),
 	__stringify(IPA_CLIENT_MHI_PRIME_RMNET_CONS),
 	__stringify(IPA_CLIENT_MHI_PRIME_TETH_PROD),
 	__stringify(IPA_CLIENT_MHI_PRIME_TETH_CONS),
 	__stringify(IPA_CLIENT_MHI_PRIME_DPL_PROD),
-	__stringify(IPA_CLIENT_AQC_ETHERNET_PROD),
-	__stringify(IPA_CLIENT_AQC_ETHERNET_CONS),
 };
 
 /**
@@ -1999,43 +2005,6 @@ int ipa_get_wdi_stats(struct IpaHwStatsWDIInfoData_t *stats)
 EXPORT_SYMBOL(ipa_get_wdi_stats);
 
 /**
- * ipa_uc_bw_monitor() - start uc bw monitoring
- * @info:	[inout] set info populated by driver
- *
- * Returns:	0 on success, negative on failure
- *
- * @note Cannot be called from atomic context
- *
- */
-int ipa_uc_bw_monitor(struct ipa_wdi_bw_info *info)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_uc_bw_monitor, info);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_uc_bw_monitor);
-
-/**
- * ipa_set_wlan_tx_info() -set WDI statistics from uc
- * @info:	[inout] set info populated by driver
- *
- * Returns:	0 on success, negative on failure
- *
- * @note Cannot be called from atomic context
- *
- */
-int ipa_set_wlan_tx_info(struct ipa_wdi_tx_info *info)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_set_wlan_tx_info, info);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_set_wlan_tx_info);
-/**
  * ipa_get_smem_restr_bytes()- Return IPA smem restricted bytes
  *
  * Return value: u16 - number of IPA smem restricted bytes
@@ -2110,29 +2079,29 @@ int ipa_uc_reg_rdyCB(
 EXPORT_SYMBOL(ipa_uc_reg_rdyCB);
 
 /**
-* ipa_wigig_internal_init() - get uc db and register uC
+* ipa_wigig_uc_init() - get uc db and register uC
 * ready CB if uC not ready, wigig only.
 * @inout:	[in/out] uc ready input/output parameters
 * from/to client
 * @int_notify: [in] wigig misc interrupt handler function
-* @uc_db_pa: [out] uC db physical address
 *
 * Returns:	0 on success, negative on failure
 *
 */
-int ipa_wigig_internal_init(
+
+int ipa_wigig_uc_init(
 	struct ipa_wdi_uc_ready_params *inout,
 	ipa_wigig_misc_int_cb int_notify,
 	phys_addr_t *uc_db_pa)
 {
 	int ret;
 
-	IPA_API_DISPATCH_RETURN(ipa_wigig_internal_init, inout,
+	IPA_API_DISPATCH_RETURN(ipa_wigig_uc_init, inout,
 		int_notify, uc_db_pa);
 
 	return ret;
 }
-EXPORT_SYMBOL(ipa_wigig_internal_init);
+EXPORT_SYMBOL(ipa_wigig_uc_init);
 
 /**
  * ipa_uc_dereg_rdyCB() - To de-register uC ready CB
@@ -2834,18 +2803,23 @@ enum ipa_client_type ipa_get_client_mapping(int pipe_idx)
 EXPORT_SYMBOL(ipa_get_client_mapping);
 
 /**
- * ipa_get_rm_resource_from_ep() - this function is part of the deprecated
- * RM mechanism but is still used by some drivers so we kept the definition.
+ * ipa_get_rm_resource_from_ep() - get the IPA_RM resource which is related to
+ * the supplied pipe index.
+ *
+ * @pipe_idx:
+ *
+ * Return value: IPA_RM resource related to the pipe, -1 if a resource was not
+ * found.
  */
-
 enum ipa_rm_resource_name ipa_get_rm_resource_from_ep(int pipe_idx)
 {
-	IPAERR("IPA RM is not supported idx=%d\n", pipe_idx);
-	return -EFAULT;
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_get_rm_resource_from_ep, pipe_idx);
+
+	return ret;
 }
 EXPORT_SYMBOL(ipa_get_rm_resource_from_ep);
-
-
 
 /**
  * ipa_get_modem_cfg_emb_pipe_flt()- Return ipa_ctx->modem_cfg_emb_pipe_flt
@@ -3081,9 +3055,6 @@ const char *ipa_get_version_string(enum ipa_hw_type ver)
 	case IPA_HW_v4_5:
 		str = "4.5";
 		break;
-	case IPA_HW_v4_7:
-		str = "4.7";
-		break;
 	default:
 		str = "Invalid version";
 		break;
@@ -3098,7 +3069,6 @@ static const struct of_device_id ipa_plat_drv_match[] = {
 	{ .compatible = "qcom,ipa-smmu-ap-cb", },
 	{ .compatible = "qcom,ipa-smmu-wlan-cb", },
 	{ .compatible = "qcom,ipa-smmu-uc-cb", },
-	{ .compatible = "qcom,ipa-smmu-11ad-cb", },
 	{ .compatible = "qcom,smp2p-map-ipa-1-in", },
 	{ .compatible = "qcom,smp2p-map-ipa-1-out", },
 	{}
@@ -3180,7 +3150,7 @@ static int ipa_generic_plat_drv_probe(struct platform_device *pdev_p)
 			ipa_api_ctrl = 0;
 			return -ENODEV;
 		}
-		pr_debug("ipa: ipa_api_hw_type = %d\n", ipa_api_hw_type);
+		pr_debug("ipa: ipa_api_hw_type = %d", ipa_api_hw_type);
 	}
 
 	/* call probe based on IPA HW version */
@@ -3193,7 +3163,6 @@ static int ipa_generic_plat_drv_probe(struct platform_device *pdev_p)
 	case IPA_HW_v4_1:
 	case IPA_HW_v4_2:
 	case IPA_HW_v4_5:
-	case IPA_HW_v4_7:
 		result = ipa3_plat_drv_probe(pdev_p, ipa_api_ctrl,
 			ipa_plat_drv_match);
 		break;
@@ -3588,12 +3557,11 @@ EXPORT_SYMBOL(ipa_wigig_uc_msi_init);
 /**
  * ipa_conn_wigig_rx_pipe_i() - connect wigig rx pipe
  */
-int ipa_conn_wigig_rx_pipe_i(void *in, struct ipa_wigig_conn_out_params *out,
-	struct dentry **parent)
+int ipa_conn_wigig_rx_pipe_i(void *in, struct ipa_wigig_conn_out_params *out)
 {
 	int ret;
 
-	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_rx_pipe_i, in, out, parent);
+	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_rx_pipe_i, in, out);
 
 	return ret;
 }
@@ -3602,15 +3570,11 @@ EXPORT_SYMBOL(ipa_conn_wigig_rx_pipe_i);
 /**
  * ipa_conn_wigig_client_i() - connect a wigig client
  */
-int ipa_conn_wigig_client_i(void *in,
-	struct ipa_wigig_conn_out_params *out,
-	ipa_notify_cb tx_notify,
-	void *priv)
+int ipa_conn_wigig_client_i(void *in, struct ipa_wigig_conn_out_params *out)
 {
 	int ret;
 
-	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_client_i, in, out,
-		tx_notify, priv);
+	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_client_i, in, out);
 
 	return ret;
 }
@@ -3659,19 +3623,6 @@ int ipa_disable_wigig_pipe_i(enum ipa_client_type client)
 EXPORT_SYMBOL(ipa_disable_wigig_pipe_i);
 
 /**
- * ipa_get_lan_rx_napi() - returns if NAPI is enabled in LAN RX
- */
-bool ipa_get_lan_rx_napi(void)
-{
-	bool ret;
-
-	IPA_API_DISPATCH_RETURN_BOOL(ipa_get_lan_rx_napi);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_get_lan_rx_napi);
-
-/**
  * ipa_tz_unlock_reg() - Allow AP access to memory regions controlled by TZ
  */
 int ipa_tz_unlock_reg(struct ipa_tz_unlock_reg_info *reg_info, u16 num_regs)
@@ -3697,45 +3648,18 @@ void ipa_deregister_client_callback(enum ipa_client_type client)
 		client);
 }
 
-int ipa_uc_debug_stats_alloc(
-	struct IpaHwOffloadStatsAllocCmdData_t cmdinfo)
-{
-	int ret;
 
-	IPA_API_DISPATCH_RETURN(ipa_uc_debug_stats_alloc, cmdinfo);
+/**
+ * ipa_pm_is_used() - Returns if IPA PM framework is used
+ */
+bool ipa_pm_is_used(void)
+{
+	bool ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_pm_is_used);
 
 	return ret;
 }
-EXPORT_SYMBOL(ipa_uc_debug_stats_alloc);
-
-int ipa_uc_debug_stats_dealloc(uint32_t prot_id)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_uc_debug_stats_dealloc, prot_id);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_uc_debug_stats_dealloc);
-
-void ipa_get_gsi_stats(int prot_id,
-	struct ipa_uc_dbg_ring_stats *stats)
-{
-	IPA_API_DISPATCH(ipa_get_gsi_stats,
-		prot_id, stats);
-}
-EXPORT_SYMBOL(ipa_get_gsi_stats);
-
-int ipa_get_prot_id(enum ipa_client_type client)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_get_prot_id,
-		client);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_get_prot_id);
 
 static const struct dev_pm_ops ipa_pm_ops = {
 	.suspend_noirq = ipa_ap_suspend,
@@ -3746,6 +3670,7 @@ static struct platform_driver ipa_plat_drv = {
 	.probe = ipa_generic_plat_drv_probe,
 	.driver = {
 		.name = DRV_NAME,
+		.owner = THIS_MODULE,
 		.pm = &ipa_pm_ops,
 		.of_match_table = ipa_plat_drv_match,
 	},
@@ -3781,7 +3706,7 @@ static int ipa_pci_probe(
 			ipa_api_ctrl = NULL;
 			return -ENODEV;
 		}
-		pr_debug("ipa: ipa_api_hw_type = %d\n", ipa_api_hw_type);
+		pr_debug("ipa: ipa_api_hw_type = %d", ipa_api_hw_type);
 	}
 
 	/*

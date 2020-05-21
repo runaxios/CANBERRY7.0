@@ -1,7 +1,7 @@
 /* drivers/misc/uid_sys_stats.c
  *
  * Copyright (C) 2014 - 2015 Google, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -158,7 +158,7 @@ static void get_full_task_comm(struct task_entry *task_entry,
 	int i = 0, offset = 0, len = 0;
 	/* save one byte for terminating null character */
 	int unused_len = MAX_TASK_COMM_LEN - TASK_COMM_LEN - 1;
-	char buf[MAX_TASK_COMM_LEN - TASK_COMM_LEN - 1];
+	char buf[unused_len];
 	struct mm_struct *mm = task->mm;
 
 	/* fill the first TASK_COMM_LEN bytes with thread name */
@@ -434,7 +434,7 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 		u64 total_stime = uid_entry->stime +
 							uid_entry->active_stime;
 		seq_printf(m, "%d: %llu %llu\n", uid_entry->uid,
-			ktime_to_us(total_utime), ktime_to_us(total_stime));
+			ktime_to_ms(total_utime), ktime_to_ms(total_stime));
 	}
 
 	rt_mutex_unlock(&uid_lock);

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/ipa.h>
@@ -636,13 +643,14 @@ int ipa3_uc_mhi_init_engine(struct ipa_mhi_msi_info *msi, u32 mmio_addr,
 	}
 
 	mem.size = sizeof(*init_cmd_data);
-	mem.base = dma_zalloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
+	mem.base = dma_alloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
 		GFP_KERNEL);
 	if (!mem.base) {
 		IPAERR("fail to alloc DMA buff of size %d\n", mem.size);
 		res = -ENOMEM;
 		goto disable_clks;
 	}
+	memset(mem.base, 0, mem.size);
 	init_cmd_data = (struct IpaHwMhiInitCmdData_t *)mem.base;
 	init_cmd_data->msiAddress = msi->addr_low;
 	init_cmd_data->mmioBaseAddress = mmio_addr;

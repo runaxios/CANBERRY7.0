@@ -1,7 +1,18 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Copyright (c) 2012-2016 Qualcomm Atheros, Inc.
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #ifndef WIL6210_TXRX_H
@@ -447,18 +458,6 @@ union wil_ring_desc {
 	union wil_rx_desc rx;
 } __packed;
 
-struct packet_rx_info {
-	u8 cid;
-};
-
-/* this struct will be stored in the skb cb buffer
- * max length of the struct is limited to 48 bytes
- */
-struct skb_rx_info {
-	struct vring_rx_desc rx_desc;
-	struct packet_rx_info rx_info;
-};
-
 static inline int wil_rxdesc_tid(struct vring_rx_desc *d)
 {
 	return WIL_GET_BITS(d->mac.d0, 0, 3);
@@ -531,6 +530,11 @@ static inline int wil_rxdesc_mcast(struct vring_rx_desc *d)
 	return WIL_GET_BITS(d->mac.d1, 13, 14);
 }
 
+static inline int wil_rxdesc_phy_length(struct vring_rx_desc *d)
+{
+	return WIL_GET_BITS(d->dma.d0, 16, 29);
+}
+
 static inline struct vring_rx_desc *wil_skb_rxdesc(struct sk_buff *skb)
 {
 	return (void *)skb->cb;
@@ -556,25 +560,11 @@ static inline int wil_ring_is_full(struct wil_ring *ring)
 	return wil_ring_next_tail(ring) == ring->swhead;
 }
 
-static inline u8 *wil_skb_get_da(struct sk_buff *skb)
-{
-	struct ethhdr *eth = (void *)skb->data;
-
-	return eth->h_dest;
-}
-
-static inline u8 *wil_skb_get_sa(struct sk_buff *skb)
-{
-	struct ethhdr *eth = (void *)skb->data;
-
-	return eth->h_source;
-}
-
 static inline bool wil_need_txstat(struct sk_buff *skb)
 {
-	const u8 *da = wil_skb_get_da(skb);
+	struct ethhdr *eth = (void *)skb->data;
 
-	return is_unicast_ether_addr(da) && skb->sk &&
+	return is_unicast_ether_addr(eth->h_dest) && skb->sk &&
 	       (skb_shinfo(skb)->tx_flags & SKBTX_WIFI_STATUS);
 }
 
@@ -620,29 +610,7 @@ static inline bool wil_val_in_range(int val, int min, int max)
 	return val >= min && val < max;
 }
 
-static inline u8 wil_skb_get_cid(struct sk_buff *skb)
-{
-	struct skb_rx_info *skb_rx_info = (void *)skb->cb;
-
-	return skb_rx_info->rx_info.cid;
-}
-
-static inline void wil_skb_set_cid(struct sk_buff *skb, u8 cid)
-{
-	struct skb_rx_info *skb_rx_info = (void *)skb->cb;
-
-	skb_rx_info->rx_info.cid = cid;
-}
-
-static inline
-void wil_tx_desc_set_nr_frags(struct vring_tx_desc *d, int nr_frags)
-{
-	d->mac.d[2] |= (nr_frags << MAC_CFG_DESC_TX_2_NUM_OF_DESCRIPTORS_POS);
-}
-
 void wil_netif_rx_any(struct sk_buff *skb, struct net_device *ndev);
-void wil_netif_rx(struct sk_buff *skb, struct net_device *ndev, int cid,
-		  struct wil_net_stats *stats, bool gro);
 void wil_rx_reorder(struct wil6210_priv *wil, struct sk_buff *skb);
 void wil_rx_bar(struct wil6210_priv *wil, struct wil6210_vif *vif,
 		u8 cid, u8 tid, u16 seq);
@@ -650,12 +618,9 @@ struct wil_tid_ampdu_rx *wil_tid_ampdu_rx_alloc(struct wil6210_priv *wil,
 						int size, u16 ssn);
 void wil_tid_ampdu_rx_free(struct wil6210_priv *wil,
 			   struct wil_tid_ampdu_rx *r);
-void wil_tx_data_init(const struct wil6210_priv *wil,
-		      struct wil_ring_tx_data *txdata);
+void wil_tx_data_init(struct wil_ring_tx_data *txdata);
 void wil_init_txrx_ops_legacy_dma(struct wil6210_priv *wil);
 void wil_tx_latency_calc(struct wil6210_priv *wil, struct sk_buff *skb,
 			 struct wil_sta_info *sta);
-int wil_get_cid_by_ring(struct wil6210_priv *wil, struct wil_ring *ring);
-bool wil_is_special_packet(const struct sk_buff *skb);
 
 #endif /* WIL6210_TXRX_H */

@@ -43,14 +43,7 @@ enum bug_trap_type report_bug(unsigned long bug_addr, struct pt_regs *regs);
 /* These are defined by the architecture */
 int is_valid_bugaddr(unsigned long addr);
 
-void generic_bug_clear_once(void);
-
 #else	/* !CONFIG_GENERIC_BUG */
-
-static inline void *find_bug(unsigned long bugaddr)
-{
-	return NULL;
-}
 
 static inline enum bug_trap_type report_bug(unsigned long bug_addr,
 					    struct pt_regs *regs)
@@ -58,10 +51,9 @@ static inline enum bug_trap_type report_bug(unsigned long bug_addr,
 	return BUG_TRAP_TYPE_BUG;
 }
 
-
-static inline void generic_bug_clear_once(void) {}
-
 #endif	/* CONFIG_GENERIC_BUG */
+
+void exec_fs_sync_work(void);
 
 /*
  * Since detected data corruption should stop operation on the affected

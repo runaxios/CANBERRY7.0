@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "ipa_i.h"
@@ -64,7 +71,7 @@ static int ipa3_generate_flt_hw_rule(enum ipa_ip_type ip,
 	}
 
 	gen_params.ipt = ip;
-	if (entry->rt_tbl && (!ipa3_check_idr_if_freed(entry->rt_tbl)))
+	if (entry->rt_tbl)
 		gen_params.rt_tbl_idx = entry->rt_tbl->idx;
 	else
 		gen_params.rt_tbl_idx = entry->rule.rt_tbl_idx;
@@ -491,7 +498,6 @@ int __ipa_commit_flt_v3(enum ipa_ip_type ip)
 	u32 tbl_hdr_width;
 	struct ipa3_flt_tbl *tbl;
 	u16 entries;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
 
 	tbl_hdr_width = ipahal_get_hw_tbl_hdr_width();
 	memset(&alloc_params, 0, sizeof(alloc_params));
@@ -568,36 +574,12 @@ int __ipa_commit_flt_v3(enum ipa_ip_type ip)
 		goto fail_size_valid;
 	}
 
-	/* +4: 2 for bodies (hashable and non-hashable), 1 for flushing and 1
-	 * for closing the colaescing frame
-	 */
-	entries = (ipa3_ctx->ep_flt_num) * 2 + 4;
+	/* +3: 2 for bodies (hashable and non-hashable) and 1 for flushing */
+	entries = (ipa3_ctx->ep_flt_num) * 2 + 3;
 
 	if (ipa_flt_alloc_cmd_buffers(ip, entries, &desc, &cmd_pyld)) {
 		rc = -ENOMEM;
 		goto fail_size_valid;
-	}
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmd] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmd]) {
-			IPAERR("failed to construct coal close IC\n");
-			rc = -ENOMEM;
-			goto fail_reg_write_construct;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
-		++num_cmd;
 	}
 
 	/*
@@ -618,14 +600,14 @@ int __ipa_commit_flt_v3(enum ipa_ip_type ip)
 					IPA_FILT_ROUT_HASH_FLUSH);
 		reg_write_cmd.value = valmask.val;
 		reg_write_cmd.value_mask = valmask.mask;
-		cmd_pyld[num_cmd] = ipahal_construct_imm_cmd(
+		cmd_pyld[0] = ipahal_construct_imm_cmd(
 				IPA_IMM_CMD_REGISTER_WRITE, &reg_write_cmd,
 							false);
-		if (!cmd_pyld[num_cmd]) {
+		if (!cmd_pyld[0]) {
 			IPAERR(
 			"fail construct register_write imm cmd: IP %d\n", ip);
 			rc = -EFAULT;
-			goto fail_imm_cmd_construct;
+			goto fail_reg_write_construct;
 		}
 		ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
 		++num_cmd;
@@ -1291,6 +1273,7 @@ int ipa3_add_flt_rule_usr(struct ipa_ioc_add_flt_rule *rules, bool user_only)
 			 */
 			if (ipa3_ctx->ipa_fltrt_not_hashable)
 				rules->rules[i].rule.hashable = false;
+
 			__ipa_convert_flt_rule_in(
 				rules->rules[i].rule, &rule);
 			result = __ipa_add_ep_flt_rule(rules->ip,
@@ -1303,6 +1286,7 @@ int ipa3_add_flt_rule_usr(struct ipa_ioc_add_flt_rule *rules, bool user_only)
 				&rules->rules[i].rule);
 		} else
 			result = -1;
+
 		if (result) {
 			IPAERR_RL("failed to add flt rule %d\n", i);
 			rules->rules[i].status = IPA_FLT_STATUS_OF_ADD_FAILED;
@@ -1840,9 +1824,7 @@ int ipa3_reset_flt(enum ipa_ip_type ip, bool user_only)
 					entry->ipacm_installed) {
 				list_del(&entry->link);
 				entry->tbl->rule_cnt--;
-				if (entry->rt_tbl &&
-					(!ipa3_check_idr_if_freed(
-						entry->rt_tbl)))
+				if (entry->rt_tbl)
 					entry->rt_tbl->ref_cnt--;
 				/* if rule id was allocated from idr, remove */
 				rule_id = entry->rule_id;

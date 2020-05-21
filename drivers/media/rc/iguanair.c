@@ -347,23 +347,26 @@ static int iguanair_set_tx_mask(struct rc_dev *dev, uint32_t mask)
 static int iguanair_tx(struct rc_dev *dev, unsigned *txbuf, unsigned count)
 {
 	struct iguanair *ir = dev->priv;
-	unsigned int i, size, p, periods;
+	uint8_t space;
+	unsigned i, size, periods, bytes;
 	int rc;
 
 	mutex_lock(&ir->lock);
 
 	/* convert from us to carrier periods */
-	for (i = size = 0; i < count; i++) {
+	for (i = space = size = 0; i < count; i++) {
 		periods = DIV_ROUND_CLOSEST(txbuf[i] * ir->carrier, 1000000);
+		bytes = DIV_ROUND_UP(periods, 127);
+		if (size + bytes > ir->bufsize) {
+			rc = -EINVAL;
+			goto out;
+		}
 		while (periods) {
-			p = min(periods, 127u);
-			if (size >= ir->bufsize) {
-				rc = -EINVAL;
-				goto out;
-			}
-			ir->packet->payload[size++] = p | ((i & 1) ? 0x80 : 0);
+			unsigned p = min(periods, 127u);
+			ir->packet->payload[size++] = p | space;
 			periods -= p;
 		}
+		space ^= 0x80;
 	}
 
 	ir->packet->header.start = 0;
@@ -424,10 +427,6 @@ static int iguanair_probe(struct usb_interface *intf,
 	int ret, pipein, pipeout;
 	struct usb_host_interface *idesc;
 
-	idesc = intf->altsetting;
-	if (idesc->desc.bNumEndpoints < 2)
-		return -ENODEV;
-
 	ir = kzalloc(sizeof(*ir), GFP_KERNEL);
 	rc = rc_allocate_device(RC_DRIVER_IR_RAW);
 	if (!ir || !rc) {
@@ -442,10 +441,15 @@ static int iguanair_probe(struct usb_interface *intf,
 	ir->urb_in = usb_alloc_urb(0, GFP_KERNEL);
 	ir->urb_out = usb_alloc_urb(0, GFP_KERNEL);
 
-	if (!ir->buf_in || !ir->packet || !ir->urb_in || !ir->urb_out ||
-	    !usb_endpoint_is_int_in(&idesc->endpoint[0].desc) ||
-	    !usb_endpoint_is_int_out(&idesc->endpoint[1].desc)) {
+	if (!ir->buf_in || !ir->packet || !ir->urb_in || !ir->urb_out) {
 		ret = -ENOMEM;
+		goto out;
+	}
+
+	idesc = intf->altsetting;
+
+	if (idesc->desc.bNumEndpoints < 2) {
+		ret = -ENODEV;
 		goto out;
 	}
 

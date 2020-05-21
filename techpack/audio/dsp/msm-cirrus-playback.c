@@ -1,4 +1,5 @@
 /* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License version 2 and
 * only version 2 as published by the Free Software Foundation.
@@ -47,7 +48,6 @@
 #include "../asoc/msm-pcm-routing-v2.h"
 #include <dsp/q6audio-v2.h>
 #include <dsp/q6afe-v2.h>
-#include <dsp/q6adm-v2.h>
 #include <dsp/q6common.h>
 #include <dsp/apr_audio-v2.h>
 #include <dsp/msm-cirrus-playback.h>
@@ -70,18 +70,15 @@
 static struct crus_sp_ioctl_header crus_sp_hdr;
 
 static struct crus_control_t this_ctrl = {
-	.fb_port_index = 2,
-	.fb_port = AFE_PORT_ID_TERTIARY_MI2S_TX,
-	.ff_port = AFE_PORT_ID_TERTIARY_MI2S_RX,
+	.fb_port_index = 3,
+	.fb_port = AFE_PORT_ID_QUATERNARY_MI2S_TX,
+	.ff_port = AFE_PORT_ID_QUATERNARY_MI2S_RX,
 	.usecase_dt_count = MAX_TUNING_CONFIGS,
 	.ch_sw_duration = 30,
 	.ch_sw = 0,
 	.vol_atten = 0,
 	.prot_en = false,
 	.q6afe_rev = 3, // V3 as default
-	.copp_rev = 6, // V3 as default
-	.afe_ena = false,
-	.copp_ena = true,
 };
 
 
@@ -184,8 +181,8 @@ static void *crus_gen_afe_set_header(int length, int port, int module,
 	return (void *)config;
 }
 
-static int crus_afe_get_param_v2(int port, int module, int param,
-		void *data, int length)
+static int crus_afe_get_param(int port, int module, int param, int length,
+			      void *data)
 {
 	struct afe_custom_crus_get_config_v2_t *config = NULL;
 	int index = afe_get_port_index(port);
@@ -232,8 +229,10 @@ exit:
 	return ret;
 }
 
-static int crus_afe_set_param_v2(int port, int module, int param,
-		void *data_ptr, int length)
+
+
+static int crus_afe_set_param(int port, int module, int param, int length,
+			      void *data_ptr)
 {
 	struct afe_custom_crus_set_config_v2_t *config = NULL;
 	int index = afe_get_port_index(port);
@@ -262,12 +261,12 @@ static int crus_afe_set_param_v2(int port, int module, int param,
 
 
 static int crus_afe_get_param_v3(int port, int module_id,
-		int param_id, void *data, uint32_t length)
+		int param_id, uint32_t length, void *data)
 {
 	struct afe_port_cmd_get_param_v3 afe_get_param;
 	struct param_hdr_v3 param_hdr;
-	u16 port_id = 0;
-	int index = 0;
+    u16 port_id = 0;
+    int index = 0;
 	int ret = 0;
 
 	pr_info("%s: port=0x%x, module=0x%x, param_id=0x%x, size=%d\n",
@@ -308,7 +307,7 @@ static int crus_afe_get_param_v3(int port, int module_id,
 	atomic_set(&this_ctrl.callback_wait, 0);
 	this_ctrl.user_buffer = kzalloc(length + 64,
 								GFP_KERNEL);
-	atomic_set(cspl_afe.status, 0);
+    atomic_set(cspl_afe.status, 0);
 	ret = apr_send_pkt(*cspl_afe.apr, (uint32_t *) &afe_get_param);
 	if (ret < 0) {
 		pr_err("%s: Setting param for port %d param[0x%x]failed\n",
@@ -319,7 +318,7 @@ static int crus_afe_get_param_v3(int port, int module_id,
 	while(!atomic_read(&this_ctrl.callback_wait))
 		msleep(1);
 
-#if 0 
+#if 0
 	for (index = 0; index < length; index ++)
 		pr_info("[%d]=%d\n", index, this_ctrl.user_buffer[index]);
 
@@ -338,37 +337,37 @@ fail_cmd:
 }
 
 static int crus_afe_set_param_v3(int port, int module_id,
-		int param_id, void *data, uint32_t length)
+		int param_id, uint32_t length, void *data)
 {
 	struct afe_port_cmd_set_param_v3 *set_param = NULL;
 	uint32_t set_param_size = sizeof(struct afe_port_cmd_set_param_v3);
-	struct param_hdr_v3 param_hdr;
-	u16 port_id = 0;
-	int index = 0;
-	u8 *packed_param_data = NULL;
+    struct param_hdr_v3 param_hdr;
+    u16 port_id = 0;
+    int index = 0;
+    u8 *packed_param_data = NULL;
 	int packed_data_size = sizeof(union param_hdrs) + length;
 	int ret = 0;
 
 	pr_info("%s: port=0x%x, module=0x%x, param_id=0x%x, size=%d\n",
 				__func__, port, module_id, param_id, length);
 
-	port_id = q6audio_get_port_id(port);
+    port_id = q6audio_get_port_id(port);
 	ret = q6audio_validate_port(port_id);
 	if (ret < 0) {
 		pr_err("%s: Not a valid port id = 0x%x ret %d\n", __func__,
 		       port_id, ret);
 		return -EINVAL;
 	}
-	index = q6audio_get_port_index(port);
+    index = q6audio_get_port_index(port);
 
-	memset(&param_hdr, 0, sizeof(param_hdr));
-	param_hdr.module_id = module_id;
+    memset(&param_hdr, 0, sizeof(param_hdr));
+    param_hdr.module_id = module_id;
 	param_hdr.instance_id = INSTANCE_ID_0;
 	param_hdr.param_id = param_id;
 	param_hdr.param_size = length;
 	pr_debug("CRUS: param_size %d\n", length);
 
-	packed_param_data = kzalloc(packed_data_size, GFP_KERNEL);
+    packed_param_data = kzalloc(packed_data_size, GFP_KERNEL);
 	if (packed_param_data == NULL)
 		return -ENOMEM;
 
@@ -380,8 +379,8 @@ static int crus_afe_set_param_v3(int port, int module_id,
 		goto fail_cmd;
 	}
 
-	set_param_size += packed_data_size;
-	set_param = kzalloc(set_param_size, GFP_KERNEL);
+    set_param_size += packed_data_size;
+    set_param = kzalloc(set_param_size, GFP_KERNEL);
 	if (set_param == NULL) {
 		ret = -ENOMEM;
 		goto fail_cmd;
@@ -401,7 +400,7 @@ static int crus_afe_set_param_v3(int port, int module_id,
 	memcpy(&set_param->param_data, packed_param_data,
 		       packed_data_size);
 
-	atomic_set(cspl_afe.state, 1);
+    atomic_set(cspl_afe.state, 1);
     //atomic_set(&this_ctrl.callback_wait, 0);
 	ret = apr_send_pkt(*cspl_afe.apr, (uint32_t *) set_param);
 	if (ret < 0) {
@@ -434,67 +433,6 @@ fail_cmd:
 	return ret;
 }
 
-static int crus_get_param(int port_id, int module_id, int param_id,
-		void *data_ptr, int length)
-{
-	if(this_ctrl.afe_ena) {
-		switch(this_ctrl.q6afe_rev) {
-			case 2:
-				crus_afe_get_param_v2(port_id, module_id,
-						param_id, data_ptr, length);
-				break;
-			case 3:
-				crus_afe_get_param_v3(port_id, module_id,
-						param_id, data_ptr, length);
-				break;
-			default:
-				break;
-		}
-	} else if (this_ctrl.copp_ena) {
-		switch(this_ctrl.copp_rev) {
-			case 5:
-			case 6:
-				crus_adm_get_params(port_id, 0, module_id,
-						param_id, data_ptr, length, 0);
-				break;
-			default:
-				break;
-		}
-	} else {
-	}
-	return 0;
-}
-static int crus_set_param(int port_id, int module_id, int param_id,
-		void *data_ptr, int length)
-{
-	if(this_ctrl.afe_ena) {
-		switch(this_ctrl.q6afe_rev) {
-			case 2:
-				crus_afe_set_param_v2(port_id, module_id,
-						param_id, data_ptr, length);
-				break;
-			case 3:
-				crus_afe_set_param_v3(port_id, module_id,
-						param_id, data_ptr, length);
-				break;
-			default:
-				break;
-		}
-	} else if (this_ctrl.copp_ena) {
-		switch(this_ctrl.copp_rev) {
-			case 5:
-			case 6:
-				crus_adm_set_params(port_id, 0, module_id,
-						param_id, data_ptr, length);
-				break;
-			default:
-				break;
-		}
-	} else {
-	}
-
-	return 0;
-}
 static int crus_afe_send_config(const char *data, int32_t length,
 				int32_t port, int32_t module)
 {
@@ -738,9 +676,12 @@ static int msm_routing_crus_sp_usecase_put(struct snd_kcontrol *kcontrol,
 		return -EINVAL;
 	}
 
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_GET_TEMP, buffer,
-			CRUS_MAX_BUFFER_SIZE);
+	if(this_ctrl.q6afe_rev == 2)
+		crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
+	else
+		crus_afe_get_param_v3(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
 
 	memcpy(&rx_temp, buffer, sizeof(rx_temp));
 
@@ -756,16 +697,30 @@ static int msm_routing_crus_sp_usecase_put(struct snd_kcontrol *kcontrol,
 	case_ctrl.value = this_ctrl.usecase;
 
 	if (this_ctrl.prot_en) {
-		crus_set_param(this_ctrl.fb_port, CIRRUS_SP,
+		if(this_ctrl.q6afe_rev == 2) {
+			crus_afe_set_param(this_ctrl.fb_port, CIRRUS_SP,
 					   CRUS_PARAM_TX_SET_USECASE,
-					   (void *)&this_ctrl.usecase,
-					   sizeof(this_ctrl.usecase));
+					   sizeof(this_ctrl.usecase),
+					   (void *)&this_ctrl.usecase);
+		} else {
+			crus_afe_set_param_v3(this_ctrl.fb_port, CIRRUS_SP,
+					   CRUS_PARAM_TX_SET_USECASE,
+					   sizeof(this_ctrl.usecase),
+					   (void *)&this_ctrl.usecase);
+		}
 	}
 
 
-	crus_set_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_SET_USECASE, (void *)&case_ctrl,
-			sizeof(case_ctrl));
+
+	if(this_ctrl.q6afe_rev == 2) {
+		crus_afe_set_param(this_ctrl.ff_port, CIRRUS_SP,
+			   CRUS_PARAM_RX_SET_USECASE, sizeof(case_ctrl),
+			   (void *)&case_ctrl);
+	} else {
+		crus_afe_set_param_v3(this_ctrl.ff_port, CIRRUS_SP,
+			   CRUS_PARAM_RX_SET_USECASE, sizeof(case_ctrl),
+			   (void *)&case_ctrl);
+	}
 
 	return 0;
 }
@@ -782,7 +737,7 @@ static int msm_routing_crus_sp_usecase_get(struct snd_kcontrol *kcontrol,
 static int msm_routing_crus_load_config_put(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *plat = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_platform *plat = snd_soc_kcontrol_platform(kcontrol);
 	const int crus_set = ucontrol->value.integer.value[0];
 	char config[CONFIG_FILE_SIZE];
 	const struct firmware *firmware;
@@ -846,7 +801,7 @@ static int msm_routing_crus_load_config_get(struct snd_kcontrol *kcontrol,
 static int msm_routing_crus_delta_config_put(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *plat = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_platform *plat = snd_soc_kcontrol_platform(kcontrol);
 	struct crus_single_data_t data;
 	const int crus_set = ucontrol->value.integer.value[0];
 	const struct firmware *firmware;
@@ -872,9 +827,9 @@ static int msm_routing_crus_delta_config_put(struct snd_kcontrol *kcontrol,
 	case 2: /* Run delta transition */
 		this_ctrl.delta_sel = crus_set;
 		data.value = 0;
-		crus_set_param(this_ctrl.ff_port, CIRRUS_SP,
-				   CRUS_PARAM_RX_RUN_DELTA_CONFIG, &data,
-				   sizeof(struct crus_single_data_t));
+		crus_afe_set_param(this_ctrl.ff_port, CIRRUS_SP,
+				   CRUS_PARAM_RX_RUN_DELTA_CONFIG,
+				   sizeof(struct crus_single_data_t), &data);
 		break;
 	default:
 		return -EINVAL;
@@ -918,9 +873,15 @@ static int msm_routing_crus_vol_attn_put(struct snd_kcontrol *kcontrol,
 			return -EINVAL;
 	}
 
-	crus_set_param(this_ctrl.ff_port, CIRRUS_SP,
-				CRUS_PARAM_RX_SET_ATTENUATION, &data,
-				sizeof(struct crus_dual_data_t));
+	if(this_ctrl.q6afe_rev == 2) {
+		crus_afe_set_param(this_ctrl.ff_port, CIRRUS_SP,
+							CRUS_PARAM_RX_SET_ATTENUATION,
+							sizeof(struct crus_dual_data_t), &data);
+	} else {
+		crus_afe_set_param_v3(this_ctrl.ff_port, CIRRUS_SP,
+							CRUS_PARAM_RX_SET_ATTENUATION,
+							sizeof(struct crus_dual_data_t), &data);
+	}
 
 	mutex_unlock(&this_ctrl.sp_lock);
 
@@ -960,9 +921,14 @@ static int msm_routing_crus_chan_swap_put(struct snd_kcontrol *kcontrol,
 
 	this_ctrl.ch_sw = crus_set;
 
-	crus_set_param(this_ctrl.ff_port, CIRRUS_SP,
-				CRUS_PARAM_RX_CHANNEL_SWAP, &data,
-				sizeof(struct crus_dual_data_t));
+	if(this_ctrl.q6afe_rev == 2)
+		crus_afe_set_param(this_ctrl.ff_port, CIRRUS_SP,
+					CRUS_PARAM_RX_CHANNEL_SWAP,
+					sizeof(struct crus_dual_data_t), &data);
+	else
+		crus_afe_set_param_v3(this_ctrl.ff_port, CIRRUS_SP,
+					CRUS_PARAM_RX_CHANNEL_SWAP,
+					sizeof(struct crus_dual_data_t), &data);
 
 	mutex_unlock(&this_ctrl.sp_lock);
 
@@ -974,9 +940,9 @@ static int msm_routing_crus_chan_swap_get(struct snd_kcontrol *kcontrol,
 {
 	struct crus_single_data_t data;
 	pr_debug("%s: %d\n", __func__, this_ctrl.ch_sw);
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			   CRUS_PARAM_RX_GET_CHANNEL_SWAP, &data,
-			   sizeof(struct crus_single_data_t));
+	crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP,
+			   CRUS_PARAM_RX_GET_CHANNEL_SWAP,
+			   sizeof(struct crus_single_data_t), &data);
 
 	ucontrol->value.integer.value[0] = this_ctrl.ch_sw;
 
@@ -1130,7 +1096,7 @@ static const struct snd_kcontrol_new crus_no_protect_controls[] = {
 	msm_routing_crus_vol_attn_get, msm_routing_crus_vol_attn_put),
 };
 
-void msm_crus_pb_add_controls(struct snd_soc_component *component)
+void msm_crus_pb_add_controls(struct snd_soc_platform *platform)
 {
 	if (this_ctrl.usecase_dt_count == 0)
 		pr_info("CRUS_SP: Usecase config not specified\n");
@@ -1139,10 +1105,10 @@ void msm_crus_pb_add_controls(struct snd_soc_component *component)
 	crus_sp_usecase_enum[0].texts = crus_sp_usecase_dt_text;
 
 	if (this_ctrl.prot_en)
-		snd_soc_add_component_controls(component, crus_protect_controls,
+		snd_soc_add_platform_controls(platform, crus_protect_controls,
 					ARRAY_SIZE(crus_protect_controls));
 	else
-		snd_soc_add_component_controls(component,
+		snd_soc_add_platform_controls(platform,
 					      crus_no_protect_controls,
 					ARRAY_SIZE(crus_no_protect_controls));
 }
@@ -1151,8 +1117,9 @@ EXPORT_SYMBOL(msm_crus_pb_add_controls);
 int crus_afe_port_start(u16 port_id)
 {
 	pr_info("%s: 0x%x\n", __func__, port_id);
-#if 0
+
 //CSPL do not be involved in AFE
+#if 0
 	struct snd_kcontrol kcontrol;
 	struct snd_ctl_elem_value ucontrol;
 
@@ -1175,8 +1142,9 @@ EXPORT_SYMBOL(crus_afe_port_start);
 int crus_afe_port_close(u16 port_id)
 {
 	pr_info("%s: 0x%x\n", __func__, port_id);
-#if 0
+
 //CSPL do not be involved in AFE
+#if 0
 	if (port_id != this_ctrl.ff_port)
 		return 0;
 
@@ -1186,7 +1154,6 @@ int crus_afe_port_close(u16 port_id)
 	return 0;
 }
 EXPORT_SYMBOL(crus_afe_port_close);
-
 static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 				 void __user *arg)
 {
@@ -1226,9 +1193,12 @@ static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 				crus_sp_hdr.module_id);
 			port = this_ctrl.ff_port;
 		}
-
-		crus_get_param(port, CIRRUS_SP, crus_sp_hdr.param_id,
-				io_data, bufsize);
+		if(this_ctrl.q6afe_rev == 2)
+			crus_afe_get_param(port, CIRRUS_SP, crus_sp_hdr.param_id,
+				   bufsize, io_data);
+		else
+			crus_afe_get_param_v3(port, CIRRUS_SP, crus_sp_hdr.param_id,
+				   bufsize, io_data);
 		result = copy_to_user(crus_sp_hdr.data, io_data, bufsize);
 		if (result) {
 			pr_err("CRUS_SP: copy_to_user failed (%d)\n", result);
@@ -1258,8 +1228,13 @@ static long crus_sp_shared_ioctl(struct file *f, unsigned int cmd,
 			port = this_ctrl.ff_port;
 		}
 
-		crus_set_param(port, CIRRUS_SP,
-			crus_sp_hdr.param_id, io_data, bufsize);
+		if(this_ctrl.q6afe_rev == 2) {
+			crus_afe_set_param(port, CIRRUS_SP,
+					crus_sp_hdr.param_id, bufsize, io_data);
+		} else {
+			crus_afe_set_param_v3(port, CIRRUS_SP,
+					crus_sp_hdr.param_id, bufsize, io_data);
+		}
 	break;
 
 	default:
@@ -1330,9 +1305,8 @@ static ssize_t temperature_left_show(struct device *dev,
 	int z, r, t;
 	int temp0;
 
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_GET_TEMP, buffer,
-			CRUS_MAX_BUFFER_SIZE);
+	crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
 
 	memcpy(&rx_temp, buffer, sizeof(rx_temp));
 
@@ -1366,9 +1340,8 @@ static ssize_t temperature_right_show(struct device *dev,
 	int z, r, t;
 	int temp0;
 
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_GET_TEMP, buffer,
-			CRUS_MAX_BUFFER_SIZE);
+	crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
 
 	memcpy(&rx_temp, buffer, sizeof(rx_temp));
 
@@ -1401,9 +1374,8 @@ static ssize_t resistance_left_show(struct device *dev,
 	int out_cal1;
 	int r;
 
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_GET_TEMP, buffer,
-			CRUS_MAX_BUFFER_SIZE);
+	crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
 
 	memcpy(&rx_temp, buffer, sizeof(rx_temp));
 
@@ -1431,9 +1403,8 @@ static ssize_t resistance_right_show(struct device *dev,
 	int out_cal1;
 	int r;
 
-	crus_get_param(this_ctrl.ff_port, CIRRUS_SP,
-			CRUS_PARAM_RX_GET_TEMP, buffer,
-			CRUS_MAX_BUFFER_SIZE);
+	crus_afe_get_param(this_ctrl.ff_port, CIRRUS_SP, CRUS_PARAM_RX_GET_TEMP,
+			   CRUS_MAX_BUFFER_SIZE, buffer);
 
 	memcpy(&rx_temp, buffer, sizeof(rx_temp));
 

@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 /*
@@ -29,6 +37,9 @@
  *
  */
 
+
+/* Uncomment the line below to enable debug messages */
+/* #define DEBUG 1 */
 #define pr_fmt(fmt)	"pfk [%s]: " fmt, __func__
 
 #include <linux/module.h>
@@ -70,13 +81,13 @@ typedef bool (*pfk_allow_merge_bio_type)(const struct bio *bio1,
 	const struct inode *inode2);
 
 static const pfk_parse_inode_type pfk_parse_inode_ftable[] = {
-	&pfk_ext4_parse_inode, /* EXT4_CRYPT_PFE */
-	&pfk_f2fs_parse_inode, /* F2FS_CRYPT_PFE */
+	/* EXT4_CRYPT_PFE */ &pfk_ext4_parse_inode,
+    /* F2FS_CRYPT_PFE */ &pfk_f2fs_parse_inode,
 };
 
 static const pfk_allow_merge_bio_type pfk_allow_merge_bio_ftable[] = {
-	&pfk_ext4_allow_merge_bio, /* EXT4_CRYPT_PFE */
-	&pfk_f2fs_allow_merge_bio, /* F2FS_CRYPT_PFE */
+	/* EXT4_CRYPT_PFE */ &pfk_ext4_allow_merge_bio,
+    /* F2FS_CRYPT_PFE */ &pfk_f2fs_allow_merge_bio,
 };
 
 static void __exit pfk_exit(void)
@@ -89,6 +100,7 @@ static void __exit pfk_exit(void)
 
 static int __init pfk_init(void)
 {
+
 	int ret = 0;
 
 	ret = pfk_ext4_init();
@@ -99,8 +111,16 @@ static int __init pfk_init(void)
 	if (ret != 0)
 		goto fail;
 
+	ret = pfk_kc_init();
+	if (ret != 0) {
+		pr_err("could init pfk key cache, error %d\n", ret);
+		pfk_ext4_deinit();
+		pfk_f2fs_deinit();
+		goto fail;
+	}
+
 	pfk_ready = true;
-	pr_debug("Driver initialized successfully\n");
+	pr_info("Driver initialized successfully\n");
 
 	return 0;
 
@@ -316,6 +336,7 @@ static int pfk_get_key_for_bio(const struct bio *bio,
 	return 0;
 }
 
+
 /**
  * pfk_load_key_start() - loads PFE encryption key to the ICE
  *			  Can also be invoked from non
@@ -335,7 +356,7 @@ static int pfk_get_key_for_bio(const struct bio *bio,
  * Must be followed by pfk_load_key_end when key is no longer used by ice
  *
  */
-int pfk_load_key_start(const struct bio *bio, struct ice_device *ice_dev,
+int pfk_load_key_start(const struct bio *bio,
 		struct ice_crypto_setting *ice_setting, bool *is_pfe,
 		bool async)
 {
@@ -378,7 +399,7 @@ int pfk_load_key_start(const struct bio *bio, struct ice_device *ice_dev,
 
 	ret = pfk_kc_load_key_start(key_info.key, key_info.key_size,
 			key_info.salt, key_info.salt_size, &key_index, async,
-			data_unit, ice_dev);
+			data_unit);
 	if (ret) {
 		if (ret != -EBUSY && ret != -EAGAIN)
 			pr_err("start: could not load key into pfk key cache, error %d\n",
@@ -410,8 +431,7 @@ int pfk_load_key_start(const struct bio *bio, struct ice_device *ice_dev,
  * @is_pfe: Pointer to is_pfe flag, which will be true if function was invoked
  *			from PFE context
  */
-int pfk_load_key_end(const struct bio *bio, struct ice_device *ice_dev,
-			bool *is_pfe)
+int pfk_load_key_end(const struct bio *bio, bool *is_pfe)
 {
 	int ret = 0;
 	struct pfk_key_info key_info = {NULL, NULL, 0, 0};
@@ -435,7 +455,7 @@ int pfk_load_key_end(const struct bio *bio, struct ice_device *ice_dev,
 		return ret;
 
 	pfk_kc_load_key_end(key_info.key, key_info.key_size,
-		key_info.salt, key_info.salt_size, ice_dev);
+		key_info.salt, key_info.salt_size);
 
 	pr_debug("finished using key for file %s\n",
 		inode_to_filename(pfk_bio_get_inode(bio)));
@@ -467,6 +487,11 @@ bool pfk_allow_merge_bio(const struct bio *bio1, const struct bio *bio2)
 	enum pfe_type which_pfe1;
 	enum pfe_type which_pfe2;
 
+#ifdef CONFIG_DM_DEFAULT_KEY
+	key1 = bio1->bi_crypt_key;
+	key2 = bio2->bi_crypt_key;
+#endif
+
 	if (!pfk_is_ready())
 		return false;
 
@@ -476,10 +501,8 @@ bool pfk_allow_merge_bio(const struct bio *bio1, const struct bio *bio2)
 	if (bio1 == bio2)
 		return true;
 
-#ifdef CONFIG_DM_DEFAULT_KEY
 	key1 = bio1->bi_crypt_key;
 	key2 = bio2->bi_crypt_key;
-#endif
 
 	inode1 = pfk_bio_get_inode(bio1);
 	inode2 = pfk_bio_get_inode(bio2);
@@ -529,22 +552,12 @@ int pfk_fbe_clear_key(const unsigned char *key, size_t key_size,
  * is lost in ICE. We need to flash the cache, so that the keys will be
  * reconfigured again for every subsequent transaction
  */
-void pfk_clear_on_reset(struct ice_device *ice_dev)
+void pfk_clear_on_reset(void)
 {
 	if (!pfk_is_ready())
 		return;
 
-	pfk_kc_clear_on_reset(ice_dev);
-}
-
-int pfk_remove(struct ice_device *ice_dev)
-{
-	return pfk_kc_clear(ice_dev);
-}
-
-int pfk_initialize_key_table(struct ice_device *ice_dev)
-{
-	return pfk_kc_initialize_key_table(ice_dev);
+	pfk_kc_clear_on_reset();
 }
 
 module_init(pfk_init);

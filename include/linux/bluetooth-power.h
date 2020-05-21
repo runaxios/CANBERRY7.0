@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef __LINUX_BLUETOOTH_POWER_H
@@ -52,35 +61,11 @@ struct bluetooth_power_platform_data {
 	int bt_gpio_sys_rst;
 	struct device *slim_dev;
 	/* VDDIO voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_io;
-	/* VDD_PA voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_pa;
-	/* VDD_LDOIN voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_ldo;
-	/* VDD_XTAL voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_xtal;
-	/* VDD_CORE voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_core;
-	/* VDD_AON digital voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_aon;
-	/* VDD_DIG digital voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_dig;
-	/* VDD RFA1 digital voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_rfa1;
-	/* VDD RFA2 digital voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_rfa2;
-	/* VDD ASD digital voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_asd;
-	/* Optional: chip power down gpio-regulator
-	 * chip power down data is required when bluetooth module
-	 * and other modules like wifi co-exist in a single chip and
-	 * shares a common gpio to bring chip out of reset.
-	 */
-	struct bt_power_vreg_data *bt_chip_pwd;
+	struct bt_power_vreg_data *vreg_info;
 	/* bluetooth reference clock */
 	struct bt_power_clk_data *bt_chip_clk;
 	/* Optional: Bluetooth power setup function */
-	int (*bt_power_setup)(int id);
+	int (*bt_power_setup)(int);
 };
 
 int bt_register_slimdev(struct device *dev);

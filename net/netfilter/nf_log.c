@@ -394,6 +394,22 @@ static const struct seq_operations nflog_seq_ops = {
 	.stop	= seq_stop,
 	.show	= seq_show,
 };
+
+static int nflog_open(struct inode *inode, struct file *file)
+{
+	return seq_open_net(inode, file, &nflog_seq_ops,
+			    sizeof(struct seq_net_private));
+}
+
+static const struct file_operations nflog_file_ops = {
+	.owner	 = THIS_MODULE,
+	.open	 = nflog_open,
+	.read	 = seq_read,
+	.llseek	 = seq_lseek,
+	.release = seq_release_net,
+};
+
+
 #endif /* PROC_FS */
 
 #ifdef CONFIG_SYSCTL
@@ -541,8 +557,8 @@ static int __net_init nf_log_net_init(struct net *net)
 	int ret = -ENOMEM;
 
 #ifdef CONFIG_PROC_FS
-	if (!proc_create_net("nf_log", 0444, net->nf.proc_netfilter,
-			&nflog_seq_ops, sizeof(struct seq_net_private)))
+	if (!proc_create("nf_log", S_IRUGO,
+			 net->nf.proc_netfilter, &nflog_file_ops))
 		return ret;
 #endif
 	ret = netfilter_log_sysctl_init(net);

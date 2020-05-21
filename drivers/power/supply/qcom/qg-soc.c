@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"QG-K: %s: " fmt, __func__
@@ -26,25 +33,9 @@
 #define FULL_SOC				100
 
 static int qg_delta_soc_interval_ms = 20000;
-static ssize_t soc_interval_ms_show(struct device *dev, struct device_attribute
-				     *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n", qg_delta_soc_interval_ms);
-}
-
-static ssize_t soc_interval_ms_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int val;
-
-	if (kstrtos32(buf, 0, &val))
-		return -EINVAL;
-
-	qg_delta_soc_interval_ms = val;
-
-	return count;
-}
-DEVICE_ATTR_RW(soc_interval_ms);
+module_param_named(
+	soc_interval_ms, qg_delta_soc_interval_ms, int, 0600
+);
 
 static int qg_fvss_delta_soc_interval_ms = 10000;
 module_param_named(
@@ -52,46 +43,14 @@ module_param_named(
 );
 
 static int qg_delta_soc_cold_interval_ms = 4000;
-static ssize_t soc_cold_interval_ms_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n", qg_delta_soc_cold_interval_ms);
-}
-
-static ssize_t soc_cold_interval_ms_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int val;
-
-	if (kstrtos32(buf, 0, &val))
-		return -EINVAL;
-
-	qg_delta_soc_cold_interval_ms = val;
-
-	return count;
-}
-DEVICE_ATTR_RW(soc_cold_interval_ms);
+module_param_named(
+	soc_cold_interval_ms, qg_delta_soc_cold_interval_ms, int, 0600
+);
 
 static int qg_maint_soc_update_ms = 120000;
-static ssize_t maint_soc_update_ms_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n", qg_maint_soc_update_ms);
-}
-
-static ssize_t maint_soc_update_ms_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int val;
-
-	if (kstrtos32(buf, 0, &val))
-		return -EINVAL;
-
-	qg_maint_soc_update_ms = val;
-
-	return count;
-}
-DEVICE_ATTR_RW(maint_soc_update_ms);
+module_param_named(
+	maint_soc_update_ms, qg_maint_soc_update_ms, int, 0600
+);
 
 /* FVSS scaling only based on VBAT */
 static int qg_fvss_vbat_scaling = 1;
@@ -105,7 +64,7 @@ static int qg_process_fvss_soc(struct qpnp_qg *chip, int sys_soc)
 	int soc_vbat = 0, wt_vbat = 0, wt_sys = 0, soc_fvss = 0;
 
 	if (!chip->dt.fvss_enable)
-		goto exit_soc_scale;
+		return 0;
 
 	if (chip->charge_status == POWER_SUPPLY_STATUS_CHARGING)
 		goto exit_soc_scale;
@@ -171,103 +130,6 @@ exit_soc_scale:
 	return sys_soc;
 }
 
-#define IBAT_HYST_PC			10
-#define TCSS_ENTRY_COUNT		2
-static int qg_process_tcss_soc(struct qpnp_qg *chip, int sys_soc)
-{
-	int rc, ibatt_diff = 0, ibat_inc_hyst = 0;
-	int qg_iterm_ua = (-1 * chip->dt.iterm_ma * 1000);
-	int soc_ibat, wt_ibat, wt_sys;
-	union power_supply_propval prop = {0, };
-
-	if (!chip->dt.tcss_enable)
-		goto exit_soc_scale;
-
-	if (chip->sys_soc < (chip->dt.tcss_entry_soc * 100))
-		goto exit_soc_scale;
-
-	if (chip->sys_soc >= QG_MAX_SOC && chip->soc_tcss >= QG_MAX_SOC)
-		goto exit_soc_scale;
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_HEALTH, &prop);
-	if (!rc && (prop.intval == POWER_SUPPLY_HEALTH_COOL ||
-			prop.intval == POWER_SUPPLY_HEALTH_WARM))
-		goto exit_soc_scale;
-
-	if (chip->last_fifo_i_ua >= 0)
-		goto exit_soc_scale;
-	else if (++chip->tcss_entry_count < TCSS_ENTRY_COUNT)
-		goto skip_entry_count;
-
-	if (!chip->tcss_active) {
-		chip->soc_tcss = sys_soc;
-		chip->soc_tcss_entry = sys_soc;
-		chip->ibat_tcss_entry = min(chip->last_fifo_i_ua, qg_iterm_ua);
-		chip->prev_fifo_i_ua = chip->last_fifo_i_ua;
-		chip->tcss_active = true;
-	}
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_INPUT_CURRENT_LIMITED, &prop);
-	if (!rc && prop.intval) {
-		qg_dbg(chip, QG_DEBUG_SOC,
-			"Input limited sys_soc=%d soc_tcss=%d\n",
-					sys_soc, chip->soc_tcss);
-		if (chip->soc_tcss > sys_soc)
-			sys_soc = chip->soc_tcss;
-		goto exit_soc_scale;
-	}
-
-	ibatt_diff = chip->last_fifo_i_ua - chip->prev_fifo_i_ua;
-	if (ibatt_diff > 0) {
-		/*
-		 * if the battery charge current has suddendly dropped, allow it
-		 * to decrease only by a small fraction to avoid a SOC jump.
-		 */
-		ibat_inc_hyst = (chip->prev_fifo_i_ua * IBAT_HYST_PC) / 100;
-		if (ibatt_diff > abs(ibat_inc_hyst))
-			chip->prev_fifo_i_ua -= ibat_inc_hyst;
-		else
-			chip->prev_fifo_i_ua = chip->last_fifo_i_ua;
-	}
-
-	chip->prev_fifo_i_ua = min(chip->prev_fifo_i_ua, qg_iterm_ua);
-	soc_ibat = qg_linear_interpolate(chip->soc_tcss_entry,
-					chip->ibat_tcss_entry,
-					QG_MAX_SOC,
-					qg_iterm_ua,
-					chip->prev_fifo_i_ua);
-	soc_ibat = CAP(QG_MIN_SOC, QG_MAX_SOC, soc_ibat);
-
-	wt_ibat = qg_linear_interpolate(1, chip->soc_tcss_entry,
-					10000, 10000, soc_ibat);
-	wt_ibat = CAP(QG_MIN_SOC, QG_MAX_SOC, wt_ibat);
-	wt_sys = 10000 - wt_ibat;
-
-	chip->soc_tcss = DIV_ROUND_CLOSEST((soc_ibat * wt_ibat) +
-					(wt_sys * sys_soc), 10000);
-	chip->soc_tcss = CAP(QG_MIN_SOC, QG_MAX_SOC, chip->soc_tcss);
-
-	qg_dbg(chip, QG_DEBUG_SOC,
-		"TCSS: fifo_i=%d prev_fifo_i=%d ibatt_tcss_entry=%d qg_term=%d soc_tcss_entry=%d sys_soc=%d soc_ibat=%d wt_ibat=%d wt_sys=%d soc_tcss=%d\n",
-			chip->last_fifo_i_ua, chip->prev_fifo_i_ua,
-			chip->ibat_tcss_entry, qg_iterm_ua,
-			chip->soc_tcss_entry, sys_soc, soc_ibat,
-			wt_ibat, wt_sys, chip->soc_tcss);
-
-	return chip->soc_tcss;
-
-exit_soc_scale:
-	chip->tcss_entry_count = 0;
-skip_entry_count:
-	chip->tcss_active = false;
-	qg_dbg(chip, QG_DEBUG_SOC, "TCSS: Quit - enabled=%d sys_soc=%d tcss_entry_count=%d fifo_i_ua=%d\n",
-			chip->dt.tcss_enable, sys_soc, chip->tcss_entry_count,
-			chip->last_fifo_i_ua);
-	return sys_soc;
-}
-
 int qg_adjust_sys_soc(struct qpnp_qg *chip)
 {
 	int soc, vbat_uv, rc;
@@ -275,9 +137,7 @@ int qg_adjust_sys_soc(struct qpnp_qg *chip)
 
 	chip->sys_soc = CAP(QG_MIN_SOC, QG_MAX_SOC, chip->sys_soc);
 
-	chip->sys_soc = qg_process_tcss_soc(chip, chip->sys_soc);
-
-	if (chip->sys_soc <= 50) { /* 0.5% */
+	if (chip->sys_soc < 100) {
 		/* Hold SOC to 1% of VBAT has not dropped below cutoff */
 		rc = qg_get_battery_voltage(chip, &vbat_uv);
 		if (!rc && vbat_uv >= (vcutoff_uv + VBAT_LOW_HYST_UV))
@@ -405,7 +265,7 @@ static bool maint_soc_timeout(struct qpnp_qg *chip)
 
 static void update_msoc(struct qpnp_qg *chip)
 {
-	int rc = 0, sdam_soc, batt_temp = 0;
+	int rc = 0, sdam_soc, batt_temp = 0,  batt_soc_32bit = 0;
 	bool input_present = is_input_present(chip);
 
 	if (chip->catch_up_soc > chip->msoc) {
@@ -444,8 +304,11 @@ static void update_msoc(struct qpnp_qg *chip)
 		rc = qg_get_battery_temp(chip, &batt_temp);
 		if (rc < 0) {
 			pr_err("Failed to read BATT_TEMP rc=%d\n", rc);
-		} else if (chip->batt_soc >= 0) {
-			cap_learning_update(chip->cl, batt_temp, chip->batt_soc,
+		} else {
+			batt_soc_32bit = div64_u64(
+						chip->batt_soc * BATT_SOC_32BIT,
+						QG_SOC_FULL);
+			cap_learning_update(chip->cl, batt_temp, batt_soc_32bit,
 					chip->charge_status, chip->charge_done,
 					input_present, false);
 		}

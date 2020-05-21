@@ -575,9 +575,8 @@ static int read_domain_devices(struct acpi_power_meter_resource *resource)
 	if (!pss->package.count)
 		goto end;
 
-	resource->domain_devices = kcalloc(pss->package.count,
-					   sizeof(struct acpi_device *),
-					   GFP_KERNEL);
+	resource->domain_devices = kzalloc(sizeof(struct acpi_device *) *
+					   pss->package.count, GFP_KERNEL);
 	if (!resource->domain_devices) {
 		res = -ENOMEM;
 		goto end;
@@ -694,8 +693,8 @@ static int setup_attrs(struct acpi_power_meter_resource *resource)
 
 	if (resource->caps.flags & POWER_METER_CAN_CAP) {
 		if (!can_cap_in_hardware()) {
-			dev_warn(&resource->acpi_dev->dev,
-				 "Ignoring unsafe software power cap!\n");
+			dev_err(&resource->acpi_dev->dev,
+				"Ignoring unsafe software power cap!\n");
 			goto skip_unsafe_cap;
 		}
 
@@ -797,7 +796,7 @@ static int read_capabilities(struct acpi_power_meter_resource *resource)
 			goto error;
 		}
 
-		*str = kcalloc(element->string.length + 1, sizeof(u8),
+		*str = kzalloc(sizeof(u8) * (element->string.length + 1),
 			       GFP_KERNEL);
 		if (!*str) {
 			res = -ENOMEM;

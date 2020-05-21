@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1999-2002 Vojtech Pavlik
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
@@ -46,7 +46,7 @@ enum {
 	TOUCH_IS_RELEASED,
 };
 
-struct tp_touch_event {
+struct touch_event {
 	struct timespec touch_time_stamp;
 	u32 touch_state;
 	__s32 finger_num;
@@ -57,7 +57,10 @@ struct touch_event_info {
 	u32 touch_slot;
 	u32 finger_bitmap;
 	bool touch_is_pressed;
-	struct tp_touch_event touch_event_buf[TOUCH_EVENT_MAX];
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+	unsigned long long click_num;
+#endif
+	struct touch_event touch_event_buf[TOUCH_EVENT_MAX];
 };
 #endif
 
@@ -219,6 +222,7 @@ struct input_dev {
 	struct touch_event_info *touch_events;
 #endif
 };
+
 #define to_input_dev(d) container_of(d, struct input_dev, dev)
 
 /*
@@ -571,5 +575,75 @@ int input_ff_flush(struct input_dev *dev, struct file *file);
 
 int input_ff_create_memless(struct input_dev *dev, void *data,
 		int (*play_effect)(struct input_dev *, void *, struct ff_effect *));
+
+#define active_tp_setup(vendor)\
+static char vendor##active_touch[512] = {0};\
+int __init vendor##_active_tp_setup(char *str)\
+{\
+	char *temp;\
+	pr_debug("%s, str = [%s]", __func__, str);\
+	temp = strnstr(str, "=", strlen(str));\
+	if (temp == NULL) {\
+		return 0;\
+	} \
+	pr_debug("%s, temp = [%s]", __func__, temp);\
+	temp++;\
+	if (strlen(vendor##active_touch) > 0) {\
+		strlcat(vendor##active_touch, ";", \
+			strlen(vendor##active_touch));\
+	} \
+	snprintf(vendor##active_touch + strlen(vendor##active_touch), \
+		sizeof(vendor##active_touch) - strlen(vendor##active_touch),\
+		"%s", temp);\
+	pr_debug("%s, active_touch = [%s]", __func__, \
+		vendor##active_touch);\
+	return 0;\
+} \
+__setup("touch", vendor##_active_tp_setup);\
+\
+int vendor##_check_assigned_tp(struct device_node *dt,\
+	const char *str_comp, const char *str_act)\
+{\
+	const char *active_tp;\
+	const char *tp_compatible;\
+	char *temp;\
+	int ret = 0;	\
+	pr_debug("%s:active_touch = %s\n", __func__, vendor##active_touch);\
+	ret = of_property_read_string(dt, str_comp, &tp_compatible);\
+	if (ret < 0) {\
+		pr_err(" %s:fail to read %s %d\n", \
+			__func__, "compatible", ret);\
+		goto exit;\
+	} \
+	if (strlen(vendor##active_touch) > 0) {\
+		temp = strnstr(vendor##active_touch, tp_compatible, \
+			strlen(vendor##active_touch));\
+		if (temp == NULL) {\
+			pr_err(" %s:para not match, %s, %s\n", __func__, \
+			tp_compatible, vendor##active_touch);\
+			ret = -1;\
+			goto exit;\
+		} \
+	} else {\
+		ret = of_property_read_string(dt->parent,\
+			str_act, &active_tp);\
+		if (ret < 0) {\
+			pr_err(" %s:not dedicated active tp\n", __func__);\
+			ret = 0;\
+			goto exit;\
+		} else {\
+			temp = strnstr(active_tp, tp_compatible, \
+				strlen(active_tp));\
+			if (temp == NULL) {\
+				pr_err(" %s:no match compatible, %s, %s\n", \
+				__func__, tp_compatible, active_tp);\
+				ret = -1;\
+				goto exit;\
+			} \
+		} \
+	} \
+exit:\
+	return ret;\
+}
 
 #endif

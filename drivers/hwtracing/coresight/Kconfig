@@ -32,17 +32,6 @@ config CORESIGHT_LINK_AND_SINK_TMC
 	  complies with the generic implementation of the component without
 	  special enhancement or added features.
 
-config CORESIGHT_CATU
-	bool "Coresight Address Translation Unit (CATU) driver"
-	depends on CORESIGHT_LINK_AND_SINK_TMC
-	help
-	   Enable support for the Coresight Address Translation Unit (CATU).
-	   CATU supports a scatter gather table of 4K pages, with forward/backward
-	   lookup. CATU helps TMC ETR to use a large physically non-contiguous trace
-	   buffer by translating the addresses used by ETR to the physical address
-	   by looking up the provided table. CATU can also be used in pass-through
-	   mode where the address is not translated.
-
 config CORESIGHT_SINK_TPIU
 	bool "Coresight generic TPIU driver"
 	depends on CORESIGHT_LINKS_AND_SINKS
@@ -123,25 +112,13 @@ config CORESIGHT_CTI
 	  hardware component to another. It can also be used to pass
 	  software generated events.
 
-config CORESIGHT_CTI_SAVE_DISABLE
-	bool "Turn off CTI save and restore"
-	depends on CORESIGHT_CTI
-	help
-	  Turns off CoreSight CTI save and restore support for cpu CTIs. This
-	  avoids voting for the clocks during probe as well as the associated
-	  save and restore latency at the cost of breaking cpu CTI support on
-	  targets where cpu CTIs have to be preserved across power collapse.
-
-	  If unsure, say 'N' here to avoid breaking cpu CTI support.
-
 config CORESIGHT_OST
 	bool "CoreSight OST framework"
 	depends on CORESIGHT_STM
 	help
 	  This driver enables the support for Open System Trace packets in STM.
 	  This is primarily intended to be used as a layer on top of underlying
-	  physical byte transport mechanisms.The additional header can be used
-	  to provide more information.
+	  physical byte transport mechanisms.
 
 config CORESIGHT_TPDA
 	bool "CoreSight Trace, Profiling & Diagnostics Aggregator driver"
@@ -170,14 +147,6 @@ config CORESIGHT_TPDM_DEFAULT_ENABLE
 	  If unsure, say 'N' here to avoid potential power and performance
 	  penalty.
 
-config CORESIGHT_CSR
-	bool "CoreSight Slave Register driver"
-	help
-	  This driver provides support for CoreSight Slave Register block
-	  that hosts miscellaneous configuration registers.
-	  Those configuration registers can be used to control, various
-	  coresight configurations.
-
 config CORESIGHT_HWEVENT
 	bool "CoreSight Hardware Event driver"
 	depends on CORESIGHT_STM
@@ -191,10 +160,9 @@ config CORESIGHT_HWEVENT
 config CORESIGHT_DUMMY
 	bool "Dummy driver support"
 	help
-	  Enables support for dummy driver. Dummy driver can be	used for
-	  CoreSight sources/sinks that are owned and configured by some
-	  other subsystem and use Linux drivers to configure rest of trace
-	  path.
+	  Enables support for dummy driver. Dummy driver can be
+	  used for CoreSight sources/sinks that are owned and configured by some other
+	  subsystem and use Linux drivers to configure rest of trace path.
 
 config CORESIGHT_REMOTE_ETM
 	bool "Remote processor ETM trace support"
@@ -208,10 +176,17 @@ config CORESIGHT_REMOTE_ETM
 config CORESIGHT_REMOTE_ETM_DEFAULT_ENABLE
 	int "default enable ETM for Remote processor based on instance id"
 	depends on CORESIGHT_REMOTE_ETM
-	default 0
 	help
 	  Support for enabling separated Remote processor ETM tracing. Depends
 	  on if instance id bit is set.
+
+config CORESIGHT_CSR
+	bool "CoreSight Slave Register driver"
+	help
+	  This driver provides support for CoreSight Slave Register block
+	  that hosts miscellaneous configuration registers.
+	  Those configuration registers can be used to control, various
+	  coresight configurations.
 
 config CORESIGHT_TGU
 	bool "CoreSight Trigger Generation Unit driver"
@@ -224,12 +199,11 @@ config CORESIGHT_TGU
 	  provide a trigger point for centering data around a specific event
 	  within the trace data buffer.
 
-config CORESIGHT_LINK_LATE_DISABLE
-	bool "Disable CoreSight link after sink is disabled"
-	depends on CORESIGHT_LINKS_AND_SINKS
-	help
-	  CoreSight link won't be disabled until the sink of trace path is
-	  disabled. Otherwise, link is disabled when it's not active. Enable
-	  this when some CoreSight source holds trace data after disabled.
-	  This data will be flushed out when CoreSight sink is disabled.
+config CORESIGHT_EVENT
+        tristate "CoreSight Event driver"
+        help
+          This driver provides support for registering with various events
+          and performing CoreSight actions like aborting trace on their
+          occurrence. These events can be controlled by using module
+          parameters.
 endif

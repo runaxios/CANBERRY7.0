@@ -2,7 +2,6 @@
  *  arch/arm/include/asm/cacheflush.h
  *
  *  Copyright (C) 1999-2002 Russell King
- *  Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -36,7 +35,7 @@
  *	Start addresses are inclusive and end addresses are exclusive;
  *	start addresses should be rounded down, end addresses up.
  *
- *	See Documentation/core-api/cachetlb.rst for more information.
+ *	See Documentation/cachetlb.txt for more information.
  *	Please note that the implementation of these, and the required
  *	effects are cache-type (VIVT/VIPT/PIPT) specific.
  *
@@ -179,10 +178,26 @@ extern void __cpuc_flush_dcache_area(void *, size_t);
  * is visible to DMA, or data written by DMA to system memory is
  * visible to the CPU.
  */
+extern void __dma_map_area(const void *addr, size_t size, int dir);
+extern void __dma_unmap_area(const void *addr, size_t size, int dir);
 extern void dmac_inv_range(const void *start, const void *end);
 extern void dmac_clean_range(const void *start, const void *end);
-extern void dmac_flush_range(const void *, const void *);
+extern void dmac_flush_range(const void *start, const void *end);
 
+static inline void __dma_inv_area(const void *start, size_t len)
+{
+	dmac_inv_range(start, start + len);
+}
+
+static inline void __dma_clean_area(const void *start, size_t len)
+{
+	dmac_clean_range(start, start + len);
+}
+
+static inline void __dma_flush_area(const void *start, size_t len)
+{
+	dmac_flush_range(start, start + len);
+}
 #endif
 
 /*
@@ -340,8 +355,10 @@ static inline void flush_anon_page(struct vm_area_struct *vma,
 #define ARCH_HAS_FLUSH_KERNEL_DCACHE_PAGE
 extern void flush_kernel_dcache_page(struct page *);
 
-#define flush_dcache_mmap_lock(mapping)		xa_lock_irq(&mapping->i_pages)
-#define flush_dcache_mmap_unlock(mapping)	xa_unlock_irq(&mapping->i_pages)
+#define flush_dcache_mmap_lock(mapping) \
+	spin_lock_irq(&(mapping)->tree_lock)
+#define flush_dcache_mmap_unlock(mapping) \
+	spin_unlock_irq(&(mapping)->tree_lock)
 
 #define flush_icache_user_range(vma,page,addr,len) \
 	flush_dcache_page(page)

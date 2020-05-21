@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _IPA_H_
@@ -13,9 +20,6 @@
 #include "linux/msm_gsi.h"
 
 #define IPA_APPS_MAX_BW_IN_MBPS 700
-#define IPA_BW_THRESHOLD_MAX 3
-
-#define IPA_MAX_CH_STATS_SUPPORTED 5
 /**
  * enum ipa_transport_type
  * transport type: either GSI or SPS
@@ -504,13 +508,10 @@ typedef void (*ipa_notify_cb)(void *priv, enum ipa_dp_evt_type evt,
  *			use ipa_get_wdi_sap_stats structure
  * @IPA_SET_WIFI_QUOTA: set quota limit on STA -
  *			use ipa_set_wifi_quota structure
- * @IPA_SET_WLAN_BW: set wlan BW -
- *			use ipa_set_wlan_bw structure
  */
 enum ipa_wdi_meter_evt_type {
 	IPA_GET_WDI_SAP_STATS,
 	IPA_SET_WIFI_QUOTA,
-	IPA_INFORM_WLAN_BW,
 };
 
 struct ipa_get_wdi_sap_stats {
@@ -544,19 +545,6 @@ struct ipa_set_wifi_quota {
 	uint8_t  set_quota;
 	/* indicate valid quota set from wlan-fw */
 	uint8_t set_valid;
-};
-
-/**
- * struct ipa_inform_wlan_bw - structure used for
- *                                   IPA_INFORM_WLAN_BW.
- *
- * @index:       Indicate which bw-index hit
- * @throughput:  throughput usage
- *
- */
-struct ipa_inform_wlan_bw {
-	uint8_t  index;
-	uint64_t throughput;
 };
 
 typedef void (*ipa_wdi_meter_notifier_cb)(enum ipa_wdi_meter_evt_type evt,
@@ -817,20 +805,6 @@ struct ipa_rx_data {
 };
 
 /**
- * struct  ipa_rx_page_data - information needed
- * to send to wlan driver on receiving data from ipa hw
- * @page: skb page
- * @dma_addr: DMA address of this Rx packet
- * @is_tmp_alloc: skb page from tmp_alloc or recycle_list
- */
-struct ipa_rx_page_data {
-	struct page *page;
-	dma_addr_t dma_addr;
-	bool is_tmp_alloc;
-};
-
-
-/**
  * enum ipa_irq_type - IPA Interrupt Type
  * Used to register handlers for IPA interrupts
  *
@@ -912,33 +886,6 @@ struct IpaHwBamStats_t {
 } __packed;
 
 /**
- * struct IpaOffloadStatschannel_info - channel info for uC
- * stats
- * @dir: Direction of the channel ID DIR_CONSUMER =0,
- * DIR_PRODUCER = 1
- * @ch_id: GSI ch_id of the IPA endpoint for which stats need
- * to be calculated, 0xFF means invalid channel or disable stats
- * on already stats enabled channel
- */
-struct IpaOffloadStatschannel_info {
-	u8 dir;
-	u8 ch_id;
-} __packed;
-
-/**
- * struct IpaHwOffloadStatsAllocCmdData_t - protocol info for uC
- * stats start
- * @protocol: Enum that indicates the protocol type
- * @ch_id_info: GSI ch_id and dir of the IPA endpoint for which stats
- * need to be calculated
- */
-struct IpaHwOffloadStatsAllocCmdData_t {
-	u32 protocol;
-	struct IpaOffloadStatschannel_info
-		ch_id_info[IPA_MAX_CH_STATS_SUPPORTED];
-} __packed;
-
-/**
  * struct IpaHwRingStats_t - Structure holding the Ring statistics
  *
  * @ringFull : Number of times Transfer Ring got full - For In Ch: Good,
@@ -957,17 +904,6 @@ struct IpaHwRingStats_t {
 	u32 ringUsageLow;
 	u32 RingUtilCount;
 } __packed;
-
-/**
- * struct ipa_uc_dbg_ring_stats - uC dbg stats info for each
- * offloading protocol
- * @ring: ring stats for each channel
- * @ch_num: number of ch supported for given protocol
- */
-struct ipa_uc_dbg_ring_stats {
-	struct IpaHwRingStats_t ring[IPA_MAX_CH_STATS_SUPPORTED];
-	u8 num_ch;
-};
 
 /**
  * struct IpaHwStatsWDIRxInfoData_t - Structure holding the WDI Rx channel
@@ -1211,32 +1147,6 @@ struct ipa_wdi_buffer_info {
 };
 
 /**
- * struct  ipa_wdi_bw_info - address info of a WLAN allocated buffer
- * @threshold: throughput wants to be monitored
- * @num: number of threshold entries
- * @stop: true to stop monitoring
- *
- * IPA driver will create/release IOMMU mapping in IPA SMMU from iova->pa
- */
-struct ipa_wdi_bw_info {
-	uint64_t threshold[IPA_BW_THRESHOLD_MAX];
-	int num;
-	bool stop;
-};
-
-/**
- * struct  ipa_wdi_tx_info - sw tx info from WLAN
- * @sta_tx: sw tx stats on sta interface
- * @ap_tx: sw tx stats on ap interface
- *
- * IPA driver will create/release IOMMU mapping in IPA SMMU from iova->pa
- */
-struct ipa_wdi_tx_info {
-	uint64_t sta_tx;
-	uint64_t ap_tx;
-};
-
-/**
  * struct ipa_gsi_ep_config - IPA GSI endpoint configurations
  *
  * @ipa_ep_num: IPA EP pipe number
@@ -1276,7 +1186,6 @@ struct ipa_tz_unlock_reg_info {
 enum ipa_smmu_client_type {
 	IPA_SMMU_WLAN_CLIENT,
 	IPA_SMMU_AP_CLIENT,
-	IPA_SMMU_WIGIG_CLIENT,
 	IPA_SMMU_CLIENT_MAX
 };
 
@@ -1286,12 +1195,10 @@ struct ipa_smmu_in_params {
 
 /**
  * struct  ipa_smmu_out_params - information provided to IPA client
- * @smmu_enable: IPA S1 SMMU enable/disable status
- * @shared_cb: is client CB shared (mappings should be done by client only)
+ * @ipa_smmu_s1_enable: IPA S1 SMMU enable/disable status
  */
 struct ipa_smmu_out_params {
 	bool smmu_enable;
-	bool shared_cb;
 };
 
 #if defined CONFIG_IPA || defined CONFIG_IPA3
@@ -1504,8 +1411,6 @@ int ipa_disable_wdi_pipe(u32 clnt_hdl);
 int ipa_resume_wdi_pipe(u32 clnt_hdl);
 int ipa_suspend_wdi_pipe(u32 clnt_hdl);
 int ipa_get_wdi_stats(struct IpaHwStatsWDIInfoData_t *stats);
-int ipa_uc_bw_monitor(struct ipa_wdi_bw_info *info);
-int ipa_set_wlan_tx_info(struct ipa_wdi_tx_info *info);
 u16 ipa_get_smem_restr_bytes(void);
 int ipa_broadcast_wdi_quota_reach_ind(uint32_t fid,
 		uint64_t num_bytes);
@@ -1653,13 +1558,6 @@ enum ipa_transport_type ipa_get_transport_type(void);
 struct device *ipa_get_dma_dev(void);
 struct iommu_domain *ipa_get_smmu_domain(void);
 
-int ipa_uc_debug_stats_alloc(
-	struct IpaHwOffloadStatsAllocCmdData_t cmdinfo);
-int ipa_uc_debug_stats_dealloc(uint32_t protocol);
-void ipa_get_gsi_stats(int prot_id,
-	struct ipa_uc_dbg_ring_stats *stats);
-int ipa_get_prot_id(enum ipa_client_type client);
-
 int ipa_disable_apps_wan_cons_deaggr(uint32_t agg_size, uint32_t agg_count);
 
 const struct ipa_gsi_ep_config *ipa_get_gsi_ep_info
@@ -1717,11 +1615,6 @@ int ipa_get_smmu_params(struct ipa_smmu_in_params *in,
  * Returns: 0 on success, negative on failure
  */
 int ipa_is_vlan_mode(enum ipa_vlan_ifaces iface, bool *res);
-
-/**
- * ipa_get_lan_rx_napi - returns true if NAPI is enabled in the LAN RX dp
- */
-bool ipa_get_lan_rx_napi(void);
 #else /* (CONFIG_IPA || CONFIG_IPA3) */
 
 /*
@@ -2454,16 +2347,6 @@ static inline int ipa_get_wdi_stats(struct IpaHwStatsWDIInfoData_t *stats)
 	return -EPERM;
 }
 
-static inline int ipa_uc_bw_monitor(struct ipa_wdi_bw_info *info)
-{
-	return -EPERM;
-}
-
-static inline int ipa_set_wlan_tx_info(struct ipa_wdi_tx_info *info)
-{
-	return -EPERM;
-}
-
 static inline int ipa_get_ep_mapping(enum ipa_client_type client)
 {
 	return -EPERM;
@@ -2575,32 +2458,6 @@ static inline int ipa_is_vlan_mode(enum ipa_vlan_ifaces iface, bool *res)
 {
 	return -EPERM;
 }
-
-static inline int ipa_uc_debug_stats_alloc(
-	struct IpaHwOffloadStatsAllocCmdData_t cmdinfo)
-{
-	return -EPERM;
-}
-static inline int ipa_uc_debug_stats_dealloc(uint32_t protocol)
-{
-	return -EPERM;
-}
-
-static inline void ipa_get_gsi_stats(int prot_id,
-	struct ipa_uc_dbg_ring_stats *stats)
-{
-}
-
-static inline int ipa_get_prot_id(enum ipa_client_type client)
-{
-	return -EPERM;
-}
-
-static inline bool ipa_get_lan_rx_napi(void)
-{
-	return false;
-}
-
 #endif /* (CONFIG_IPA || CONFIG_IPA3) */
 
 #endif /* _IPA_H_ */

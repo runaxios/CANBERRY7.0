@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/mutex.h>
@@ -403,10 +410,10 @@ static ssize_t ipa_ut_dbgfs_meta_test_read(struct file *file,
 	meta_type = (long)(file->private_data);
 	IPA_UT_DBG("Meta test type %ld\n", meta_type);
 
-	buf = kmalloc(IPA_UT_DEBUG_READ_BUF_SIZE + 1, GFP_KERNEL);
+	buf = kmalloc(IPA_UT_DEBUG_READ_BUF_SIZE, GFP_KERNEL);
 	if (!buf) {
 		IPA_UT_ERR("failed to allocate %d bytes\n",
-			IPA_UT_DEBUG_READ_BUF_SIZE + 1);
+			IPA_UT_DEBUG_READ_BUF_SIZE);
 		cnt = 0;
 		goto unlock_mutex;
 	}
@@ -817,6 +824,8 @@ unlock_mutex:
  */
 static int ipa_ut_framework_disable(void)
 {
+	int ret = 0;
+
 	IPA_UT_DBG("Entry\n");
 
 	mutex_lock(&ipa_ut_ctx->lock);
@@ -832,7 +841,7 @@ static int ipa_ut_framework_disable(void)
 
 unlock_mutex:
 	mutex_unlock(&ipa_ut_ctx->lock);
-	return 0;
+	return ret;
 }
 
 /**
@@ -852,12 +861,12 @@ static ssize_t ipa_ut_dbgfs_enable_write(struct file *file,
 
 	IPA_UT_DBG("Entry\n");
 
-	if (count >= sizeof(lcl_buf)) {
+	if (sizeof(lcl_buf) < count + 1) {
 		IPA_UT_ERR("No enough space\n");
 		return -E2BIG;
 	}
 
-	if (copy_from_user(lcl_buf, buf, count)) {
+	if (copy_from_user(lcl_buf, buf, min(sizeof(lcl_buf), count))) {
 		IPA_UT_ERR("fail to copy buf from user space\n");
 		return -EFAULT;
 	}

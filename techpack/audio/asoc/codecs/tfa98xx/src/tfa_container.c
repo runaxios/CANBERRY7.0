@@ -1,6 +1,6 @@
 /*
  * Copyright 2014-2017 NXP Semiconductors
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-#include "dbgprint.h"
-#include "tfa_container.h"
-#include "tfa.h"
-#include "tfa98xx_tfafieldnames.h"
-#include "tfa_internal.h"
+#include "inc/dbgprint.h"
+#include "inc/tfa_container.h"
+#include "inc/tfa.h"
+#include "inc/tfa98xx_tfafieldnames.h"
+#include "inc/tfa_internal.h"
 
 /* defines */
 #define MODULE_BIQUADFILTERBANK 2

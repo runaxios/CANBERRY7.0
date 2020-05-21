@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016, 2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2016, 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "AXI: BIMC: %s(): " fmt, __func__
@@ -173,46 +179,46 @@ enum bimc_m_bke_thresh_low {
 #define M_BKE_HEALTH_0_CONFIG_ADDR(b, n) \
 	(M_REG_BASE(b) + (0x4000 * (n)) + 0x00000340)
 enum bimc_m_bke_health_0 {
-	M_BKE_HEALTH_0_CONFIG_RMSK			= 0x80000303,
+	M_BKE_HEALTH_0_CONFIG_RMSK			= 0x80000707,
 	M_BKE_HEALTH_0_CONFIG_LIMIT_CMDS_BMSK		= 0x80000000,
 	M_BKE_HEALTH_0_CONFIG_LIMIT_CMDS_SHFT		= 0x1f,
-	M_BKE_HEALTH_0_CONFIG_AREQPRIO_BMSK		= 0x300,
+	M_BKE_HEALTH_0_CONFIG_AREQPRIO_BMSK		= 0x700,
 	M_BKE_HEALTH_0_CONFIG_AREQPRIO_SHFT		= 0x8,
-	M_BKE_HEALTH_0_CONFIG_PRIOLVL_BMSK		= 0x3,
+	M_BKE_HEALTH_0_CONFIG_PRIOLVL_BMSK		= 0x7,
 	M_BKE_HEALTH_0_CONFIG_PRIOLVL_SHFT		= 0x0,
 };
 
 #define M_BKE_HEALTH_1_CONFIG_ADDR(b, n) \
 	(M_REG_BASE(b) + (0x4000 * (n)) + 0x00000344)
 enum bimc_m_bke_health_1 {
-	M_BKE_HEALTH_1_CONFIG_RMSK			= 0x80000303,
+	M_BKE_HEALTH_1_CONFIG_RMSK			= 0x80000707,
 	M_BKE_HEALTH_1_CONFIG_LIMIT_CMDS_BMSK		= 0x80000000,
 	M_BKE_HEALTH_1_CONFIG_LIMIT_CMDS_SHFT		= 0x1f,
-	M_BKE_HEALTH_1_CONFIG_AREQPRIO_BMSK		= 0x300,
+	M_BKE_HEALTH_1_CONFIG_AREQPRIO_BMSK		= 0x700,
 	M_BKE_HEALTH_1_CONFIG_AREQPRIO_SHFT		= 0x8,
-	M_BKE_HEALTH_1_CONFIG_PRIOLVL_BMSK		= 0x3,
+	M_BKE_HEALTH_1_CONFIG_PRIOLVL_BMSK		= 0x7,
 	M_BKE_HEALTH_1_CONFIG_PRIOLVL_SHFT		= 0x0,
 };
 
 #define M_BKE_HEALTH_2_CONFIG_ADDR(b, n) \
 	(M_REG_BASE(b) + (0x4000 * (n)) + 0x00000348)
 enum bimc_m_bke_health_2 {
-	M_BKE_HEALTH_2_CONFIG_RMSK			= 0x80000303,
+	M_BKE_HEALTH_2_CONFIG_RMSK			= 0x80000707,
 	M_BKE_HEALTH_2_CONFIG_LIMIT_CMDS_BMSK		= 0x80000000,
 	M_BKE_HEALTH_2_CONFIG_LIMIT_CMDS_SHFT		= 0x1f,
-	M_BKE_HEALTH_2_CONFIG_AREQPRIO_BMSK		= 0x300,
+	M_BKE_HEALTH_2_CONFIG_AREQPRIO_BMSK		= 0x700,
 	M_BKE_HEALTH_2_CONFIG_AREQPRIO_SHFT		= 0x8,
-	M_BKE_HEALTH_2_CONFIG_PRIOLVL_BMSK		= 0x3,
+	M_BKE_HEALTH_2_CONFIG_PRIOLVL_BMSK		= 0x7,
 	M_BKE_HEALTH_2_CONFIG_PRIOLVL_SHFT		= 0x0,
 };
 
 #define M_BKE_HEALTH_3_CONFIG_ADDR(b, n) \
 	(M_REG_BASE(b) + (0x4000 * (n)) + 0x0000034c)
 enum bimc_m_bke_health_3 {
-	M_BKE_HEALTH_3_CONFIG_RMSK			= 0x303,
-	M_BKE_HEALTH_3_CONFIG_AREQPRIO_BMSK	= 0x300,
+	M_BKE_HEALTH_3_CONFIG_RMSK			= 0x707,
+	M_BKE_HEALTH_3_CONFIG_AREQPRIO_BMSK	= 0x700,
 	M_BKE_HEALTH_3_CONFIG_AREQPRIO_SHFT	= 0x8,
-	M_BKE_HEALTH_3_CONFIG_PRIOLVL_BMSK		= 0x3,
+	M_BKE_HEALTH_3_CONFIG_PRIOLVL_BMSK		= 0x7,
 	M_BKE_HEALTH_3_CONFIG_PRIOLVL_SHFT		= 0x0,
 };
 
@@ -428,10 +434,10 @@ static int msm_bus_bimc_limit_mport(struct msm_bus_node_device_type *info,
 	if ((enable_lim == THROTTLE_ON) && lim_bw) {
 		mode =  BIMC_QOS_MODE_LIMITER;
 
-		qmode.rl.qhealth[0].limit_commands = true;
-		qmode.rl.qhealth[1].limit_commands = false;
-		qmode.rl.qhealth[2].limit_commands = false;
-		qmode.rl.qhealth[3].limit_commands = false;
+		qmode.rl.qhealth[0].limit_commands = 1;
+		qmode.rl.qhealth[1].limit_commands = 0;
+		qmode.rl.qhealth[2].limit_commands = 0;
+		qmode.rl.qhealth[3].limit_commands = 0;
 		for (i = 0; i < NUM_HEALTH_LEVEL; i++) {
 			qmode.rl.qhealth[i].prio_level =
 					info->node_info->qos_params.prio_lvl;
@@ -506,10 +512,10 @@ static int msm_bus_bimc_qos_init(struct msm_bus_node_device_type *info,
 		}
 		break;
 	case BIMC_QOS_MODE_LIMITER:
-		qmode.rl.qhealth[0].limit_commands = true;
-		qmode.rl.qhealth[1].limit_commands = false;
-		qmode.rl.qhealth[2].limit_commands = false;
-		qmode.rl.qhealth[3].limit_commands = false;
+		qmode.rl.qhealth[0].limit_commands = 1;
+		qmode.rl.qhealth[1].limit_commands = 0;
+		qmode.rl.qhealth[2].limit_commands = 0;
+		qmode.rl.qhealth[3].limit_commands = 0;
 		for (i = 0; i < NUM_HEALTH_LEVEL; i++) {
 			qmode.rl.qhealth[i].prio_level =
 				info->node_info->qos_params.prio_lvl;
@@ -568,10 +574,10 @@ static int msm_bus_bimc_set_bw(struct msm_bus_node_device_type *dev,
 		 * Fixed/0/0.
 		 */
 		if (bw) {
-			qmode.rl.qhealth[0].limit_commands = true;
-			qmode.rl.qhealth[1].limit_commands = false;
-			qmode.rl.qhealth[2].limit_commands = false;
-			qmode.rl.qhealth[3].limit_commands = false;
+			qmode.rl.qhealth[0].limit_commands = 1;
+			qmode.rl.qhealth[1].limit_commands = 0;
+			qmode.rl.qhealth[2].limit_commands = 0;
+			qmode.rl.qhealth[3].limit_commands = 0;
 			mode = info->qos_params.mode;
 		} else {
 			mode =	BIMC_QOS_MODE_FIXED;

@@ -1,34 +1,43 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
+ *
  * drivers/staging/android/ion/ion.c
  *
  * Copyright (C) 2011 Google, Inc.
  * Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
  *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
-#include <linux/anon_inodes.h>
-#include <linux/debugfs.h>
 #include <linux/device.h>
-#include <linux/dma-buf.h>
 #include <linux/err.h>
-#include <linux/export.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
-#include <linux/idr.h>
+#include <linux/anon_inodes.h>
 #include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/memblock.h>
 #include <linux/miscdevice.h>
+#include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/rbtree.h>
-#include <linux/sched/task.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/seq_file.h>
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
+#include <linux/debugfs.h>
+#include <linux/dma-buf.h>
+#include <linux/idr.h>
+#include <linux/sched/task.h>
 #include <linux/bitops.h>
 #include <linux/msm_dma_iommu_mapping.h>
 #define CREATE_TRACE_POINTS
@@ -110,8 +119,6 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 	buffer->heap = heap;
 	buffer->flags = flags;
-	buffer->dev = dev;
-	buffer->size = len;
 
 	ret = heap->ops->allocate(heap, buffer, len, flags);
 
@@ -128,7 +135,7 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 			goto err2;
 	}
 
-	if (!buffer->sg_table) {
+	if (buffer->sg_table == NULL) {
 		WARN_ONCE(1, "This heap needs to set the sgtable");
 		ret = -EINVAL;
 		goto err1;
@@ -142,6 +149,11 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	spin_unlock(&heap->stat_lock);
 
 	table = buffer->sg_table;
+	buffer->dev = dev;
+	buffer->size = len;
+
+	buffer->dev = dev;
+	buffer->size = len;
 	INIT_LIST_HEAD(&buffer->attachments);
 	INIT_LIST_HEAD(&buffer->vmas);
 	mutex_init(&buffer->lock);
@@ -218,7 +230,7 @@ static void *ion_buffer_kmap_get(struct ion_buffer *buffer)
 		return buffer->vaddr;
 	}
 	vaddr = buffer->heap->ops->map_kernel(buffer->heap, buffer);
-	if (WARN_ONCE(!vaddr,
+	if (WARN_ONCE(vaddr == NULL,
 		      "heap->ops->map_kernel should return ERR_PTR on error"))
 		return ERR_PTR(-EINVAL);
 	if (IS_ERR(vaddr))
@@ -283,8 +295,8 @@ struct ion_dma_buf_attachment {
 	bool dma_mapped;
 };
 
-static int ion_dma_buf_attach(struct dma_buf *dmabuf,
-			      struct dma_buf_attachment *attachment)
+static int ion_dma_buf_attach(struct dma_buf *dmabuf, struct device *dev,
+				struct dma_buf_attachment *attachment)
 {
 	struct ion_dma_buf_attachment *a;
 	struct sg_table *table;
@@ -301,7 +313,7 @@ static int ion_dma_buf_attach(struct dma_buf *dmabuf,
 	}
 
 	a->table = table;
-	a->dev = attachment->dev;
+	a->dev = dev;
 	a->dma_mapped = false;
 	INIT_LIST_HEAD(&a->list);
 
@@ -327,6 +339,7 @@ static void ion_dma_buf_detatch(struct dma_buf *dmabuf,
 
 	kfree(a);
 }
+
 
 static struct sg_table *ion_map_dma_buf(struct dma_buf_attachment *attachment,
 					enum dma_data_direction direction)
@@ -576,12 +589,14 @@ static int ion_sgl_sync_range(struct device *dev, struct scatterlist *sgl,
 			break;
 
 		if (i > 0) {
-			pr_warn_ratelimited("Partial cmo only supported with 1 segment\n"
+			pr_warn_ratelimited(
+				"Partial cmo only supported with 1 segment\n"
 				"is dma_set_max_seg_size being set on dev:%s\n",
 				dev_name(dev));
 			return -EINVAL;
 		}
 	}
+
 
 	for_each_sg(sgl, sg, nents, i) {
 		unsigned int sg_offset, sg_left, size = 0;
@@ -727,6 +742,7 @@ static int __ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 
 	}
 	mutex_unlock(&buffer->lock);
+
 out:
 	return ret;
 }
@@ -916,6 +932,7 @@ static int ion_dma_buf_begin_cpu_access_partial(struct dma_buf *dmabuf,
 							    false);
 			ret = tmp;
 		}
+
 	}
 	mutex_unlock(&buffer->lock);
 
@@ -1024,6 +1041,8 @@ static const struct dma_buf_ops dma_buf_ops = {
 	.end_cpu_access_umapped = ion_dma_buf_end_cpu_access_umapped,
 	.begin_cpu_access_partial = ion_dma_buf_begin_cpu_access_partial,
 	.end_cpu_access_partial = ion_dma_buf_end_cpu_access_partial,
+	.map_atomic = ion_dma_buf_kmap,
+	.unmap_atomic = ion_dma_buf_kunmap,
 	.map = ion_dma_buf_kmap,
 	.unmap = ion_dma_buf_kunmap,
 	.vmap = ion_dma_buf_vmap,
@@ -1134,8 +1153,9 @@ int ion_alloc_fd(size_t len, unsigned int heap_id_mask, unsigned int flags)
 	struct dma_buf *dmabuf;
 
 	dmabuf = ion_alloc_dmabuf(len, heap_id_mask, flags);
-	if (IS_ERR(dmabuf))
+	if (IS_ERR(dmabuf)) {
 		return PTR_ERR(dmabuf);
+	}
 
 	fd = dma_buf_fd(dmabuf, O_CLOEXEC);
 	if (fd < 0)
@@ -1201,6 +1221,14 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 {
 	struct ion_heap *heap = s->private;
 
+	seq_puts(s, "----------------------------------------------------\n");
+	seq_printf(s, "%25s %16zu\n", "num_of_alloc_bytes ", heap->num_of_alloc_bytes);
+	seq_printf(s, "%25s %16zu\n", "num_of_buffers ", heap->num_of_buffers);
+	seq_printf(s, "%25s %16zu\n", "alloc_bytes_wm ", heap->alloc_bytes_wm);
+	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
+		seq_printf(s, "%25s %16zu\n", "deferred free ", heap->free_list_size);
+	seq_puts(s, "----------------------------------------------------\n");
+
 	if (heap->debug_show)
 		heap->debug_show(heap, s, unused);
 
@@ -1254,41 +1282,11 @@ static int debug_shrink_get(void *data, u64 *val)
 DEFINE_SIMPLE_ATTRIBUTE(debug_shrink_fops, debug_shrink_get,
 			debug_shrink_set, "%llu\n");
 
-static int ion_debug_heap_show2(struct seq_file *s, void *unused)
-{
-	struct ion_heap *heap = s->private;
-
-	seq_puts(s, "----------------------------------------------------\n");
-	seq_printf(s, "%25s %16zu\n", "num_of_alloc_bytes ", heap->num_of_alloc_bytes);
-	seq_printf(s, "%25s %16zu\n", "num_of_buffers ", heap->num_of_buffers);
-	seq_printf(s, "%25s %16zu\n", "alloc_bytes_wm ", heap->alloc_bytes_wm);
-	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
-		seq_printf(s, "%25s %16zu\n", "deferred free ", heap->free_list_size);
-	seq_puts(s, "----------------------------------------------------\n");
-
-	if (heap->debug_show)
-		heap->debug_show(heap, s, unused);
-
-	return 0;
-}
-
-static int ion_debug_heap_open2(struct inode *inode, struct file *file)
-{
-	return single_open(file, ion_debug_heap_show2, inode->i_private);
-}
-
-static const struct file_operations debug_heap_fops2 = {
-	.open = ion_debug_heap_open2,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
 void ion_device_add_heap(struct ion_device *dev, struct ion_heap *heap)
 {
-	char debug_name[64], buf[256];
-	int ret;
+	struct dentry *debug_file;
 	struct dentry *heap_root;
+	char debug_name[64];
 
 	if (!heap->ops->allocate || !heap->ops->free)
 		pr_err("%s: can not add heap with invalid ops struct.\n",
@@ -1301,16 +1299,25 @@ void ion_device_add_heap(struct ion_device *dev, struct ion_heap *heap)
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_init_deferred_free(heap);
 
-	if ((heap->flags & ION_HEAP_FLAG_DEFER_FREE) || heap->ops->shrink) {
-		ret = ion_heap_init_shrinker(heap);
-		if (ret)
-			pr_err("%s: Failed to register shrinker\n", __func__);
-	}
+	if ((heap->flags & ION_HEAP_FLAG_DEFER_FREE) || heap->ops->shrink)
+		ion_heap_init_shrinker(heap);
 
 	heap->dev = dev;
 	heap->num_of_buffers = 0;
 	heap->num_of_alloc_bytes = 0;
 	heap->alloc_bytes_wm = 0;
+
+	debug_file = debugfs_create_file(heap->name, 0664,
+					dev->heaps_debug_root, heap,
+					&debug_heap_fops);
+
+	if (!debug_file) {
+		char buf[256], *path;
+
+		path = dentry_path(dev->heaps_debug_root, buf, 256);
+		pr_err("Failed to create heap debugfs at %s/%s\n",
+			path, heap->name);
+	}
 
 	heap_root = debugfs_create_dir(heap->name, dev->debug_root);
 	debugfs_create_u64("num_of_buffers",
@@ -1325,29 +1332,14 @@ void ion_device_add_heap(struct ion_device *dev, struct ion_heap *heap)
 			   heap_root,
 			   &heap->alloc_bytes_wm);
 
-	if (heap->debug_show) {
-		snprintf(debug_name, 64, "%s_stats", heap->name);
-		if (!debugfs_create_file(debug_name, 0664, heap_root,
-					 heap, &debug_heap_fops))
-			pr_err("Failed to create heap debugfs at %s/%s\n",
-			       dentry_path(heap_root, buf, 256),
-			       debug_name);
-	}
-
-	if (heap->shrinker.count_objects && heap->shrinker.scan_objects) {
+	if (heap->shrinker.count_objects &&
+	    heap->shrinker.scan_objects) {
 		snprintf(debug_name, 64, "%s_shrink", heap->name);
-		if (!debugfs_create_file(debug_name, 0644, heap_root,
-					 heap, &debug_shrink_fops))
-			pr_err("Failed to create heap debugfs at %s/%s\n",
-			       dentry_path(heap_root, buf, 256),
-			       debug_name);
-	}
-
-	if (!debugfs_create_file(heap->name, 0664,
-			dev->heaps_debug_root, heap,
-			&debug_heap_fops2)) {
-		pr_err("Failed to create heap debugfs at %s/%s\n",
-				dentry_path(dev->heaps_debug_root, buf, 256), heap->name);
+		debugfs_create_file(debug_name,
+				    0644,
+				    heap_root,
+				    heap,
+				    &debug_shrink_fops);
 	}
 
 	down_write(&dev->lock);
@@ -1395,6 +1387,7 @@ struct ion_device *ion_device_create(void)
 	}
 
 debugfs_done:
+
 	idev->buffers = RB_ROOT;
 	mutex_init(&idev->buffer_lock);
 	init_rwsem(&idev->lock);

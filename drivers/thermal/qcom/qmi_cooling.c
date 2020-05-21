@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -63,10 +70,6 @@ static struct qmi_dev_info device_clients[] = {
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "pa_fr1",
-		.type = QMI_CDEV_MAX_LIMIT_TYPE,
-	},
-	{
 		.dev_name = "cx_vdd_limit",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
@@ -91,10 +94,6 @@ static struct qmi_dev_info device_clients[] = {
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "charge_state",
-		.type = QMI_CDEV_MAX_LIMIT_TYPE,
-	},
-	{
 		.dev_name = "mmw0",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
@@ -111,23 +110,19 @@ static struct qmi_dev_info device_clients[] = {
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "mmw_skin0",
+		.dev_name = "modem_skin0",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "mmw_skin1",
+		.dev_name = "modem_skin1",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "mmw_skin2",
+		.dev_name = "modem_skin2",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
-		.dev_name = "mmw_skin3",
-		.type = QMI_CDEV_MAX_LIMIT_TYPE,
-	},
-	{
-		.dev_name = "wlan",
+		.dev_name = "modem_skin3",
 		.type = QMI_CDEV_MAX_LIMIT_TYPE,
 	},
 	{
@@ -219,7 +214,6 @@ static int qmi_tmd_send_state_request(struct qmi_cooling_device *qmi_cdev,
 			state, qmi_cdev->cdev_name, ret);
 		goto qmi_send_exit;
 	}
-	ret = 0;
 	pr_debug("Requested qmi state:%d for %s\n", state, qmi_cdev->cdev_name);
 
 qmi_send_exit:
@@ -424,6 +418,7 @@ static void qmi_tmd_svc_arrive(struct work_struct *work)
 						svc_arrive_work);
 
 	verify_devices_and_register(tmd);
+	return;
 }
 
 static void thermal_qmi_net_reset(struct qmi_handle *qmi)
@@ -644,6 +639,7 @@ static struct platform_driver qmi_device_driver = {
 	.remove         = qmi_device_remove,
 	.driver         = {
 		.name   = QMI_CDEV_DRIVER,
+		.owner  = THIS_MODULE,
 		.of_match_table = qmi_device_match,
 	},
 };

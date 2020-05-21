@@ -2,11 +2,11 @@
  * This file contains shadow memory manipulation code.
  *
  * Copyright (c) 2014 Samsung Electronics Co., Ltd.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  * Author: Andrey Ryabinin <ryabinin.a.a@gmail.com>
  *
  * Some code borrowed from https://github.com/xairy/kasan-prototype by
- *        Andrey Konovalov <andreyknvl@gmail.com>
+ *        Andrey Konovalov <adech.fo@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -324,9 +324,9 @@ void kasan_free_pages(struct page *page, unsigned int order)
  * Adaptive redzone policy taken from the userspace AddressSanitizer runtime.
  * For larger allocations larger redzones are used.
  */
-static unsigned int optimal_redzone(unsigned int object_size)
+static size_t optimal_redzone(size_t object_size)
 {
-	return
+	int rz =
 		object_size <= 64        - 16   ? 16 :
 		object_size <= 128       - 32   ? 32 :
 		object_size <= 512       - 64   ? 64 :
@@ -334,13 +334,14 @@ static unsigned int optimal_redzone(unsigned int object_size)
 		object_size <= (1 << 14) - 256  ? 256 :
 		object_size <= (1 << 15) - 512  ? 512 :
 		object_size <= (1 << 16) - 1024 ? 1024 : 2048;
+	return rz;
 }
 
-void kasan_cache_create(struct kmem_cache *cache, unsigned int *size,
-			slab_flags_t *flags)
+void kasan_cache_create(struct kmem_cache *cache, size_t *size,
+			unsigned long *flags)
 {
-	unsigned int orig_size = *size;
 	int redzone_adjust;
+	int orig_size = *size;
 
 	/* Add alloc meta. */
 	cache->kasan_info.alloc_meta_offset = *size;
@@ -358,8 +359,7 @@ void kasan_cache_create(struct kmem_cache *cache, unsigned int *size,
 	if (redzone_adjust > 0)
 		*size += redzone_adjust;
 
-	*size = min_t(unsigned int, KMALLOC_MAX_SIZE,
-			max(*size, cache->object_size +
+	*size = min(KMALLOC_MAX_SIZE, max(*size, cache->object_size +
 					optimal_redzone(cache->object_size)));
 
 	/*
@@ -383,8 +383,7 @@ void kasan_cache_shrink(struct kmem_cache *cache)
 
 void kasan_cache_shutdown(struct kmem_cache *cache)
 {
-	if (!__kmem_cache_empty(cache))
-		quarantine_remove_cache(cache);
+	quarantine_remove_cache(cache);
 }
 
 size_t kasan_metadata_size(struct kmem_cache *cache)
@@ -858,7 +857,7 @@ static int __meminit kasan_mem_notifier(struct notifier_block *nb,
 			return NOTIFY_OK;
 
 		ret = __vmalloc_node_range(shadow_size, PAGE_SIZE, shadow_start,
-					shadow_end, GFP_KERNEL | __GFP_ZERO,
+					shadow_end, GFP_KERNEL,
 					PAGE_KERNEL, VM_NO_GUARD,
 					pfn_to_nid(mem_data->start_pfn),
 					__builtin_return_address(0));

@@ -21,6 +21,7 @@
 #include <linux/highmem.h>
 #include <linux/perf_event.h>
 
+#include <asm/exception.h>
 #include <asm/pgtable.h>
 #include <asm/system_misc.h>
 #include <asm/system_info.h>
@@ -166,8 +167,6 @@ __do_user_fault(struct task_struct *tsk, unsigned long addr,
 	if (addr > TASK_SIZE)
 		harden_branch_predictor();
 
-	clear_siginfo(&si);
-
 #ifdef CONFIG_DEBUG_USER
 	if (((user_debug & UDBG_SEGV) && (sig == SIGSEGV)) ||
 	    ((user_debug & UDBG_BUS)  && (sig == SIGBUS))) {
@@ -216,7 +215,7 @@ static inline bool access_error(unsigned int fsr, struct vm_area_struct *vma)
 {
 	unsigned int mask = VM_READ | VM_WRITE | VM_EXEC;
 
-	if ((fsr & FSR_WRITE) && !(fsr & FSR_CM))
+	if (fsr & FSR_WRITE)
 		mask = VM_WRITE;
 	if (fsr & FSR_LNX_PF)
 		mask = VM_EXEC;
@@ -224,12 +223,12 @@ static inline bool access_error(unsigned int fsr, struct vm_area_struct *vma)
 	return vma->vm_flags & mask ? false : true;
 }
 
-static vm_fault_t __kprobes
+static int __kprobes
 __do_page_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
 		unsigned int flags, struct task_struct *tsk)
 {
 	struct vm_area_struct *vma;
-	vm_fault_t fault;
+	int fault;
 
 	vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
@@ -264,8 +263,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	struct task_struct *tsk;
 	struct mm_struct *mm;
-	int sig, code;
-	vm_fault_t fault;
+	int fault, sig, code;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	if (notify_page_fault(regs, fsr))
@@ -279,15 +277,15 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		local_irq_enable();
 
 	/*
-	 * If we're in an interrupt or have no user
+	 * If we're in an interrupt, or have no irqs, or have no user
 	 * context, we must not take the fault..
 	 */
-	if (faulthandler_disabled() || !mm)
+	if (faulthandler_disabled() || irqs_disabled() || !mm)
 		goto no_context;
 
 	if (user_mode(regs))
 		flags |= FAULT_FLAG_USER;
-	if ((fsr & FSR_WRITE) && !(fsr & FSR_CM))
+	if (fsr & FSR_WRITE)
 		flags |= FAULT_FLAG_WRITE;
 
 	/*
@@ -550,7 +548,7 @@ hook_fault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *)
 /*
  * Dispatch a data abort to the relevant handler.
  */
-asmlinkage void
+asmlinkage void __exception
 do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = fsr_info + fsr_fs(fsr);
@@ -563,7 +561,6 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		inf->name, fsr, addr);
 	show_pte(current->mm, addr);
 
-	clear_siginfo(&info);
 	info.si_signo = inf->sig;
 	info.si_errno = 0;
 	info.si_code  = inf->code;
@@ -584,7 +581,7 @@ hook_ifault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *
 	ifsr_info[nr].name = name;
 }
 
-asmlinkage void
+asmlinkage void __exception
 do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
@@ -596,7 +593,6 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
 	pr_alert("Unhandled prefetch abort: %s (0x%03x) at 0x%08lx\n",
 		inf->name, ifsr, addr);
 
-	clear_siginfo(&info);
 	info.si_signo = inf->sig;
 	info.si_errno = 0;
 	info.si_code  = inf->code;

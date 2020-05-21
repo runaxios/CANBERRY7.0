@@ -252,7 +252,7 @@ int st21nfca_hci_se_io(struct nfc_hci_dev *hdev, u32 se_idx,
 }
 EXPORT_SYMBOL(st21nfca_hci_se_io);
 
-static void st21nfca_se_wt_timeout(struct timer_list *t)
+static void st21nfca_se_wt_timeout(unsigned long data)
 {
 	/*
 	 * No answer from the secure element
@@ -265,8 +265,7 @@ static void st21nfca_se_wt_timeout(struct timer_list *t)
 	 */
 	/* hardware reset managed through VCC_UICC_OUT power supply */
 	u8 param = 0x01;
-	struct st21nfca_hci_info *info = from_timer(info, t,
-						    se_info.bwi_timer);
+	struct st21nfca_hci_info *info = (struct st21nfca_hci_info *) data;
 
 	pr_debug("\n");
 
@@ -284,10 +283,9 @@ static void st21nfca_se_wt_timeout(struct timer_list *t)
 	info->se_info.cb(info->se_info.cb_context, NULL, 0, -ETIME);
 }
 
-static void st21nfca_se_activation_timeout(struct timer_list *t)
+static void st21nfca_se_activation_timeout(unsigned long data)
 {
-	struct st21nfca_hci_info *info = from_timer(info, t,
-						    se_info.se_active_timer);
+	struct st21nfca_hci_info *info = (struct st21nfca_hci_info *) data;
 
 	pr_debug("\n");
 
@@ -335,8 +333,6 @@ int st21nfca_connectivity_event_received(struct nfc_hci_dev *hdev, u8 host,
 
 		transaction = (struct nfc_evt_transaction *)devm_kzalloc(dev,
 						   skb->len - 2, GFP_KERNEL);
-		if (!transaction)
-			return -ENOMEM;
 
 		transaction->aid_len = skb->data[1];
 		memcpy(transaction->aid, &skb->data[2],
@@ -406,11 +402,14 @@ void st21nfca_se_init(struct nfc_hci_dev *hdev)
 
 	init_completion(&info->se_info.req_completion);
 	/* initialize timers */
-	timer_setup(&info->se_info.bwi_timer, st21nfca_se_wt_timeout, 0);
+	init_timer(&info->se_info.bwi_timer);
+	info->se_info.bwi_timer.data = (unsigned long)info;
+	info->se_info.bwi_timer.function = st21nfca_se_wt_timeout;
 	info->se_info.bwi_active = false;
 
-	timer_setup(&info->se_info.se_active_timer,
-		    st21nfca_se_activation_timeout, 0);
+	init_timer(&info->se_info.se_active_timer);
+	info->se_info.se_active_timer.data = (unsigned long)info;
+	info->se_info.se_active_timer.function = st21nfca_se_activation_timeout;
 	info->se_info.se_active = false;
 
 	info->se_info.count_pipes = 0;

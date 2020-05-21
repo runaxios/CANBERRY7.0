@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #include "ipa_i.h"
 #include <linux/delay.h>
 
@@ -14,7 +20,7 @@
 
 #define IPA_UC_DBG_STATS_GET_PROT_ID(x) (0xff & ((x) >> 24))
 #define IPA_UC_DBG_STATS_GET_OFFSET(x) (0x00ffffff & (x))
-#define IPA_UC_EVENT_RING_SIZE 10
+
 /**
  * Mailbox register to Interrupt HWP for CPU cmd
  * Usage of IPA_UC_MAILBOX_m_n doorbell instead of IPA_IRQ_EE_UC_0
@@ -23,11 +29,6 @@
  */
 #define IPA_CPU_2_HW_CMD_MBOX_m          0
 #define IPA_CPU_2_HW_CMD_MBOX_n         23
-
-#define IPA_UC_ERING_m 0
-#define IPA_UC_ERING_n_r 1
-#define IPA_UC_ERING_n_w 0
-#define IPA_UC_MON_INTERVAL 5
 
 /**
  * enum ipa3_cpu_2_hw_commands - Values that represent the commands from the CPU
@@ -44,7 +45,6 @@
  * IPA_CPU_2_HW_CMD_RESET_PIPE : Command to reset a pipe - SW WA for a HW bug.
  * IPA_CPU_2_HW_CMD_GSI_CH_EMPTY : Command to check for GSI channel emptiness.
  * IPA_CPU_2_HW_CMD_REMOTE_IPA_INFO: Command to store remote IPA Info
- * IPA_CPU_2_HW_CMD_SETUP_EVENT_RING:  Command to setup the event ring
  */
 enum ipa3_cpu_2_hw_commands {
 	IPA_CPU_2_HW_CMD_NO_OP                     =
@@ -71,8 +71,6 @@ enum ipa3_cpu_2_hw_commands {
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 10),
 	IPA_CPU_2_HW_CMD_REMOTE_IPA_INFO           =
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 11),
-	IPA_CPU_2_HW_CMD_SETUP_EVENT_RING          =
-		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 12),
 };
 
 /**
@@ -169,23 +167,6 @@ union IpaHwChkChEmptyCmdData_t {
 	u32 raw32b;
 } __packed;
 
-struct IpaSetupEventRingCmdParams_t {
-	u32 ring_base_pa;
-	u32 ring_base_pa_hi;
-	u32 ring_size; //size = 10
-} __packed;
-
-
-/**
- * Structure holding the parameters for
- * IPA_CPU_2_HW_CMD_SETUP_EVENT_RING command. Parameters are
- * sent as 32b immediate parameters.
- */
-union IpaSetupEventRingCmdData_t {
-	struct IpaSetupEventRingCmdParams_t event;
-	u32 raw32b[6]; //uc-internal
-} __packed;
-
 
 /**
  * Structure holding the parameters for IPA_CPU_2_HW_CMD_REMOTE_IPA_INFO
@@ -244,11 +225,11 @@ const char *ipa_hw_error_str(enum ipa3_hw_errors err_type)
 
 static void ipa3_uc_save_dbg_stats(u32 size)
 {
-	u8 prot_id;
+	u8 protocol_id;
 	u32 addr_offset;
 	void __iomem *mmio;
 
-	prot_id = IPA_UC_DBG_STATS_GET_PROT_ID(
+	protocol_id = IPA_UC_DBG_STATS_GET_PROT_ID(
 		ipa3_ctx->uc_ctx.uc_sram_mmio->responseParams_1);
 	addr_offset = IPA_UC_DBG_STATS_GET_OFFSET(
 		ipa3_ctx->uc_ctx.uc_sram_mmio->responseParams_1);
@@ -259,72 +240,36 @@ static void ipa3_uc_save_dbg_stats(u32 size)
 		IPAERR("unexpected NULL mmio\n");
 		return;
 	}
-	switch (prot_id) {
+	switch (protocol_id) {
 	case IPA_HW_PROTOCOL_AQC:
-		if (!ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio) {
-			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_size =
-				size;
-			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_ofst =
-				addr_offset;
-			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio =
-				mmio;
-		} else
-			goto unmap;
 		break;
 	case IPA_HW_PROTOCOL_11ad:
 		break;
 	case IPA_HW_PROTOCOL_WDI:
-		if (!ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_mmio) {
-			ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_size =
-				size;
-			ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_ofst =
-				addr_offset;
-			ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_mmio =
-				mmio;
-		} else
-			goto unmap;
+		ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_size = size;
+		ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_ofst = addr_offset;
+		ipa3_ctx->wdi2_ctx.dbg_stats.uc_dbg_stats_mmio = mmio;
 		break;
 	case IPA_HW_PROTOCOL_WDI3:
-		if (!ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_mmio) {
-			ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_size =
-				size;
-			ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_ofst =
-				addr_offset;
-			ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_mmio =
-				mmio;
-		} else
-			goto unmap;
+		ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_size = size;
+		ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_ofst = addr_offset;
+		ipa3_ctx->wdi3_ctx.dbg_stats.uc_dbg_stats_mmio = mmio;
 		break;
 	case IPA_HW_PROTOCOL_ETH:
 		break;
 	case IPA_HW_PROTOCOL_MHIP:
-		if (!ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_mmio) {
-			ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_size =
-				size;
-			ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_ofst =
-				addr_offset;
-			ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_mmio =
-				mmio;
-		} else
-			goto unmap;
+		ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_size = size;
+		ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_ofst = addr_offset;
+		ipa3_ctx->mhip_ctx.dbg_stats.uc_dbg_stats_mmio = mmio;
 		break;
 	case IPA_HW_PROTOCOL_USB:
-		if (!ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_mmio) {
-			ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_size =
-				size;
-			ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_ofst =
-				addr_offset;
-			ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_mmio =
-				mmio;
-		} else
-			goto unmap;
+		ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_size = size;
+		ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_ofst = addr_offset;
+		ipa3_ctx->usb_ctx.dbg_stats.uc_dbg_stats_mmio = mmio;
 		break;
 	default:
-		IPAERR("unknown protocols %d\n", prot_id);
+		IPAERR("unknown protocols %d\n", protocol_id);
 	}
-	return;
-unmap:
-	iounmap(mmio);
 }
 
 static void ipa3_log_evt_hdlr(void)
@@ -373,68 +318,6 @@ static void ipa3_log_evt_hdlr(void)
 
 bad_uc_top_ofst:
 	ipa3_ctx->uc_ctx.uc_event_top_ofst = 0;
-}
-
-static void ipa3_event_ring_hdlr(void)
-{
-	u32 ering_rp, offset;
-	void *rp_va;
-	struct ipa_inform_wlan_bw bw_info;
-	struct eventElement_t *e_b = NULL, *e_q = NULL;
-	int mul = 0;
-
-	ering_rp = ipahal_read_reg_mn(IPA_UC_MAILBOX_m_n,
-		IPA_UC_ERING_m, IPA_UC_ERING_n_r);
-	offset = sizeof(struct eventElement_t);
-	ipa3_ctx->uc_ctx.ering_rp = ering_rp;
-
-	while (ipa3_ctx->uc_ctx.ering_rp_local != ering_rp) {
-		rp_va = ipa3_ctx->uc_ctx.event_ring.base +
-			ipa3_ctx->uc_ctx.ering_rp_local;
-
-		if (((struct eventElement_t *) rp_va)->Opcode == BW_NOTIFY) {
-			e_b = ((struct eventElement_t *) rp_va);
-			IPADBG("prot(%d), index (%d) throughput (%lu)\n",
-			e_b->Protocol,
-			e_b->Value.bw_param.ThresholdIndex,
-			e_b->Value.bw_param.throughput);
-			/* check values */
-			mul = 1000 * IPA_UC_MON_INTERVAL;
-			if (e_b->Value.bw_param.throughput <
-				ipa3_ctx->uc_ctx.bw_info_max*mul) {
-				memset(&bw_info, 0,
-					sizeof(struct ipa_inform_wlan_bw));
-				bw_info.index =
-					e_b->Value.bw_param.ThresholdIndex;
-				mul = 1000 / IPA_UC_MON_INTERVAL;
-				bw_info.throughput =
-					e_b->Value.bw_param.throughput*mul;
-				if (ipa3_inform_wlan_bw(&bw_info))
-					IPAERR_RL("failed index %d to wlan\n",
-					bw_info.index);
-			}
-		} else if (((struct eventElement_t *) rp_va)->Opcode
-			== QUOTA_NOTIFY) {
-			e_q = ((struct eventElement_t *) rp_va);
-			IPADBG("got quota-notify %d reach(%d) usage (%lu)\n",
-			e_q->Protocol,
-			e_q->Value.quota_param.ThreasholdReached,
-			e_q->Value.quota_param.usage);
-			if (ipa3_broadcast_wdi_quota_reach_ind(0,
-				e_q->Value.quota_param.usage))
-				IPAERR_RL("failed on quota_reach for %d\n",
-				e_q->Protocol);
-		}
-		ipa3_ctx->uc_ctx.ering_rp_local += offset;
-		ipa3_ctx->uc_ctx.ering_rp_local %=
-			ipa3_ctx->uc_ctx.event_ring.size;
-		/* update wp */
-		ipa3_ctx->uc_ctx.ering_wp_local += offset;
-		ipa3_ctx->uc_ctx.ering_wp_local %=
-			ipa3_ctx->uc_ctx.event_ring.size;
-		ipahal_write_reg_mn(IPA_UC_MAILBOX_m_n, IPA_UC_ERING_m,
-			IPA_UC_ERING_n_w, ipa3_ctx->uc_ctx.ering_wp_local);
-	}
 }
 
 /**
@@ -558,17 +441,12 @@ static void ipa3_uc_event_handler(enum ipa_irq_type interrupt,
 		ipa3_ctx->uc_ctx.uc_error_timestamp =
 			ipahal_read_reg(IPA_TAG_TIMER);
 		/* Unexpected UC hardware state */
-		ipa_assert();
+		BUG();
 	} else if (ipa3_ctx->uc_ctx.uc_sram_mmio->eventOp ==
 		IPA_HW_2_CPU_EVENT_LOG_INFO) {
 		IPADBG("uC evt log info ofst=0x%x\n",
 			ipa3_ctx->uc_ctx.uc_sram_mmio->eventParams);
 		ipa3_log_evt_hdlr();
-	} else if (ipa3_ctx->uc_ctx.uc_sram_mmio->eventOp ==
-		IPA_HW_2_CPU_EVNT_RING_NOTIFY) {
-		IPADBG("uC evt log info ofst=0x%x\n",
-			ipa3_ctx->uc_ctx.uc_sram_mmio->eventParams);
-		ipa3_event_ring_hdlr();
 	} else {
 		IPADBG("unsupported uC evt opcode=%u\n",
 				ipa3_ctx->uc_ctx.uc_sram_mmio->eventOp);
@@ -725,6 +603,17 @@ static void ipa3_uc_wigig_misc_int_handler(enum ipa_irq_type interrupt,
 	IPADBG("exit\n");
 }
 
+void ipa3_uc_map_cntr_reg_notify(void)
+{
+	IPAWANDBG("complete the mapping of G_RD_CNTR register\n");
+	IPA_ACTIVE_CLIENTS_INC_SPECIAL("QMI_IPA_UC");
+	ipa3_uc_send_cmd(0,
+		IPA_CPU_2_HW_CMD_DEBUG_GET_INFO,
+		IPA_HW_2_CPU_RESPONSE_CMD_COMPLETED,
+		false, 6*HZ);
+	IPA_ACTIVE_CLIENTS_DEC_SPECIAL("QMI_IPA_UC");
+}
+
 static int ipa3_uc_send_cmd_64b_param(u32 cmd_lo, u32 cmd_hi, u32 opcode,
 	u32 expected_status, bool polling_mode, unsigned long timeout_jiffies)
 {
@@ -785,7 +674,7 @@ send_cmd:
 			}
 			mutex_unlock(&ipa3_ctx->uc_ctx.uc_lock);
 			/* Unexpected UC hardware state */
-			ipa_assert();
+			BUG();
 		}
 	} else {
 		if (wait_for_completion_timeout(&ipa3_ctx->uc_ctx.uc_completion,
@@ -798,7 +687,7 @@ send_cmd:
 			}
 			mutex_unlock(&ipa3_ctx->uc_ctx.uc_lock);
 			/* Unexpected UC hardware state */
-			ipa_assert();
+			BUG();
 		}
 	}
 
@@ -816,7 +705,7 @@ send_cmd:
 				IPAERR("Failed after %d tries\n", retries);
 				mutex_unlock(&ipa3_ctx->uc_ctx.uc_lock);
 				/* Unexpected UC hardware state */
-				ipa_assert();
+				BUG();
 			}
 			mutex_unlock(&ipa3_ctx->uc_ctx.uc_lock);
 			if (ipa3_ctx->uc_ctx.uc_status ==
@@ -1172,7 +1061,7 @@ cleanup:
 	return result;
 }
 
-int ipa3_uc_debug_stats_dealloc(uint32_t prot_id)
+int ipa3_uc_debug_stats_dealloc(uint32_t protocol)
 {
 	int result;
 	struct ipa_mem_buffer cmd;
@@ -1188,7 +1077,7 @@ int ipa3_uc_debug_stats_dealloc(uint32_t prot_id)
 	}
 	cmd_data = (struct IpaHwOffloadStatsDeAllocCmdData_t *)
 		cmd.base;
-	cmd_data->protocol = prot_id;
+	cmd_data->protocol = protocol;
 	command = IPA_CPU_2_HW_CMD_OFFLOAD_STATS_DEALLOC;
 
 	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
@@ -1201,10 +1090,8 @@ int ipa3_uc_debug_stats_dealloc(uint32_t prot_id)
 		IPAERR("fail to dealloc offload stats\n");
 		goto cleanup;
 	}
-	switch (prot_id) {
+	switch (protocol) {
 	case IPA_HW_PROTOCOL_AQC:
-		iounmap(ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio);
-		ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio = NULL;
 		break;
 	case IPA_HW_PROTOCOL_11ad:
 		break;
@@ -1219,7 +1106,7 @@ int ipa3_uc_debug_stats_dealloc(uint32_t prot_id)
 	case IPA_HW_PROTOCOL_ETH:
 		break;
 	default:
-		IPAERR("unknown protocols %d\n", prot_id);
+		IPAERR("unknown protocols %d\n", protocol);
 	}
 	result = 0;
 cleanup:
@@ -1228,288 +1115,4 @@ cleanup:
 	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	IPADBG("exit\n");
 	return result;
-}
-
-int ipa3_uc_setup_event_ring(void)
-{
-	int res = 0;
-	struct ipa_mem_buffer cmd, *ring;
-	union IpaSetupEventRingCmdData_t *ring_info;
-
-	ring = &ipa3_ctx->uc_ctx.event_ring;
-	/* Allocate event ring */
-	ring->size = sizeof(struct eventElement_t) * IPA_UC_EVENT_RING_SIZE;
-	ring->base = dma_alloc_coherent(ipa3_ctx->uc_pdev, ring->size,
-		&ring->phys_base, GFP_KERNEL);
-	if (ring->base == NULL)
-		return -ENOMEM;
-
-	cmd.size = sizeof(*ring_info);
-	cmd.base = dma_alloc_coherent(ipa3_ctx->uc_pdev, cmd.size,
-		&cmd.phys_base, GFP_KERNEL);
-	if (cmd.base == NULL) {
-		dma_free_coherent(ipa3_ctx->uc_pdev, ring->size,
-			ring->base, ring->phys_base);
-		return -ENOMEM;
-	}
-
-	ring_info = (union IpaSetupEventRingCmdData_t *) cmd.base;
-	ring_info->event.ring_base_pa = (u32) (ring->phys_base & 0xFFFFFFFF);
-	ring_info->event.ring_base_pa_hi =
-		(u32) ((ring->phys_base & 0xFFFFFFFF00000000) >> 32);
-	ring_info->event.ring_size = IPA_UC_EVENT_RING_SIZE;
-
-	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
-
-	res = ipa3_uc_send_cmd((u32)(cmd.phys_base),
-		IPA_CPU_2_HW_CMD_SETUP_EVENT_RING, 0,
-		false, 10 * HZ);
-
-	if (res) {
-		IPAERR(" faile to setup event ring 0x%x 0x%x, size %d\n",
-			ring_info->event.ring_base_pa,
-			ring_info->event.ring_base_pa_hi,
-			ring_info->event.ring_size);
-		goto free_cmd;
-	}
-
-	ipa3_ctx->uc_ctx.uc_event_ring_valid = true;
-	/* write wp/rp values */
-	ipa3_ctx->uc_ctx.ering_rp_local = 0;
-	ipa3_ctx->uc_ctx.ering_wp_local =
-		ring->size - sizeof(struct eventElement_t);
-	ipahal_write_reg_mn(IPA_UC_MAILBOX_m_n,
-		IPA_UC_ERING_m, IPA_UC_ERING_n_r, 0);
-	ipahal_write_reg_mn(IPA_UC_MAILBOX_m_n,
-		IPA_UC_ERING_m, IPA_UC_ERING_n_w,
-			ipa3_ctx->uc_ctx.ering_wp_local);
-	ipa3_ctx->uc_ctx.ering_wp =
-		ipa3_ctx->uc_ctx.ering_wp_local;
-	ipa3_ctx->uc_ctx.ering_rp = 0;
-
-free_cmd:
-	dma_free_coherent(ipa3_ctx->uc_pdev,
-		cmd.size, cmd.base, cmd.phys_base);
-	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
-	return res;
-}
-
-int ipa3_uc_quota_monitor(uint64_t quota)
-{
-	int ind, res = 0;
-	struct ipa_mem_buffer cmd;
-	struct IpaQuotaMonitoring_t *quota_info;
-
-	/* check uc-event-ring setup */
-	if (!ipa3_ctx->uc_ctx.uc_event_ring_valid) {
-		IPAERR("uc_event_ring_valid %d\n",
-		ipa3_ctx->uc_ctx.uc_event_ring_valid);
-		return -EINVAL;
-	}
-
-	cmd.size = sizeof(*quota_info);
-	cmd.base = dma_alloc_coherent(ipa3_ctx->uc_pdev, cmd.size,
-		&cmd.phys_base, GFP_KERNEL);
-	if (cmd.base == NULL)
-		return -ENOMEM;
-
-	quota_info = (struct IpaQuotaMonitoring_t *)cmd.base;
-	quota_info->protocol = IPA_HW_PROTOCOL_WDI3;
-	quota_info->params.WdiQM.Quota = quota;
-	quota_info->params.WdiQM.info.Num = 4;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		UL_HW - 1;
-	quota_info->params.WdiQM.info.Offset[0] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-		sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		DL_ALL - 1;
-	quota_info->params.WdiQM.info.Offset[1] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-		sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		UL_HW_CACHE - 1;
-	quota_info->params.WdiQM.info.Offset[2] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-		sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		UL_WLAN_TX - 1;
-	quota_info->params.WdiQM.info.Offset[3] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-		sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	quota_info->params.WdiQM.info.Interval =
-		IPA_UC_MON_INTERVAL;
-
-	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
-	res = ipa3_uc_send_cmd((u32)(cmd.phys_base),
-		IPA_CPU_2_HW_CMD_QUOTA_MONITORING,
-		IPA_HW_2_CPU_OFFLOAD_CMD_STATUS_SUCCESS,
-		false, 10 * HZ);
-
-	if (res) {
-		IPAERR(" faile to set quota %d, number offset %d\n",
-			quota_info->params.WdiQM.Quota,
-			quota_info->params.WdiQM.info.Num);
-		goto free_cmd;
-	}
-
-	IPADBG(" offest1 %d offest2 %d offest3 %d offest4 %d\n",
-			quota_info->params.WdiQM.info.Offset[0],
-			quota_info->params.WdiQM.info.Offset[1],
-			quota_info->params.WdiQM.info.Offset[2],
-			quota_info->params.WdiQM.info.Offset[3]);
-
-free_cmd:
-	dma_free_coherent(ipa3_ctx->uc_pdev, cmd.size, cmd.base, cmd.phys_base);
-	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
-
-	return res;
-}
-
-int ipa3_uc_bw_monitor(struct ipa_wdi_bw_info *info)
-{
-	int i, ind, res = 0;
-	struct ipa_mem_buffer cmd;
-	struct IpaBwMonitoring_t *bw_info;
-
-	if (!info)
-		return -EINVAL;
-
-	/* check uc-event-ring setup */
-	if (!ipa3_ctx->uc_ctx.uc_event_ring_valid) {
-		IPAERR("uc_event_ring_valid %d\n",
-		ipa3_ctx->uc_ctx.uc_event_ring_valid);
-		return -EINVAL;
-	}
-
-	/* check max entry */
-	if (info->num > BW_MONITORING_MAX_THRESHOLD) {
-		IPAERR("%d, support max %d bw monitor\n", info->num,
-		BW_MONITORING_MAX_THRESHOLD);
-		return -EINVAL;
-	}
-
-	cmd.size = sizeof(*bw_info);
-	cmd.base = dma_alloc_coherent(ipa3_ctx->uc_pdev, cmd.size,
-		&cmd.phys_base, GFP_KERNEL);
-	if (cmd.base == NULL)
-		return -ENOMEM;
-
-	bw_info = (struct IpaBwMonitoring_t *)cmd.base;
-	bw_info->protocol = IPA_HW_PROTOCOL_WDI3;
-	bw_info->params.WdiBw.NumThresh = info->num;
-	bw_info->params.WdiBw.Stop = info->stop;
-	IPADBG("stop bw-monitor? %d\n", bw_info->params.WdiBw.Stop);
-
-	/* cache the bw info */
-	ipa3_ctx->uc_ctx.info.num = info->num;
-	ipa3_ctx->uc_ctx.info.stop = info->stop;
-	ipa3_ctx->uc_ctx.bw_info_max = 0;
-
-	for (i = 0; i < info->num; i++) {
-		bw_info->params.WdiBw.BwThreshold[i] = info->threshold[i];
-		IPADBG("%d-st, %lu\n", i, bw_info->params.WdiBw.BwThreshold[i]);
-		ipa3_ctx->uc_ctx.info.threshold[i] = info->threshold[i];
-		if (info->threshold[i] > ipa3_ctx->uc_ctx.bw_info_max)
-			ipa3_ctx->uc_ctx.bw_info_max = info->threshold[i];
-	}
-	/* set max to both UL+DL */
-	ipa3_ctx->uc_ctx.bw_info_max *= 2;
-	IPADBG("bw-monitor max %lu\n", ipa3_ctx->uc_ctx.bw_info_max);
-
-	bw_info->params.WdiBw.info.Num = 8;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		UL_HW - 1;
-	bw_info->params.WdiBw.info.Offset[0] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		DL_HW - 1;
-	bw_info->params.WdiBw.info.Offset[1] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		DL_ALL - 1;
-	bw_info->params.WdiBw.info.Offset[2] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.hw_counter_offset +
-		UL_ALL - 1;
-	bw_info->params.WdiBw.info.Offset[3] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		UL_HW_CACHE - 1;
-	bw_info->params.WdiBw.info.Offset[4] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		DL_HW_CACHE - 1;
-	bw_info->params.WdiBw.info.Offset[5] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		UL_WLAN_TX - 1;
-	bw_info->params.WdiBw.info.Offset[6] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	ind = ipa3_ctx->fnr_info.sw_counter_offset +
-		DL_WLAN_TX - 1;
-	bw_info->params.WdiBw.info.Offset[7] =
-		IPA_MEM_PART(stats_fnr_ofst) +
-			sizeof(struct ipa_flt_rt_stats) * ind + 8;
-	bw_info->params.WdiBw.info.Interval =
-		IPA_UC_MON_INTERVAL;
-
-	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
-
-	res = ipa3_uc_send_cmd((u32)(cmd.phys_base),
-		IPA_CPU_2_HW_CMD_BW_MONITORING,
-			IPA_HW_2_CPU_OFFLOAD_CMD_STATUS_SUCCESS,
-			false, 10 * HZ);
-
-	if (res) {
-		IPAERR(" faile to set bw %d level with %d coutners\n",
-			bw_info->params.WdiBw.NumThresh,
-			bw_info->params.WdiBw.info.Num);
-		goto free_cmd;
-	}
-
-free_cmd:
-	dma_free_coherent(ipa3_ctx->uc_pdev, cmd.size, cmd.base, cmd.phys_base);
-	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
-
-	return res;
-}
-
-int ipa3_set_wlan_tx_info(struct ipa_wdi_tx_info *info)
-{
-	struct ipa_flt_rt_stats stats;
-	struct ipacm_fnr_info fnr_info;
-
-	memset(&fnr_info, 0, sizeof(struct ipacm_fnr_info));
-	if (!ipa_get_fnr_info(&fnr_info)) {
-		IPAERR("FNR counter haven't configured\n");
-		return -EINVAL;
-	}
-
-	/* update sw counters */
-	memset(&stats, 0, sizeof(struct ipa_flt_rt_stats));
-	stats.num_bytes = info->sta_tx;
-	if (ipa_set_flt_rt_stats(fnr_info.sw_counter_offset +
-		UL_WLAN_TX, stats)) {
-		IPAERR("Failed to set stats to ul_wlan_tx %d\n",
-			fnr_info.sw_counter_offset + UL_WLAN_TX);
-		return -EINVAL;
-	}
-
-	stats.num_bytes = info->ap_tx;
-	if (ipa_set_flt_rt_stats(fnr_info.sw_counter_offset +
-		DL_WLAN_TX, stats)) {
-		IPAERR("Failed to set stats to dl_wlan_tx %d\n",
-			fnr_info.sw_counter_offset + DL_WLAN_TX);
-		return -EINVAL;
-	}
-
-	return 0;
 }

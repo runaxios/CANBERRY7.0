@@ -2,7 +2,7 @@
  * cs35l41-spi.c -- CS35l41 SPI driver
  *
  * Copyright 2017 Cirrus Logic, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Author:	David Rhodes	<david.rhodes@cirrus.com>
  *
@@ -40,7 +40,6 @@ static struct regmap_config cs35l41_regmap_spi = {
 	.num_reg_defaults = ARRAY_SIZE(cs35l41_reg),
 	.volatile_reg = cs35l41_volatile_reg,
 	.readable_reg = cs35l41_readable_reg,
-	.precious_reg = cs35l41_precious_reg,
 	.cache_type = REGCACHE_RBTREE,
 };
 
@@ -66,8 +65,6 @@ static int cs35l41_spi_probe(struct spi_device *spi)
 	if (cs35l41 == NULL)
 		return -ENOMEM;
 
-	mutex_init(&cs35l41->rate_lock);
-
 	spi_set_drvdata(spi, cs35l41);
 	cs35l41->regmap = devm_regmap_init_spi(spi, regmap_config);
 	if (IS_ERR(cs35l41->regmap)) {
@@ -90,7 +87,7 @@ static int cs35l41_spi_remove(struct spi_device *spi)
 	regmap_write(cs35l41->regmap, CS35L41_IRQ1_MASK1, 0xFFFFFFFF);
 	wm_adsp2_remove(&cs35l41->dsp);
 	regulator_bulk_disable(cs35l41->num_supplies, cs35l41->supplies);
-	snd_soc_unregister_component(cs35l41->dev);
+	snd_soc_unregister_codec(cs35l41->dev);
 	return 0;
 }
 

@@ -1,6 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -209,30 +218,9 @@ static int adc_tm5_configure(struct adc_tm_sensor *sensor,
 	buf[7] |= ADC_TM_Mn_MEAS_EN;
 
 	ret = adc_tm5_write_reg(chip,
-			ADC_TM_Mn_ADC_CH_SEL_CTL(btm_chan_idx), buf, 1);
+			ADC_TM_Mn_ADC_CH_SEL_CTL(btm_chan_idx), buf, 8);
 	if (ret < 0) {
-		pr_err("adc-tm channel select failed\n");
-		return ret;
-	}
-
-	ret = adc_tm5_write_reg(chip,
-			ADC_TM_Mn_MEAS_INTERVAL_CTL(btm_chan_idx), &buf[5], 1);
-	if (ret < 0) {
-		pr_err("adc-tm timer select failed\n");
-		return ret;
-	}
-
-	ret = adc_tm5_write_reg(chip,
-			ADC_TM_Mn_CTL(btm_chan_idx), &buf[6], 1);
-	if (ret < 0) {
-		pr_err("adc-tm parameter select failed\n");
-		return ret;
-	}
-
-	ret = adc_tm5_write_reg(chip,
-			ADC_TM_Mn_EN(btm_chan_idx), &buf[7], 1);
-	if (ret < 0) {
-		pr_err("adc-tm monitoring enable failed\n");
+		pr_err("adc-tm block write failed with %d\n", ret);
 		return ret;
 	}
 
@@ -285,7 +273,7 @@ static int32_t adc_tm5_thr_update(struct adc_tm_sensor *sensor,
 	uint16_t reg_low_thr_lsb, reg_high_thr_lsb;
 	uint32_t scale_type = 0, mask = 0, btm_chan_idx = 0;
 	struct adc_tm_config tm_config;
-	struct adc_tm_chip *chip = NULL;
+	struct adc_tm_chip *chip;
 
 	ret = adc_tm5_get_btm_idx(chip,
 		sensor->btm_ch, &btm_chan_idx);
@@ -563,9 +551,9 @@ int32_t adc_tm5_channel_measure(struct adc_tm_chip *chip,
 	/* enable low/high irqs */
 	list_for_each_entry(client_info,
 			&chip->sensor[dt_index].thr_list, list) {
-		if (client_info->high_thr_set)
+		if (client_info->high_thr_set == true)
 			high_thr_set = true;
-		if (client_info->low_thr_set)
+		if (client_info->low_thr_set == true)
 			low_thr_set = true;
 	}
 

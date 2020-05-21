@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "subsys-restart: %s(): " fmt, __func__
@@ -274,8 +281,6 @@ static ssize_t restart_level_store(struct device *dev,
 
 	for (i = 0; i < ARRAY_SIZE(restart_levels); i++)
 		if (!strncasecmp(buf, restart_levels[i], count)) {
-			pil_ipc("[%s]: change restart level to %d\n",
-				subsys->desc->name, i);
 			subsys->restart_level = i;
 			return orig_count;
 		}
@@ -512,14 +517,14 @@ static int is_ramdump_enabled(struct subsys_device *dev)
 }
 
 #ifdef CONFIG_SETUP_SSR_NOTIF_TIMEOUTS
-static void notif_timeout_handler(struct timer_list *t)
+static void notif_timeout_handler(unsigned long data)
 {
 	char *sysmon_msg = "Sysmon communication from %s to %s taking too long";
 	char *subsys_notif_msg = "Subsys notifier chain for %s taking too long";
 	char *sysmon_shutdwn_msg = "sysmon_send_shutdown to %s taking too long";
 	char *unknown_err_msg = "Unknown communication occurred";
 	struct subsys_notif_timeout *timeout_data =
-		from_timer(timeout_data, t, timer);
+		(struct subsys_notif_timeout *) data;
 	enum ssr_comm comm_type = timeout_data->comm_type;
 
 	switch (comm_type) {
@@ -567,6 +572,7 @@ static void _setup_timeout(struct subsys_desc *source_ss,
 		return;
 	}
 
+	timeout_data->timer.data = (unsigned long) timeout_data;
 	timeout_data->comm_type = comm_type;
 	timeout = jiffies + msecs_to_jiffies(timeout_vals[comm_type]);
 	mod_timer(&timeout_data->timer, timeout);
@@ -574,7 +580,8 @@ static void _setup_timeout(struct subsys_desc *source_ss,
 
 static void _init_subsys_timer(struct subsys_desc *subsys)
 {
-	timer_setup(&subsys->timeout_data.timer, notif_timeout_handler, 0);
+	init_timer(&subsys->timeout_data.timer);
+	subsys->timeout_data.timer.function = notif_timeout_handler;
 }
 
 #endif /* CONFIG_SETUP_SSR_NOTIF_TIMEOUTS */
@@ -611,6 +618,22 @@ static int for_each_subsys_device(struct subsys_device **list,
 			return ret;
 	}
 	return 0;
+}
+
+static void subsys_notif_uevent(struct subsys_desc *desc,
+				enum subsys_notif_type notif)
+{
+	char *envp[3];
+
+	if (notif == SUBSYS_AFTER_POWERUP) {
+		envp[0] = kasprintf(GFP_KERNEL, "SUBSYSTEM=%s", desc->name);
+		envp[1] = kasprintf(GFP_KERNEL, "NOTIFICATION=%d", notif);
+		envp[2] = NULL;
+		kobject_uevent_env(&desc->dev->kobj, KOBJ_CHANGE, envp);
+		pr_debug("%s %s sent\n", envp[0], envp[1]);
+		kfree(envp[1]);
+		kfree(envp[0]);
+	}
 }
 
 static void notify_each_subsys_device(struct subsys_device **list,
@@ -659,6 +682,7 @@ static void notify_each_subsys_device(struct subsys_device **list,
 								&notif_data);
 		cancel_timeout(dev->desc);
 		trace_pil_notif("after_send_notif", notif, dev->desc->fw_name);
+		subsys_notif_uevent(dev->desc, notif);
 	}
 }
 
@@ -851,7 +875,7 @@ static int subsys_start(struct subsys_device *subsys)
 		subsys_set_state(subsys, SUBSYS_ONLINE);
 		return 0;
 	}
-	pil_ipc("[%s]: before wait_for_err_ready\n", subsys->desc->name);
+
 	ret = wait_for_err_ready(subsys);
 	if (ret) {
 		/* pil-boot succeeded but we need to shutdown
@@ -867,7 +891,6 @@ static int subsys_start(struct subsys_device *subsys)
 
 	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_POWERUP,
 								NULL);
-	pil_ipc("[%s]: exit\n", subsys->desc->name);
 	return ret;
 }
 
@@ -875,7 +898,6 @@ static void subsys_stop(struct subsys_device *subsys)
 {
 	const char *name = subsys->desc->name;
 
-	pil_ipc("[%s]: entry\n", subsys->desc->name);
 	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_SHUTDOWN, NULL);
 	reinit_completion(&subsys->shutdown_ack);
 	if (!of_property_read_bool(subsys->desc->dev->of_node,
@@ -894,7 +916,6 @@ static void subsys_stop(struct subsys_device *subsys)
 	subsys_set_state(subsys, SUBSYS_OFFLINE);
 	disable_all_irqs(subsys);
 	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_SHUTDOWN, NULL);
-	pil_ipc("[%s]: exit\n", subsys->desc->name);
 }
 
 int subsystem_set_fwname(const char *name, const char *fw_name)
@@ -1309,24 +1330,14 @@ EXPORT_SYMBOL(subsystem_crashed);
 void subsys_set_crash_status(struct subsys_device *dev,
 				enum crash_status crashed)
 {
-	if (!dev) {
-		pr_err("subsys_set_crash_status() dev is NULL\n");
-		return;
-	}
 	dev->crashed = crashed;
 }
 EXPORT_SYMBOL(subsys_set_crash_status);
 
 enum crash_status subsys_get_crash_status(struct subsys_device *dev)
 {
-	if (!dev) {
-		pr_err("subsys_get_crash_status() dev is NULL\n");
-		return CRASH_STATUS_WDOG_BITE;
-	}
-
 	return dev->crashed;
 }
-EXPORT_SYMBOL(subsys_get_crash_status);
 
 static struct subsys_device *desc_to_subsys(struct device *d)
 {
@@ -1355,16 +1366,6 @@ void notify_proxy_unvote(struct device *device)
 	if (dev)
 		notify_each_subsys_device(&dev, 1, SUBSYS_PROXY_UNVOTE, NULL);
 }
-
-void notify_before_auth_and_reset(struct device *device)
-{
-	struct subsys_device *dev = desc_to_subsys(device);
-
-	if (dev)
-		notify_each_subsys_device(&dev, 1,
-			SUBSYS_BEFORE_AUTH_AND_RESET, NULL);
-}
-
 
 static int subsys_device_open(struct inode *inode, struct file *file)
 {
@@ -1608,7 +1609,7 @@ static int __get_smem_state(struct subsys_desc *desc, const char *prop,
 		desc->state = qcom_smem_state_get(desc->dev, prop, smem_bit);
 		if (IS_ERR_OR_NULL(desc->state)) {
 			pr_err("Could not get smem-states %s\n", prop);
-			return PTR_ERR(desc->state);
+			return -ENXIO;
 		}
 		return 0;
 	}
@@ -1913,7 +1914,6 @@ err_sysmon_notifier:
 	if (ofnode)
 		subsys_remove_restart_order(ofnode);
 err_register:
-	subsys_char_device_remove(subsys);
 	device_unregister(&subsys->dev);
 	return ERR_PTR(ret);
 }

@@ -38,7 +38,6 @@ static const struct aspeed_wdt_config ast2500_config = {
 static const struct of_device_id aspeed_wdt_of_table[] = {
 	{ .compatible = "aspeed,ast2400-wdt", .data = &ast2400_config },
 	{ .compatible = "aspeed,ast2500-wdt", .data = &ast2500_config },
-	{ .compatible = "aspeed,ast2600-wdt", .data = &ast2500_config },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, aspeed_wdt_of_table);
@@ -56,8 +55,6 @@ MODULE_DEVICE_TABLE(of, aspeed_wdt_of_table);
 #define   WDT_CTRL_WDT_INTR		BIT(2)
 #define   WDT_CTRL_RESET_SYSTEM		BIT(1)
 #define   WDT_CTRL_ENABLE		BIT(0)
-#define WDT_TIMEOUT_STATUS	0x10
-#define   WDT_TIMEOUT_STATUS_BOOT_SECONDARY	BIT(1)
 
 /*
  * WDT_RESET_WIDTH controls the characteristics of the external pulse (if
@@ -195,7 +192,6 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 	struct device_node *np;
 	const char *reset_type;
 	u32 duration;
-	u32 status;
 	int ret;
 
 	wdt = devm_kzalloc(&pdev->dev, sizeof(*wdt), GFP_KERNEL);
@@ -254,19 +250,14 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 	if (of_property_read_bool(np, "aspeed,alt-boot"))
 		wdt->ctrl |= WDT_CTRL_BOOT_SECONDARY;
 
+	writel(wdt->ctrl, wdt->base + WDT_CTRL);
+
 	if (readl(wdt->base + WDT_CTRL) & WDT_CTRL_ENABLE)  {
-		/*
-		 * The watchdog is running, but invoke aspeed_wdt_start() to
-		 * write wdt->ctrl to WDT_CTRL to ensure the watchdog's
-		 * configuration conforms to the driver's expectations.
-		 * Primarily, ensure we're using the 1MHz clock source.
-		 */
 		aspeed_wdt_start(&wdt->wdd);
 		set_bit(WDOG_HW_RUNNING, &wdt->wdd.status);
 	}
 
-	if ((of_device_is_compatible(np, "aspeed,ast2500-wdt")) ||
-		(of_device_is_compatible(np, "aspeed,ast2600-wdt"))) {
+	if (of_device_is_compatible(np, "aspeed,ast2500-wdt")) {
 		u32 reg = readl(wdt->base + WDT_RESET_WIDTH);
 
 		reg &= config->ext_pulse_width_mask;
@@ -312,10 +303,6 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
 		writel(duration - 1, wdt->base + WDT_RESET_WIDTH);
 	}
 
-	status = readl(wdt->base + WDT_TIMEOUT_STATUS);
-	if (status & WDT_TIMEOUT_STATUS_BOOT_SECONDARY)
-		wdt->wdd.bootstatus = WDIOF_CARDRESET;
-
 	ret = devm_watchdog_register_device(&pdev->dev, &wdt->wdd);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register\n");
@@ -332,18 +319,7 @@ static struct platform_driver aspeed_watchdog_driver = {
 		.of_match_table = of_match_ptr(aspeed_wdt_of_table),
 	},
 };
-
-static int __init aspeed_wdt_init(void)
-{
-	return platform_driver_register(&aspeed_watchdog_driver);
-}
-arch_initcall(aspeed_wdt_init);
-
-static void __exit aspeed_wdt_exit(void)
-{
-	platform_driver_unregister(&aspeed_watchdog_driver);
-}
-module_exit(aspeed_wdt_exit);
+module_platform_driver(aspeed_watchdog_driver);
 
 MODULE_DESCRIPTION("Aspeed Watchdog Driver");
 MODULE_LICENSE("GPL");

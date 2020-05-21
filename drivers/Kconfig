@@ -9,8 +9,6 @@ source "drivers/bus/Kconfig"
 
 source "drivers/connector/Kconfig"
 
-source "drivers/gnss/Kconfig"
-
 source "drivers/mtd/Kconfig"
 
 source "drivers/of/Kconfig"
@@ -57,11 +55,11 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
-source "drivers/i3c/Kconfig"
-
 source "drivers/spi/Kconfig"
 
 source "drivers/spmi/Kconfig"
+
+source "drivers/slimbus/Kconfig"
 
 source "drivers/hsi/Kconfig"
 
@@ -72,6 +70,8 @@ source "drivers/ptp/Kconfig"
 source "drivers/pinctrl/Kconfig"
 
 source "drivers/gpio/Kconfig"
+
+source "drivers/gnsssirf/Kconfig"
 
 source "drivers/w1/Kconfig"
 
@@ -159,8 +159,6 @@ source "drivers/remoteproc/Kconfig"
 
 source "drivers/rpmsg/Kconfig"
 
-source "drivers/soundwire/Kconfig"
-
 source "drivers/soc/Kconfig"
 
 source "drivers/devfreq/Kconfig"
@@ -176,6 +174,8 @@ source "drivers/ntb/Kconfig"
 source "drivers/vme/Kconfig"
 
 source "drivers/pwm/Kconfig"
+
+source "drivers/gpu/msm/Kconfig"
 
 source "drivers/irqchip/Kconfig"
 
@@ -205,7 +205,9 @@ source "drivers/dax/Kconfig"
 
 source "drivers/nvmem/Kconfig"
 
-source "drivers/hwtracing/Kconfig"
+source "drivers/hwtracing/stm/Kconfig"
+
+source "drivers/hwtracing/intel_th/Kconfig"
 
 source "drivers/fpga/Kconfig"
 
@@ -215,20 +217,11 @@ source "drivers/tee/Kconfig"
 
 source "drivers/mux/Kconfig"
 
-source "drivers/opp/Kconfig"
-
-source "drivers/visorbus/Kconfig"
-
-source "drivers/siox/Kconfig"
-
-source "drivers/slimbus/Kconfig"
+source "drivers/sensors/Kconfig"
 
 source "drivers/esoc/Kconfig"
 
-source "drivers/sensors/Kconfig"
+source "drivers/halls/Kconfig"
 
-source "drivers/gpu/msm/Kconfig"
-
-source "drivers/energy_model/Kconfig"
-
+source "drivers/trusty/Kconfig"
 endmenu

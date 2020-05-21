@@ -17,7 +17,6 @@
 
 #include <linux/component.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-core.h>
@@ -132,15 +131,12 @@ static int vimc_cap_s_fmt_vid_cap(struct file *file, void *priv,
 				  struct v4l2_format *f)
 {
 	struct vimc_cap_device *vcap = video_drvdata(file);
-	int ret;
 
 	/* Do not change the format while stream is on */
 	if (vb2_is_busy(&vcap->queue))
 		return -EBUSY;
 
-	ret = vimc_cap_try_fmt_vid_cap(file, priv, f);
-	if (ret)
-		return ret;
+	vimc_cap_try_fmt_vid_cap(file, priv, f);
 
 	dev_dbg(vcap->dev, "%s: format update: "
 		"old:%dx%d (0x%x, %d, %d, %d, %d) "

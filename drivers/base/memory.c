@@ -109,7 +109,7 @@ static unsigned long get_memory_block_size(void)
  * uses.
  */
 
-static ssize_t phys_index_show(struct device *dev,
+static ssize_t show_mem_start_phys_index(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct memory_block *mem = to_memory_block(dev);
@@ -187,14 +187,13 @@ int memory_isolate_notify(unsigned long val, void *v)
 }
 
 /*
- * The probe routines leave the pages uninitialized, just as the bootmem code
- * does. Make sure we do not access them, but instead use only information from
- * within sections.
+ * The probe routines leave the pages reserved, just as the bootmem code does.
+ * Make sure they're still that way.
  */
-static bool pages_correctly_probed(unsigned long start_pfn)
+static bool pages_correctly_reserved(unsigned long start_pfn)
 {
-	unsigned long section_nr = pfn_to_section_nr(start_pfn);
-	unsigned long section_nr_end = section_nr + sections_per_block;
+	int i, j;
+	struct page *page;
 	unsigned long pfn = start_pfn;
 
 	/*
@@ -202,24 +201,21 @@ static bool pages_correctly_probed(unsigned long start_pfn)
 	 * SPARSEMEM_VMEMMAP. We lookup the page once per section
 	 * and assume memmap is contiguous within each section
 	 */
-	for (; section_nr < section_nr_end; section_nr++) {
+	for (i = 0; i < sections_per_block; i++, pfn += PAGES_PER_SECTION) {
 		if (WARN_ON_ONCE(!pfn_valid(pfn)))
 			return false;
+		page = pfn_to_page(pfn);
 
-		if (!present_section_nr(section_nr)) {
-			pr_warn("section %ld pfn[%lx, %lx) not present",
-				section_nr, pfn, pfn + PAGES_PER_SECTION);
-			return false;
-		} else if (!valid_section_nr(section_nr)) {
-			pr_warn("section %ld pfn[%lx, %lx) no valid memmap",
-				section_nr, pfn, pfn + PAGES_PER_SECTION);
-			return false;
-		} else if (online_section_nr(section_nr)) {
-			pr_warn("section %ld pfn[%lx, %lx) is already online",
-				section_nr, pfn, pfn + PAGES_PER_SECTION);
+		for (j = 0; j < PAGES_PER_SECTION; j++) {
+			if (PageReserved(page + j))
+				continue;
+
+			printk(KERN_WARNING "section number %ld page number %d "
+				"not reserved, was it already online?\n",
+				pfn_to_section_nr(pfn), j);
+
 			return false;
 		}
-		pfn += PAGES_PER_SECTION;
 	}
 
 	return true;
@@ -241,7 +237,7 @@ memory_block_action(unsigned long phys_index, unsigned long action, int online_t
 
 	switch (action) {
 	case MEM_ONLINE:
-		if (!pages_correctly_probed(start_pfn))
+		if (!pages_correctly_reserved(start_pfn))
 			return -EBUSY;
 
 		ret = online_pages(start_pfn, nr_pages, online_type);
@@ -417,23 +413,25 @@ static ssize_t show_valid_zones(struct device *dev,
 	int nid;
 
 	/*
+	 * The block contains more than one zone can not be offlined.
+	 * This can happen e.g. for ZONE_DMA and ZONE_DMA32
+	 */
+	if (!test_pages_in_a_zone(start_pfn, start_pfn + nr_pages, &valid_start_pfn, &valid_end_pfn))
+		return sprintf(buf, "none\n");
+
+	start_pfn = valid_start_pfn;
+	nr_pages = valid_end_pfn - start_pfn;
+
+	/*
 	 * Check the existing zone. Make sure that we do that only on the
 	 * online nodes otherwise the page_zone is not reliable
 	 */
 	if (mem->state == MEM_ONLINE) {
-		/*
-		 * The block contains more than one zone can not be offlined.
-		 * This can happen e.g. for ZONE_DMA and ZONE_DMA32
-		 */
-		if (!test_pages_in_a_zone(start_pfn, start_pfn + nr_pages,
-					  &valid_start_pfn, &valid_end_pfn))
-			return sprintf(buf, "none\n");
-		start_pfn = valid_start_pfn;
 		strcat(buf, page_zone(pfn_to_page(start_pfn))->name);
 		goto out;
 	}
 
-	nid = mem->nid;
+	nid = pfn_to_nid(start_pfn);
 	default_zone = zone_for_pfn_range(MMOP_ONLINE_KEEP, nid, start_pfn, nr_pages);
 	strcat(buf, default_zone->name);
 
@@ -478,7 +476,7 @@ static int count_num_free_block_pages(struct zone *zone, int bid)
 	return freecount;
 }
 
-static ssize_t allocated_bytes_show(struct device *dev,
+static ssize_t show_allocated_bytes(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct memory_block *mem = to_memory_block(dev);
@@ -498,12 +496,12 @@ static ssize_t allocated_bytes_show(struct device *dev,
 }
 #endif
 
-static DEVICE_ATTR(phys_index, 0444, phys_index_show, NULL);
+static DEVICE_ATTR(phys_index, 0444, show_mem_start_phys_index, NULL);
 static DEVICE_ATTR(state, 0644, show_mem_state, store_mem_state);
 static DEVICE_ATTR(phys_device, 0444, show_phys_device, NULL);
 static DEVICE_ATTR(removable, 0444, show_mem_removable, NULL);
 #ifdef CONFIG_MEMORY_HOTPLUG
-static DEVICE_ATTR(allocated_bytes, 0444, allocated_bytes_show, NULL);
+static DEVICE_ATTR(allocated_bytes, 0444, show_allocated_bytes, NULL);
 #endif
 
 /*
@@ -635,9 +633,6 @@ store_soft_offline_page(struct device *dev,
 	pfn >>= PAGE_SHIFT;
 	if (!pfn_valid(pfn))
 		return -ENXIO;
-	/* Only online pages can be soft-offlined (esp., not ZONE_DEVICE). */
-	if (!pfn_to_online_page(pfn))
-		return -EIO;
 	ret = soft_offline_page(pfn_to_page(pfn), 0);
 	return ret == 0 ? count : ret;
 }
@@ -655,7 +650,7 @@ store_hard_offline_page(struct device *dev,
 	if (kstrtoull(buf, 0, &pfn) < 0)
 		return -EINVAL;
 	pfn >>= PAGE_SHIFT;
-	ret = memory_failure(pfn, 0);
+	ret = memory_failure(pfn, 0, 0);
 	return ret ? ret : count;
 }
 
@@ -734,19 +729,13 @@ static const struct attribute_group *memory_memblk_attr_groups[] = {
 static
 int register_memory(struct memory_block *memory)
 {
-	int ret;
-
 	memory->dev.bus = &memory_subsys;
 	memory->dev.id = memory->start_section_nr / sections_per_block;
 	memory->dev.release = memory_block_release;
 	memory->dev.groups = memory_memblk_attr_groups;
 	memory->dev.offline = memory->state == MEM_OFFLINE;
 
-	ret = device_register(&memory->dev);
-	if (ret)
-		put_device(&memory->dev);
-
-	return ret;
+	return device_register(&memory->dev);
 }
 
 static int init_memory_block(struct memory_block **memory,
@@ -803,7 +792,7 @@ static int add_memory_block(int base_section_nr)
  * need an interface for the VM to add new memory regions,
  * but without onlining it.
  */
-int hotplug_memory_register(int nid, struct mem_section *section)
+int register_new_memory(int nid, struct mem_section *section)
 {
 	int ret = 0;
 	struct memory_block *mem;
@@ -821,6 +810,8 @@ int hotplug_memory_register(int nid, struct mem_section *section)
 		mem->section_count++;
 	}
 
+	if (mem->section_count == sections_per_block)
+		ret = register_mem_sect_under_node(mem, nid);
 out:
 	mutex_unlock(&mem_sysfs_mutex);
 	return ret;
@@ -929,8 +920,11 @@ int __init memory_dev_init(void)
 	 * during boot and have been initialized
 	 */
 	mutex_lock(&mem_sysfs_mutex);
-	for (i = 0; i <= __highest_present_section_nr;
-		i += sections_per_block) {
+	for (i = 0; i < NR_MEM_SECTIONS; i += sections_per_block) {
+		/* Don't iterate over sections we know are !present: */
+		if (i > __highest_present_section_nr)
+			break;
+
 		err = add_memory_block(i);
 		if (!ret)
 			ret = err;

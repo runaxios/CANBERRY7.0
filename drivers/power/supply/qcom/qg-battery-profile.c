@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"QG-K: %s: " fmt, __func__
@@ -56,8 +63,6 @@ static struct tables table[] = {
 };
 
 static struct qg_battery_data *the_battery;
-
-static void qg_battery_profile_free(void);
 
 static int qg_battery_data_open(struct inode *inode, struct file *file)
 {
@@ -429,56 +434,42 @@ int qg_batterydata_init(struct device_node *profile_node)
 	int rc = 0;
 	struct qg_battery_data *battery;
 
-	/*
-	 * If a battery profile is already initialized, free the existing
-	 * profile data and re-allocate and load the new profile. This is
-	 * required for multi-profile load support.
-	 */
-	if (the_battery) {
-		battery = the_battery;
-		battery->profile_node = NULL;
-		qg_battery_profile_free();
-	} else {
-		battery = kzalloc(sizeof(*battery), GFP_KERNEL);
-		if (!battery)
-			return -ENOMEM;
-		/* char device to access battery-profile data */
-		rc = alloc_chrdev_region(&battery->dev_no, 0, 1,
-							"qg_battery");
-		if (rc < 0) {
-			pr_err("Failed to allocate chrdev rc=%d\n", rc);
-			goto free_battery;
-		}
-
-		cdev_init(&battery->battery_cdev, &qg_battery_data_fops);
-		rc = cdev_add(&battery->battery_cdev,
-						battery->dev_no, 1);
-		if (rc) {
-			pr_err("Failed to add battery_cdev rc=%d\n", rc);
-			goto unregister_chrdev;
-		}
-
-		battery->battery_class = class_create(THIS_MODULE,
-							"qg_battery");
-		if (IS_ERR_OR_NULL(battery->battery_class)) {
-			pr_err("Failed to create qg-battery class\n");
-			rc = -ENODEV;
-			goto delete_cdev;
-		}
-
-		battery->battery_device = device_create(
-						battery->battery_class,
-						NULL, battery->dev_no,
-						NULL, "qg_battery");
-		if (IS_ERR_OR_NULL(battery->battery_device)) {
-			pr_err("Failed to create battery_device device\n");
-			rc = -ENODEV;
-			goto destroy_class;
-		}
-		the_battery = battery;
-	}
+	battery = kzalloc(sizeof(*battery), GFP_KERNEL);
+	if (!battery)
+		return -ENOMEM;
 
 	battery->profile_node = profile_node;
+
+	/* char device to access battery-profile data */
+	rc = alloc_chrdev_region(&battery->dev_no, 0, 1, "qg_battery");
+	if (rc < 0) {
+		pr_err("Failed to allocate chrdev rc=%d\n", rc);
+		goto free_battery;
+	}
+
+	cdev_init(&battery->battery_cdev, &qg_battery_data_fops);
+	rc = cdev_add(&battery->battery_cdev, battery->dev_no, 1);
+	if (rc) {
+		pr_err("Failed to add battery_cdev rc=%d\n", rc);
+		goto unregister_chrdev;
+	}
+
+	battery->battery_class = class_create(THIS_MODULE, "qg_battery");
+	if (IS_ERR_OR_NULL(battery->battery_class)) {
+		pr_err("Failed to create qg-battery class\n");
+		rc = -ENODEV;
+		goto delete_cdev;
+	}
+
+	battery->battery_device = device_create(battery->battery_class,
+					NULL, battery->dev_no,
+					NULL, "qg_battery");
+	if (IS_ERR_OR_NULL(battery->battery_device)) {
+		pr_err("Failed to create battery_device device\n");
+		rc = -ENODEV;
+		goto delete_cdev;
+	}
+
 	/* parse the battery profile */
 	rc = qg_parse_battery_profile(battery);
 	if (rc < 0) {
@@ -486,14 +477,14 @@ int qg_batterydata_init(struct device_node *profile_node)
 		goto destroy_device;
 	}
 
-	pr_info("QG Battery-profile loaded\n");
+	the_battery = battery;
+
+	pr_info("QG Battery-profile loaded, '/dev/qg_battery' created!\n");
 
 	return 0;
 
 destroy_device:
 	device_destroy(battery->battery_class, battery->dev_no);
-destroy_class:
-	class_destroy(battery->battery_class);
 delete_cdev:
 	cdev_del(&battery->battery_cdev);
 unregister_chrdev:
@@ -503,32 +494,27 @@ free_battery:
 	return rc;
 }
 
-static void qg_battery_profile_free(void)
+void qg_batterydata_exit(void)
 {
 	int i, j;
 
-	/* delete all the battery profile memory */
-	for (i = 0; i < TABLE_MAX; i++) {
-		kfree(the_battery->profile[i].name);
-		kfree(the_battery->profile[i].row_entries);
-		kfree(the_battery->profile[i].col_entries);
-		for (j = 0; j < the_battery->profile[i].rows; j++) {
-			if (the_battery->profile[i].data)
-				kfree(the_battery->profile[i].data[j]);
-		}
-		kfree(the_battery->profile[i].data);
-	}
-}
-
-void qg_batterydata_exit(void)
-{
 	if (the_battery) {
 		/* unregister the device node */
 		device_destroy(the_battery->battery_class, the_battery->dev_no);
-		class_destroy(the_battery->battery_class);
 		cdev_del(&the_battery->battery_cdev);
 		unregister_chrdev_region(the_battery->dev_no, 1);
-		qg_battery_profile_free();
+
+		/* delete all the battery profile memory */
+		for (i = 0; i < TABLE_MAX; i++) {
+			kfree(the_battery->profile[i].name);
+			kfree(the_battery->profile[i].row_entries);
+			kfree(the_battery->profile[i].col_entries);
+			for (j = 0; j < the_battery->profile[i].rows; j++) {
+				if (the_battery->profile[i].data)
+					kfree(the_battery->profile[i].data[j]);
+			}
+			kfree(the_battery->profile[i].data);
+		}
 	}
 
 	kfree(the_battery);

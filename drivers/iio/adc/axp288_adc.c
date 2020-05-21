@@ -16,7 +16,6 @@
  *
  */
 
-#include <linux/dmi.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -35,11 +34,6 @@
 #define AXP288_ADC_EN_MASK				0xF0
 #define AXP288_ADC_TS_ENABLE				0x01
 
-#define AXP288_ADC_TS_BIAS_MASK				GENMASK(5, 4)
-#define AXP288_ADC_TS_BIAS_20UA				(0 << 4)
-#define AXP288_ADC_TS_BIAS_40UA				(1 << 4)
-#define AXP288_ADC_TS_BIAS_60UA				(2 << 4)
-#define AXP288_ADC_TS_BIAS_80UA				(3 << 4)
 #define AXP288_ADC_TS_CURRENT_ON_OFF_MASK		GENMASK(1, 0)
 #define AXP288_ADC_TS_CURRENT_OFF			(0 << 0)
 #define AXP288_ADC_TS_CURRENT_ON_WHEN_CHARGING		(1 << 0)
@@ -108,14 +102,22 @@ static const struct iio_chan_spec axp288_adc_channels[] = {
 	},
 };
 
+#define AXP288_ADC_MAP(_adc_channel_label, _consumer_dev_name,	\
+		_consumer_channel)				\
+	{							\
+		.adc_channel_label = _adc_channel_label,	\
+		.consumer_dev_name = _consumer_dev_name,	\
+		.consumer_channel = _consumer_channel,		\
+	}
+
 /* for consumer drivers */
 static struct iio_map axp288_adc_default_maps[] = {
-	IIO_MAP("TS_PIN", "axp288-batt", "axp288-batt-temp"),
-	IIO_MAP("PMIC_TEMP", "axp288-pmic", "axp288-pmic-temp"),
-	IIO_MAP("GPADC", "axp288-gpadc", "axp288-system-temp"),
-	IIO_MAP("BATT_CHG_I", "axp288-chrg", "axp288-chrg-curr"),
-	IIO_MAP("BATT_DISCHRG_I", "axp288-chrg", "axp288-chrg-d-curr"),
-	IIO_MAP("BATT_V", "axp288-batt", "axp288-batt-volt"),
+	AXP288_ADC_MAP("TS_PIN", "axp288-batt", "axp288-batt-temp"),
+	AXP288_ADC_MAP("PMIC_TEMP", "axp288-pmic", "axp288-pmic-temp"),
+	AXP288_ADC_MAP("GPADC", "axp288-gpadc", "axp288-system-temp"),
+	AXP288_ADC_MAP("BATT_CHG_I", "axp288-chrg", "axp288-chrg-curr"),
+	AXP288_ADC_MAP("BATT_DISCHRG_I", "axp288-chrg", "axp288-chrg-d-curr"),
+	AXP288_ADC_MAP("BATT_V", "axp288-batt", "axp288-batt-volt"),
 	{},
 };
 
@@ -192,35 +194,9 @@ static int axp288_adc_read_raw(struct iio_dev *indio_dev,
 	return ret;
 }
 
-/*
- * We rely on the machine's firmware to correctly setup the TS pin bias current
- * at boot. This lists systems with broken fw where we need to set it ourselves.
- */
-static const struct dmi_system_id axp288_adc_ts_bias_override[] = {
-	{
-		/* Lenovo Ideapad 100S (11 inch) */
-		.matches = {
-		  DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-		  DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 100S-11IBY"),
-		},
-		.driver_data = (void *)(uintptr_t)AXP288_ADC_TS_BIAS_80UA,
-	},
-	{}
-};
-
 static int axp288_adc_initialize(struct axp288_adc_info *info)
 {
-	const struct dmi_system_id *bias_override;
 	int ret, adc_enable_val;
-
-	bias_override = dmi_first_match(axp288_adc_ts_bias_override);
-	if (bias_override) {
-		ret = regmap_update_bits(info->regmap, AXP288_ADC_TS_PIN_CTRL,
-					 AXP288_ADC_TS_BIAS_MASK,
-					 (uintptr_t)bias_override->driver_data);
-		if (ret)
-			return ret;
-	}
 
 	/*
 	 * Determine if the TS pin is enabled and set the TS current-source
@@ -251,6 +227,7 @@ static int axp288_adc_initialize(struct axp288_adc_info *info)
 
 static const struct iio_info axp288_adc_iio_info = {
 	.read_raw = &axp288_adc_read_raw,
+	.driver_module = THIS_MODULE,
 };
 
 static int axp288_adc_probe(struct platform_device *pdev)

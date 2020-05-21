@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  */
@@ -58,8 +58,6 @@
 #define CHNC_INDEX		2
 #define CHND_INDEX		3
 
-#define CHAN_MODE_NUM		2
-
 /* for type c cable */
 enum plug_orientation {
 	ORIENTATION_NONE,
@@ -87,7 +85,10 @@ enum operation_mode {
 enum channel_mode {
 	CHAN_MODE_USB,
 	CHAN_MODE_DP,
+	/* update CHAN_MODE_NUM if new mode is added */
 };
+
+#define CHAN_MODE_NUM	2
 
 /**
  * struct ssusb_redriver - representation of USB re-driver
@@ -445,7 +446,8 @@ static int ssusb_redriver_vbus_notifier(struct notifier_block *nb,
 
 	redriver->vbus_active = event;
 
-	queue_work(redriver->redriver_wq, &redriver->config_work);
+	if (redriver->vbus_active)
+		queue_work(redriver->redriver_wq, &redriver->config_work);
 
 	return NOTIFY_DONE;
 }
@@ -465,7 +467,8 @@ static int ssusb_redriver_id_notifier(struct notifier_block *nb,
 
 	redriver->host_active = host_active;
 
-	queue_work(redriver->redriver_wq, &redriver->config_work);
+	if (redriver->host_active)
+		queue_work(redriver->redriver_wq, &redriver->config_work);
 
 	return NOTIFY_DONE;
 }
@@ -914,7 +917,7 @@ static ssize_t channel_config_write(struct file *file,
 				break;
 			default:
 				goto err;
-			}
+			};
 
 			ret = config_func(redriver, store_offset,
 					*token_val - '0');
@@ -1142,8 +1145,8 @@ static int __maybe_unused redriver_i2c_suspend(struct device *dev)
 			__func__);
 
 	/* Disable redriver chip when USB cable disconnected */
-	if (!redriver->vbus_active && !redriver->host_active &&
-	    redriver->op_mode != OP_MODE_DP)
+	if ((!redriver->vbus_active)
+			&& (!redriver->host_active))
 		ssusb_redriver_gen_dev_set(redriver, false);
 
 	flush_workqueue(redriver->redriver_wq);
@@ -1199,6 +1202,7 @@ MODULE_DEVICE_TABLE(i2c, redriver_i2c_id);
 static struct i2c_driver redriver_i2c_driver = {
 	.driver = {
 		.name	= "ssusb redriver",
+		.owner	= THIS_MODULE,
 		.of_match_table	= redriver_match_table,
 		.pm	= &redriver_i2c_pm,
 	},

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/debugfs.h>
@@ -554,7 +561,7 @@ int ipa3_disconnect_mhi_pipe(u32 clnt_hdl)
 	}
 
 	ep = &ipa3_ctx->ep[clnt_hdl];
-	if (ep->ep_delay_set) {
+	if (ep->ep_delay_set == true) {
 		memset(&ep_cfg_ctrl, 0, sizeof(struct ipa_ep_cfg_ctrl));
 		ep_cfg_ctrl.ipa_ep_delay = false;
 		res = ipa3_cfg_ep_ctrl(clnt_hdl,

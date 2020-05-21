@@ -302,6 +302,54 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
 /**
+ * mbox_send_controller_data-	For client to submit a message to be
+ *				sent only to the controller.
+ * @chan: Mailbox channel assigned to this client.
+ * @mssg: Client specific message typecasted.
+ *
+ * For client to submit data to the controller. There is no ACK expected
+ * from the controller. This request is not buffered in the mailbox framework.
+ *
+ * Return: Non-negative integer for successful submission (non-blocking mode)
+ *	or transmission over chan (blocking mode).
+ *	Negative value denotes failure.
+ */
+int mbox_send_controller_data(struct mbox_chan *chan, void *mssg)
+{
+	unsigned long flags;
+	int err;
+
+	if (!chan || !chan->cl)
+		return -EINVAL;
+
+	spin_lock_irqsave(&chan->lock, flags);
+	err = chan->mbox->ops->send_controller_data(chan, mssg);
+	spin_unlock_irqrestore(&chan->lock, flags);
+
+	return err;
+}
+EXPORT_SYMBOL(mbox_send_controller_data);
+
+bool mbox_controller_is_idle(struct mbox_chan *chan)
+{
+	if (!chan || !chan->cl || !chan->mbox->is_idle)
+		return false;
+
+	return chan->mbox->is_idle(chan->mbox);
+}
+EXPORT_SYMBOL(mbox_controller_is_idle);
+
+
+void mbox_chan_debug(struct mbox_chan *chan)
+{
+	if (!chan || !chan->cl || !chan->mbox->debug)
+		return;
+
+	return chan->mbox->debug(chan);
+}
+EXPORT_SYMBOL(mbox_chan_debug);
+
+/**
  * mbox_request_channel - Request a mailbox channel.
  * @cl: Identity of the client requesting the channel.
  * @index: Index of mailbox specifier in 'mboxes' property.
@@ -369,7 +417,7 @@ struct mbox_chan *mbox_request_channel(struct mbox_client *cl, int index)
 	init_completion(&chan->tx_complete);
 
 	if (chan->txdone_method	== TXDONE_BY_POLL && cl->knows_txdone)
-		chan->txdone_method = TXDONE_BY_ACK;
+		chan->txdone_method |= TXDONE_BY_ACK;
 
 	spin_unlock_irqrestore(&chan->lock, flags);
 
@@ -409,13 +457,11 @@ struct mbox_chan *mbox_request_channel_byname(struct mbox_client *cl,
 
 	of_property_for_each_string(np, "mbox-names", prop, mbox_name) {
 		if (!strncmp(name, mbox_name, strlen(name)))
-			return mbox_request_channel(cl, index);
+			break;
 		index++;
 	}
 
-	dev_err(cl->dev, "%s() could not locate channel named \"%s\"\n",
-		__func__, name);
-	return ERR_PTR(-EINVAL);
+	return mbox_request_channel(cl, index);
 }
 EXPORT_SYMBOL_GPL(mbox_request_channel_byname);
 
@@ -438,7 +484,7 @@ void mbox_free_channel(struct mbox_chan *chan)
 	spin_lock_irqsave(&chan->lock, flags);
 	chan->cl = NULL;
 	chan->active_req = NULL;
-	if (chan->txdone_method == TXDONE_BY_ACK)
+	if (chan->txdone_method == (TXDONE_BY_POLL | TXDONE_BY_ACK))
 		chan->txdone_method = TXDONE_BY_POLL;
 
 	module_put(chan->mbox->dev->driver->owner);

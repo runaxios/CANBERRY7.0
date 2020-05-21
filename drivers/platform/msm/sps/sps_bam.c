@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, 2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
+
 #include <linux/types.h>	/* u32 */
 #include <linux/kernel.h>	/* pr_info() */
 #include <linux/mutex.h>	/* mutex */
@@ -714,8 +722,7 @@ u32 sps_bam_pipe_alloc(struct sps_bam *dev, u32 pipe_index)
 		}
 	} else {
 		/* Check that client-specified pipe is available */
-		if (pipe_index >= dev->props.num_pipes ||
-				pipe_index >= BAM_MAX_PIPES) {
+		if (pipe_index >= dev->props.num_pipes) {
 			SPS_ERR(dev,
 				"sps:Invalid pipe %d for allocate on BAM %pa\n",
 				pipe_index, BAM_ID(dev));

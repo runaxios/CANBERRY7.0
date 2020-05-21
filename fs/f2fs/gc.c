@@ -497,8 +497,8 @@ static int gc_node_segment(struct f2fs_sb_info *sbi,
 	block_t start_addr;
 	int off;
 	int phase = 0;
-	bool fggc = (gc_type == FG_GC);
 	int submitted = 0;
+	bool fggc = (gc_type == FG_GC);
 
 	start_addr = START_BLOCK(sbi, segno);
 
@@ -591,7 +591,7 @@ block_t f2fs_start_bidx_of_node(unsigned int node_ofs, struct inode *inode)
 		int dec = (node_ofs - indirect_blks - 3) / (NIDS_PER_BLOCK + 1);
 		bidx = node_ofs - 5 - dec;
 	}
-	return bidx * ADDRS_PER_BLOCK(inode) + ADDRS_PER_INODE(inode);
+	return bidx * ADDRS_PER_BLOCK + ADDRS_PER_INODE(inode);
 }
 
 static bool is_alive(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
@@ -656,11 +656,6 @@ static int ra_data_block(struct inode *inode, pgoff_t index)
 
 	if (f2fs_lookup_extent_cache(inode, index, &ei)) {
 		dn.data_blkaddr = ei.blk + index - ei.fofs;
-		if (unlikely(!f2fs_is_valid_blkaddr(sbi, dn.data_blkaddr,
-						DATA_GENERIC_ENHANCE_READ))) {
-			err = -EFAULT;
-			goto put_page;
-		}
 		goto got_it;
 	}
 
@@ -670,13 +665,9 @@ static int ra_data_block(struct inode *inode, pgoff_t index)
 		goto put_page;
 	f2fs_put_dnode(&dn);
 
-	if (!__is_valid_data_blkaddr(dn.data_blkaddr)) {
-		err = -ENOENT;
-		goto put_page;
-	}
 	if (unlikely(!f2fs_is_valid_blkaddr(sbi, dn.data_blkaddr,
-						DATA_GENERIC_ENHANCE))) {
-		err = -EFSCORRUPTED;
+						DATA_GENERIC))) {
+		err = -EFAULT;
 		goto put_page;
 	}
 got_it:
@@ -750,9 +741,9 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	}
 
 	if (f2fs_is_atomic_file(inode)) {
+		err = -EAGAIN;
 		F2FS_I(inode)->i_gc_failures[GC_FAILURE_ATOMIC]++;
 		F2FS_I_SB(inode)->skipped_atomic_files[gc_type]++;
-		err = -EAGAIN;
 		goto out;
 	}
 
@@ -784,6 +775,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	err = f2fs_get_node_info(fio.sbi, dn.nid, &ni);
 	if (err)
 		goto put_out;
+
 
 	set_summary(&sum, dn.nid, dn.ofs_in_node, ni.version);
 
@@ -897,9 +889,9 @@ static int move_data_page(struct inode *inode, block_t bidx, int gc_type,
 	}
 
 	if (f2fs_is_atomic_file(inode)) {
+		err = -EAGAIN;
 		F2FS_I(inode)->i_gc_failures[GC_FAILURE_ATOMIC]++;
 		F2FS_I_SB(inode)->skipped_atomic_files[gc_type]++;
-		err = -EAGAIN;
 		goto out;
 	}
 	if (f2fs_is_pinned_file(inode)) {
@@ -1083,8 +1075,8 @@ next_step:
 			start_bidx = f2fs_start_bidx_of_node(nofs, inode)
 								+ ofs_in_node;
 			if (f2fs_post_read_required(inode))
-				err = move_data_block(inode, start_bidx,
-							gc_type, segno, off);
+				err = move_data_block(inode, start_bidx, gc_type,
+								segno, off);
 			else
 				err = move_data_page(inode, start_bidx, gc_type,
 								segno, off);
@@ -1184,7 +1176,6 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
 				"type [%d, %d] in SSA and SIT",
 				segno, type, GET_SUM_TYPE((&sum->footer)));
 			set_sbi_flag(sbi, SBI_NEED_FSCK);
-			f2fs_stop_checkpoint(sbi, false);
 			goto skip;
 		}
 
@@ -1237,7 +1228,7 @@ int f2fs_gc(struct f2fs_sb_info *sbi, bool sync,
 	unsigned int init_segno = segno;
 	struct gc_inode_list gc_list = {
 		.ilist = LIST_HEAD_INIT(gc_list.ilist),
-		.iroot = RADIX_TREE_INIT(gc_list.iroot, GFP_NOFS),
+		.iroot = RADIX_TREE_INIT(GFP_NOFS),
 	};
 	unsigned long long last_skipped = sbi->skipped_atomic_files[FG_GC];
 	unsigned long long first_skipped;
@@ -1256,7 +1247,7 @@ int f2fs_gc(struct f2fs_sb_info *sbi, bool sync,
 	sbi->skipped_gc_rwsem = 0;
 	first_skipped = last_skipped;
 gc_more:
-	if (unlikely(!(sbi->sb->s_flags & SB_ACTIVE))) {
+	if (unlikely(!(sbi->sb->s_flags & MS_ACTIVE))) {
 		ret = -EINVAL;
 		goto stop;
 	}
@@ -1356,7 +1347,7 @@ void f2fs_build_gc_manager(struct f2fs_sb_info *sbi)
 	sbi->gc_pin_file_threshold = DEF_GC_FAILED_PINNED_FILES;
 
 	/* give warm/cold data area from slower device */
-	if (f2fs_is_multi_device(sbi) && !__is_large_section(sbi))
+	if (sbi->s_ndevs && !__is_large_section(sbi))
 		SIT_I(sbi)->last_victim[ALLOC_NEXT] =
 				GET_SEGNO(sbi, FDEV(0).end_blk) + 1;
 }

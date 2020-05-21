@@ -102,7 +102,7 @@ static ssize_t fm_v4l2_fops_write(struct file *file, const char __user * buf,
 	return sizeof(rds);
 }
 
-static __poll_t fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *pts)
+static u32 fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *pts)
 {
 	int ret;
 	struct fmdev *fmdev;
@@ -112,7 +112,7 @@ static __poll_t fm_v4l2_fops_poll(struct file *file, struct poll_table_struct *p
 	ret = fmc_is_rds_data_available(fmdev, file, pts);
 	mutex_unlock(&fmdev->mutex);
 	if (ret < 0)
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 
 	return 0;
 }
@@ -549,7 +549,6 @@ int fm_v4l2_init_video_device(struct fmdev *fmdev, int radio_nr)
 
 	/* Register with V4L2 subsystem as RADIO device */
 	if (video_register_device(&gradio_dev, VFL_TYPE_RADIO, radio_nr)) {
-		v4l2_device_unregister(&fmdev->v4l2_dev);
 		fmerr("Could not register video device\n");
 		return -ENOMEM;
 	}
@@ -563,8 +562,6 @@ int fm_v4l2_init_video_device(struct fmdev *fmdev, int radio_nr)
 	if (ret < 0) {
 		fmerr("(fmdev): Can't init ctrl handler\n");
 		v4l2_ctrl_handler_free(&fmdev->ctrl_handler);
-		video_unregister_device(fmdev->radio_dev);
-		v4l2_device_unregister(&fmdev->v4l2_dev);
 		return -EBUSY;
 	}
 

@@ -1,5 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.*/
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -160,7 +169,7 @@ static struct mhi_netbuf *mhi_netdev_alloc(struct device *dev,
 	struct mhi_buf *mhi_buf;
 	void *vaddr;
 
-	page = __dev_alloc_pages(gfp | __GFP_NOMEMALLOC, order);
+	page = __dev_alloc_pages(gfp, order);
 	if (!page)
 		return NULL;
 
@@ -681,7 +690,7 @@ static int mhi_netdev_enable_iface(struct mhi_netdev *mhi_netdev)
 	struct device_node *of_node = mhi_dev->dev.of_node;
 	struct mhi_netdev_priv *mhi_netdev_priv;
 
-	mhi_netdev->alias = of_alias_get_id(of_node, "mhi-netdev");
+	mhi_netdev->alias = of_alias_get_id(of_node, "mhi_netdev");
 	if (mhi_netdev->alias < 0)
 		return -ENODEV;
 
@@ -852,9 +861,6 @@ static int mhi_netdev_debugfs_stats_show(struct seq_file *m, void *d)
 		   mhi_netdev->abuffers, mhi_netdev->kbuffers,
 		   mhi_netdev->rbuffers);
 
-	seq_printf(m, "chaining SKBs:%s\n", (mhi_netdev->chain) ?
-		   "enabled" : "disabled");
-
 	return 0;
 }
 
@@ -868,22 +874,6 @@ static const struct file_operations debugfs_stats = {
 	.release = single_release,
 	.read = seq_read,
 };
-
-static int mhi_netdev_debugfs_chain(void *data, u64 val)
-{
-	struct mhi_netdev *mhi_netdev = data;
-	struct mhi_netdev *rsc_dev = mhi_netdev->rsc_dev;
-
-	mhi_netdev->chain = NULL;
-
-	if (rsc_dev)
-		rsc_dev->chain = NULL;
-
-	return 0;
-}
-
-DEFINE_DEBUGFS_ATTRIBUTE(debugfs_chain, NULL,
-			 mhi_netdev_debugfs_chain, "%llu\n");
 
 static void mhi_netdev_create_debugfs(struct mhi_netdev *mhi_netdev)
 {
@@ -904,8 +894,6 @@ static void mhi_netdev_create_debugfs(struct mhi_netdev *mhi_netdev)
 
 	debugfs_create_file_unsafe("stats", 0444, mhi_netdev->dentry,
 				   mhi_netdev, &debugfs_stats);
-	debugfs_create_file_unsafe("chain", 0444, mhi_netdev->dentry,
-				   mhi_netdev, &debugfs_chain);
 }
 
 static void mhi_netdev_create_debugfs_dir(void)
@@ -1101,7 +1089,6 @@ static int mhi_netdev_probe(struct mhi_device *mhi_dev,
 
 static const struct mhi_device_id mhi_netdev_match_table[] = {
 	{ .chan = "IP_HW0" },
-	{ .chan = "IP_HW_ADPL" },
 	{ .chan = "IP_HW0_RSC" },
 	{},
 };

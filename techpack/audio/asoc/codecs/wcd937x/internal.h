@@ -1,13 +1,21 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _WCD937X_INTERNAL_H
 #define _WCD937X_INTERNAL_H
 
-#include <asoc/wcd-clsh.h>
-#include <asoc/wcd-mbhc-v2.h>
-#include <asoc/wcd-irq.h>
+#include "../wcd-clsh.h"
+#include "../wcd-mbhc-v2.h"
+#include "asoc/wcd-irq.h"
 #include "wcd937x-mbhc.h"
 
 #define WCD937X_MAX_MICBIAS 3
@@ -30,7 +38,7 @@ struct wcd937x_priv {
 	struct device *dev;
 
 	int variant;
-	struct snd_soc_component *component;
+	struct snd_soc_codec *codec;
 	struct device_node *rst_np;
 	struct regmap *regmap;
 
@@ -82,9 +90,6 @@ struct wcd937x_priv {
 	/* Entry for version info */
 	struct snd_info_entry *entry;
 	struct snd_info_entry *version_entry;
-	/*Entry for Variant info*/
-	struct snd_info_entry *variant_entry;
-	int ear_rx_path;
 	int ana_clk_count;
 	struct mutex ana_tx_clk_lock;
 };
@@ -133,7 +138,6 @@ enum {
 	WCD_BOLERO_EVT_RX_MUTE = 1,	/* for RX mute/unmute */
 	WCD_BOLERO_EVT_IMPED_TRUE,	/* for imped true */
 	WCD_BOLERO_EVT_IMPED_FALSE,	/* for imped false */
-	WCD_BOLERO_EVT_BCS_CLK_OFF,
 };
 
 enum {
@@ -165,14 +169,10 @@ enum {
 	WCD937X_NUM_IRQS,
 };
 
-extern void wcd937x_disable_bcs_before_slow_insert(
-				struct snd_soc_component *component,
-				bool bcs_disable);
-extern struct wcd937x_mbhc *wcd937x_soc_get_mbhc(
-				struct snd_soc_component *component);
-extern int wcd937x_mbhc_micb_adjust_voltage(struct snd_soc_component *component,
+extern struct wcd937x_mbhc *wcd937x_soc_get_mbhc(struct snd_soc_codec *codec);
+extern int wcd937x_mbhc_micb_adjust_voltage(struct snd_soc_codec *codec,
 					int volt, int micb_num);
 extern int wcd937x_get_micb_vout_ctl_val(u32 micb_mv);
-extern int wcd937x_micbias_control(struct snd_soc_component *component,
-			int micb_num, int req, bool is_dapm);
+extern int wcd937x_micbias_control(struct snd_soc_codec *codec, int micb_num,
+			int req, bool is_dapm);
 #endif

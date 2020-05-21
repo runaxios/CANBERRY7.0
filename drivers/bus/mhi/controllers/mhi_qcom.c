@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.*/
-/* Copyright (C) 2020 XiaoMi, Inc.*/
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
 
 #include <asm/arch_timer.h>
 #include <linux/debugfs.h>
@@ -205,20 +213,7 @@ static int mhi_runtime_suspend(struct device *dev)
 		return 0;
 	}
 
-	/* if drv is supported we will always go into drv */
-	if (mhi_dev->drv_supported) {
-		ret = mhi_pm_fast_suspend(mhi_cntrl, true);
-		mhi_dev->suspend_mode = MHI_FAST_LINK_OFF;
-	} else {
-		ret = mhi_pm_suspend(mhi_cntrl);
-		mhi_dev->suspend_mode = MHI_DEFAULT_SUSPEND;
-
-		/* regular suspend failed, probably a client has a vote */
-		if (ret == -EBUSY) {
-			ret = mhi_pm_fast_suspend(mhi_cntrl, false);
-			mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
-		}
-	}
+	ret = mhi_pm_suspend(mhi_cntrl);
 
 	if (ret) {
 		MHI_LOG("Abort due to ret:%d\n", ret);
@@ -226,17 +221,14 @@ static int mhi_runtime_suspend(struct device *dev)
 		goto exit_runtime_suspend;
 	}
 
+	mhi_dev->suspend_mode = MHI_DEFAULT_SUSPEND;
+
 	ret = mhi_arch_link_suspend(mhi_cntrl);
 
 	/* failed suspending link abort mhi suspend */
 	if (ret) {
 		MHI_LOG("Failed to suspend link, abort suspend\n");
-		if (mhi_dev->suspend_mode == MHI_DEFAULT_SUSPEND)
-			mhi_pm_resume(mhi_cntrl);
-		else
-			mhi_pm_fast_resume(mhi_cntrl,
-				mhi_dev->suspend_mode == MHI_FAST_LINK_OFF);
-
+		mhi_pm_resume(mhi_cntrl);
 		mhi_dev->suspend_mode = MHI_ACTIVE_STATE;
 	}
 
@@ -244,7 +236,7 @@ exit_runtime_suspend:
 	mutex_unlock(&mhi_cntrl->pm_mutex);
 	MHI_LOG("Exited with ret:%d\n", ret);
 
-	return (ret < 0) ? -EBUSY : 0;
+	return ret;
 }
 
 static int mhi_runtime_idle(struct device *dev)
@@ -294,8 +286,7 @@ static int mhi_runtime_resume(struct device *dev)
 	if (mhi_dev->suspend_mode == MHI_DEFAULT_SUSPEND)
 		ret = mhi_pm_resume(mhi_cntrl);
 	else
-		ret = mhi_pm_fast_resume(mhi_cntrl,
-				mhi_dev->suspend_mode == MHI_FAST_LINK_OFF);
+		ret = mhi_pm_fast_resume(mhi_cntrl, MHI_FAST_LINK_ON);
 
 	mhi_dev->suspend_mode = MHI_ACTIVE_STATE;
 
@@ -303,7 +294,7 @@ rpm_resume_exit:
 	mutex_unlock(&mhi_cntrl->pm_mutex);
 	MHI_LOG("Exited with :%d\n", ret);
 
-	return (ret < 0) ? -EBUSY : 0;
+	return ret;
 }
 
 static int mhi_system_resume(struct device *dev)
@@ -341,26 +332,20 @@ int mhi_system_suspend(struct device *dev)
 		ret = mhi_pm_fast_suspend(mhi_cntrl, false);
 		mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
 	} else {
-		/* if drv enable always do fast suspend */
-		if (mhi_dev->drv_supported) {
-			ret = mhi_pm_fast_suspend(mhi_cntrl, true);
-			mhi_dev->suspend_mode = MHI_FAST_LINK_OFF;
-		} else {
-			/* try normal suspend */
-			mhi_dev->suspend_mode = MHI_DEFAULT_SUSPEND;
-			ret = mhi_pm_suspend(mhi_cntrl);
+		/* try normal suspend */
+		mhi_dev->suspend_mode = MHI_DEFAULT_SUSPEND;
+		ret = mhi_pm_suspend(mhi_cntrl);
 
-			/*
-			 * normal suspend failed because we're busy, try
-			 * fast suspend before aborting system suspend.
-			 * this could happens if client has disabled
-			 * device lpm but no active vote for PCIe from
-			 * apps processor
-			 */
-			if (ret == -EBUSY) {
-				ret = mhi_pm_fast_suspend(mhi_cntrl, true);
-				mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
-			}
+		/*
+		 * normal suspend failed because we're busy, try
+		 * fast suspend before aborting system suspend.
+		 * this could happens if client has disabled
+		 * device lpm but no active vote for PCIe from
+		 * apps processor
+		 */
+		if (ret == -EBUSY) {
+			ret = mhi_pm_fast_suspend(mhi_cntrl, true);
+			mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
 		}
 	}
 
@@ -378,8 +363,7 @@ int mhi_system_suspend(struct device *dev)
 		if (mhi_dev->suspend_mode == MHI_DEFAULT_SUSPEND)
 			mhi_pm_resume(mhi_cntrl);
 		else
-			mhi_pm_fast_resume(mhi_cntrl,
-				mhi_dev->suspend_mode == MHI_FAST_LINK_OFF);
+			mhi_pm_fast_resume(mhi_cntrl, MHI_FAST_LINK_OFF);
 
 		mhi_dev->suspend_mode = MHI_ACTIVE_STATE;
 	}
@@ -534,19 +518,6 @@ lpm_enable_exit:
 	return ret;
 }
 
-void mhi_qcom_store_hwinfo(struct mhi_controller *mhi_cntrl)
-{
-	struct mhi_dev *mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
-	int i;
-
-	mhi_dev->serial_num = readl_relaxed(mhi_cntrl->bhi +
-			MHI_BHI_SERIAL_NUM_OFFS);
-
-	for (i = 0; i < ARRAY_SIZE(mhi_dev->oem_pk_hash); i++)
-		mhi_dev->oem_pk_hash[i] = readl_relaxed(mhi_cntrl->bhi +
-			MHI_BHI_OEMPKHASH(i));
-}
-
 static int mhi_qcom_power_up(struct mhi_controller *mhi_cntrl)
 {
 	enum mhi_dev_state dev_state = mhi_get_mhi_state(mhi_cntrl);
@@ -573,19 +544,14 @@ static int mhi_qcom_power_up(struct mhi_controller *mhi_cntrl)
 			return -EIO;
 	}
 
-	/* when coming out of SSR, initial states are not valid */
+	/* when coming out of SSR, initial ee state is not valid */
 	mhi_cntrl->ee = 0;
-	mhi_cntrl->power_down = false;
 
 	ret = mhi_arch_power_up(mhi_cntrl);
 	if (ret)
 		return ret;
 
 	ret = mhi_async_power_up(mhi_cntrl);
-
-	/* Update modem serial Info */
-	if (!ret)
-		mhi_qcom_store_hwinfo(mhi_cntrl);
 
 	/* power up create the dentry */
 	if (mhi_cntrl->dentry) {
@@ -628,6 +594,10 @@ static void mhi_status_cb(struct mhi_controller *mhi_cntrl,
 		pm_runtime_mark_last_busy(dev);
 		pm_request_autosuspend(dev);
 		break;
+	case MHI_CB_BW_REQ:
+		if (mhi_dev->bw_scale)
+			mhi_dev->bw_scale(mhi_cntrl, mhi_dev);
+		break;
 	case MHI_CB_EE_MISSION_MODE:
 		/*
 		 * we need to force a suspend so device can switch to
@@ -638,7 +608,6 @@ static void mhi_status_cb(struct mhi_controller *mhi_cntrl,
 		if (!ret)
 			mhi_runtime_resume(dev);
 		pm_runtime_put(dev);
-		mhi_arch_mission_mode_enter(mhi_cntrl);
 		break;
 	default:
 		MHI_ERR("Unhandled cb:0x%x\n", reason);
@@ -697,45 +666,9 @@ static ssize_t power_up_store(struct device *dev,
 }
 static DEVICE_ATTR_WO(power_up);
 
-static ssize_t serial_info_show(struct device *dev,
-				struct device_attribute *attr,
-				char *buf)
-{
-	struct mhi_device *mhi_device = to_mhi_device(dev);
-	struct mhi_controller *mhi_cntrl = mhi_device->mhi_cntrl;
-	struct mhi_dev *mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
-	int n;
-
-	n = scnprintf(buf, PAGE_SIZE, "Serial Number:%u\n",
-		      mhi_dev->serial_num);
-
-	return n;
-}
-static DEVICE_ATTR_RO(serial_info);
-
-static ssize_t oempkhash_info_show(struct device *dev,
-				struct device_attribute *attr,
-				char *buf)
-{
-	struct mhi_device *mhi_device = to_mhi_device(dev);
-	struct mhi_controller *mhi_cntrl = mhi_device->mhi_cntrl;
-	struct mhi_dev *mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
-	int i, n = 0;
-
-	for (i = 0; i < ARRAY_SIZE(mhi_dev->oem_pk_hash); i++)
-		n += scnprintf(buf + n, PAGE_SIZE - n, "OEMPKHASH[%d]:%u\n",
-		      i, mhi_dev->oem_pk_hash[i]);
-
-	return n;
-}
-static DEVICE_ATTR_RO(oempkhash_info);
-
-
 static struct attribute *mhi_qcom_attrs[] = {
 	&dev_attr_timeout_ms.attr,
 	&dev_attr_power_up.attr,
-	&dev_attr_serial_info.attr,
-	&dev_attr_oempkhash_info.attr,
 	NULL
 };
 
@@ -749,9 +682,8 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	struct mhi_dev *mhi_dev;
 	struct device_node *of_node = pci_dev->dev.of_node;
 	const struct firmware_info *firmware_info;
-	bool use_s1;
-	u32 addr_win[2];
-	const char *iommu_dma_type;
+	bool use_bb;
+	u64 addr_win[2];
 	int ret, i;
 
 	if (!of_node)
@@ -767,46 +699,48 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	mhi_cntrl->dev_id = pci_dev->device;
 	mhi_cntrl->bus = pci_dev->bus->number;
 	mhi_cntrl->slot = PCI_SLOT(pci_dev->devfn);
-	mhi_cntrl->of_node = of_node;
 
-	mhi_cntrl->iova_start = memblock_start_of_DRAM();
-	mhi_cntrl->iova_stop = memblock_end_of_DRAM();
-	mhi_cntrl->need_force_m3 = true;
+	ret = of_property_read_u32(of_node, "qcom,smmu-cfg",
+				   &mhi_dev->smmu_cfg);
+	if (ret)
+		goto error_register;
 
-	of_node = of_parse_phandle(mhi_cntrl->of_node, "qcom,iommu-group", 0);
-	if (of_node) {
-		use_s1 = true;
+	use_bb = of_property_read_bool(of_node, "mhi,use-bb");
 
-		/*
-		 * s1 translation can be in bypass or fastmap mode
-		 * if "qcom,iommu-dma" property is missing, we assume s1 is
-		 * enabled and in default (no fastmap/atomic) mode
-		 */
-		ret = of_property_read_string(of_node, "qcom,iommu-dma",
-					      &iommu_dma_type);
-		if (!ret && !strcmp("bypass", iommu_dma_type))
-			use_s1 = false;
-
-		/*
-		 * if s1 translation enabled pull iova addr from dt using
-		 * iommu-dma-addr-pool property specified addresses
-		 */
-		if (use_s1) {
-			ret = of_property_read_u32_array(of_node,
-						"qcom,iommu-dma-addr-pool",
-						addr_win, 2);
-			if (ret)
-				return ERR_PTR(-EINVAL);
-
-			/*
-			 * If S1 is enabled, set MHI_CTRL start address to 0
-			 * so we can use low level mapping api to map buffers
-			 * outside of smmu domain
-			 */
-			mhi_cntrl->iova_start = 0;
-			mhi_cntrl->iova_stop = addr_win[0] + addr_win[1];
-		}
+	/*
+	 * if s1 translation enabled or using bounce buffer pull iova addr
+	 * from dt
+	 */
+	if (use_bb || (mhi_dev->smmu_cfg & MHI_SMMU_ATTACH &&
+		       !(mhi_dev->smmu_cfg & MHI_SMMU_S1_BYPASS))) {
+		ret = of_property_count_elems_of_size(of_node, "qcom,addr-win",
+						      sizeof(addr_win));
+		if (ret != 1)
+			goto error_register;
+		ret = of_property_read_u64_array(of_node, "qcom,addr-win",
+						 addr_win, 2);
+		if (ret)
+			goto error_register;
+	} else {
+		addr_win[0] = memblock_start_of_DRAM();
+		addr_win[1] = memblock_end_of_DRAM();
 	}
+
+	mhi_dev->iova_start = addr_win[0];
+	mhi_dev->iova_stop = addr_win[1];
+
+	/*
+	 * If S1 is enabled, set MHI_CTRL start address to 0 so we can use low
+	 * level mapping api to map buffers outside of smmu domain
+	 */
+	if (mhi_dev->smmu_cfg & MHI_SMMU_ATTACH &&
+	    !(mhi_dev->smmu_cfg & MHI_SMMU_S1_BYPASS))
+		mhi_cntrl->iova_start = 0;
+	else
+		mhi_cntrl->iova_start = addr_win[0];
+
+	mhi_cntrl->iova_stop = mhi_dev->iova_stop;
+	mhi_cntrl->of_node = of_node;
 
 	mhi_dev->pci_dev = pci_dev;
 	spin_lock_init(&mhi_dev->lpm_lock);
@@ -821,6 +755,7 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	mhi_cntrl->lpm_enable = mhi_lpm_enable;
 	mhi_cntrl->time_get = mhi_time_get;
 	mhi_cntrl->remote_timer_freq = 19200000;
+	mhi_cntrl->local_timer_freq = 19200000;
 
 	ret = of_register_mhi_controller(mhi_cntrl);
 	if (ret)
@@ -837,8 +772,10 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	mhi_cntrl->fw_image = firmware_info->fw_image;
 	mhi_cntrl->edl_image = firmware_info->edl_image;
 
-	if (sysfs_create_group(&mhi_cntrl->mhi_dev->dev.kobj, &mhi_qcom_group))
-		MHI_ERR("Error while creating the sysfs group\n");
+	ret = sysfs_create_group(&mhi_cntrl->mhi_dev->dev.kobj,
+				 &mhi_qcom_group);
+	if (ret)
+		goto error_register;
 
 	return mhi_cntrl;
 
@@ -874,15 +811,13 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	if (ret)
 		return ret;
 
-	mhi_cntrl->dev = &mhi_dev->pci_dev->dev;
-
-	ret = dma_set_mask_and_coherent(mhi_cntrl->dev, DMA_BIT_MASK(64));
+	ret = mhi_arch_iommu_init(mhi_cntrl);
 	if (ret)
-		goto error_pci_probe;
+		goto error_iommu_init;
 
 	ret = mhi_init_pci_dev(mhi_cntrl);
 	if (ret)
-		goto error_pci_probe;
+		goto error_init_pci;
 
 	/* start power up sequence */
 	if (!debug_mode) {
@@ -900,7 +835,10 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 error_power_up:
 	mhi_deinit_pci_dev(mhi_cntrl);
 
-error_pci_probe:
+error_init_pci:
+	mhi_arch_iommu_deinit(mhi_cntrl);
+
+error_iommu_init:
 	mhi_arch_pcie_deinit(mhi_cntrl);
 
 	return ret;

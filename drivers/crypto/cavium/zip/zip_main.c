@@ -113,7 +113,7 @@ struct zip_device *zip_get_device(int node)
  */
 int zip_get_node_id(void)
 {
-	return cpu_to_node(raw_smp_processor_id());
+	return cpu_to_node(smp_processor_id());
 }
 
 /* Initializes the ZIP h/w sub-system */
@@ -471,8 +471,6 @@ static int zip_show_stats(struct seq_file *s, void *unused)
 	struct zip_stats  *st;
 
 	for (index = 0; index < MAX_ZIP_DEVICES; index++) {
-		u64 pending = 0;
-
 		if (zip_dev[index]) {
 			zip = zip_dev[index];
 			st  = &zip->stats;
@@ -480,15 +478,16 @@ static int zip_show_stats(struct seq_file *s, void *unused)
 			/* Get all the pending requests */
 			for (q = 0; q < ZIP_NUM_QUEUES; q++) {
 				val = zip_reg_read((zip->reg_base +
-						    ZIP_DBG_QUEX_STA(q)));
-				pending += val >> 32 & 0xffffff;
+						    ZIP_DBG_COREX_STA(q)));
+				val = (val >> 32);
+				val = val & 0xffffff;
+				atomic64_add(val, &st->pending_req);
 			}
 
-			val = atomic64_read(&st->comp_req_complete);
-			avg_chunk = (val) ? atomic64_read(&st->comp_in_bytes) / val : 0;
-
-			val = atomic64_read(&st->comp_out_bytes);
-			avg_cr = (val) ? atomic64_read(&st->comp_in_bytes) / val : 0;
+			avg_chunk = (atomic64_read(&st->comp_in_bytes) /
+				     atomic64_read(&st->comp_req_complete));
+			avg_cr = (atomic64_read(&st->comp_in_bytes) /
+				  atomic64_read(&st->comp_out_bytes));
 			seq_printf(s, "        ZIP Device %d Stats\n"
 				      "-----------------------------------\n"
 				      "Comp Req Submitted        : \t%lld\n"
@@ -516,7 +515,10 @@ static int zip_show_stats(struct seq_file *s, void *unused)
 				       (u64)atomic64_read(&st->decomp_in_bytes),
 				       (u64)atomic64_read(&st->decomp_out_bytes),
 				       (u64)atomic64_read(&st->decomp_bad_reqs),
-				       pending);
+				       (u64)atomic64_read(&st->pending_req));
+
+			/* Reset pending requests  count */
+			atomic64_set(&st->pending_req, 0);
 		}
 	}
 	return 0;
@@ -593,7 +595,6 @@ static const struct file_operations zip_stats_fops = {
 	.owner = THIS_MODULE,
 	.open  = zip_stats_open,
 	.read  = seq_read,
-	.release = single_release,
 };
 
 static int zip_clear_open(struct inode *inode, struct file *file)
@@ -605,7 +606,6 @@ static const struct file_operations zip_clear_fops = {
 	.owner = THIS_MODULE,
 	.open  = zip_clear_open,
 	.read  = seq_read,
-	.release = single_release,
 };
 
 static int zip_regs_open(struct inode *inode, struct file *file)
@@ -617,7 +617,6 @@ static const struct file_operations zip_regs_fops = {
 	.owner = THIS_MODULE,
 	.open  = zip_regs_open,
 	.read  = seq_read,
-	.release = single_release,
 };
 
 /* Root directory for thunderx_zip debugfs entry */

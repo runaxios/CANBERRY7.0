@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/kmod.h>
@@ -238,11 +237,24 @@ static int tty_ldiscs_seq_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-const struct seq_operations tty_ldiscs_seq_ops = {
+static const struct seq_operations tty_ldiscs_seq_ops = {
 	.start	= tty_ldiscs_seq_start,
 	.next	= tty_ldiscs_seq_next,
 	.stop	= tty_ldiscs_seq_stop,
 	.show	= tty_ldiscs_seq_show,
+};
+
+static int proc_tty_ldiscs_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &tty_ldiscs_seq_ops);
+}
+
+const struct file_operations tty_ldiscs_proc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= proc_tty_ldiscs_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
 };
 
 /**
@@ -626,12 +638,6 @@ static void tty_ldisc_kill(struct tty_struct *tty)
 {
 	if (!tty->ldisc)
 		return;
-
-#if defined(CONFIG_TTY_FLUSH_LOCAL_ECHO)
-	if (tty->echo_delayed_work.work.func)
-		cancel_delayed_work_sync(&tty->echo_delayed_work);
-#endif
-
 	/*
 	 * Now kill off the ldisc
 	 */
@@ -733,8 +739,8 @@ void tty_ldisc_hangup(struct tty_struct *tty, bool reinit)
 		tty_ldisc_deref(ld);
 	}
 
-	wake_up_interruptible_poll(&tty->write_wait, EPOLLOUT);
-	wake_up_interruptible_poll(&tty->read_wait, EPOLLIN);
+	wake_up_interruptible_poll(&tty->write_wait, POLLOUT);
+	wake_up_interruptible_poll(&tty->read_wait, POLLIN);
 
 	/*
 	 * Shutdown the current line discipline, and reset it to
@@ -840,13 +846,8 @@ int tty_ldisc_init(struct tty_struct *tty)
  */
 void tty_ldisc_deinit(struct tty_struct *tty)
 {
-	if (tty->ldisc) {
-#if defined(CONFIG_TTY_FLUSH_LOCAL_ECHO)
-		if (tty->echo_delayed_work.work.func)
-			cancel_delayed_work_sync(&tty->echo_delayed_work);
-#endif
+	if (tty->ldisc)
 		tty_ldisc_put(tty->ldisc);
-	}
 	tty->ldisc = NULL;
 }
 

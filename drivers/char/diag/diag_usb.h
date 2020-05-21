@@ -1,5 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef DIAGUSB_H
@@ -38,11 +46,6 @@ struct diag_usb_buf_tbl_t {
 	int ctxt;
 };
 
-struct diag_usb_event_q {
-	struct list_head link;
-	int data;
-};
-
 struct diag_usb_info {
 	int id;
 	int ctxt;
@@ -50,6 +53,7 @@ struct diag_usb_info {
 	atomic_t connected;
 	atomic_t diag_state;
 	atomic_t read_pending;
+	atomic_t disconnected;
 	int enabled;
 	int mempool;
 	int max_size;
@@ -64,10 +68,10 @@ struct diag_usb_info {
 	struct diag_request *read_ptr;
 	struct work_struct read_work;
 	struct work_struct read_done_work;
-	struct work_struct event_work;
+	struct work_struct connect_work;
+	struct work_struct disconnect_work;
 	struct workqueue_struct *usb_wq;
 	wait_queue_head_t wait_q;
-	struct list_head event_q;
 };
 
 #ifdef CONFIG_DIAG_OVER_USB

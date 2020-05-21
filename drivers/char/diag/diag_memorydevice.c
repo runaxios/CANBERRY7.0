@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -51,15 +59,6 @@ struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 		.md_info_inited = 0,
 		.tbl = NULL,
 		.ops = NULL,
-	},
-	{
-		.id = DIAG_MD_SMUX,
-		.ctx = 0,
-		.mempool = POOL_TYPE_QSC_MUX,
-		.num_tbl_entries = 0,
-		.md_info_inited = 0,
-		.tbl = NULL,
-		.ops = NULL,
 	}
 #endif
 };
@@ -89,14 +88,13 @@ void diag_md_open_all(void)
 }
 void diag_md_open_device(int id)
 {
-
 	struct diag_md_info *ch = NULL;
 
-		ch = &diag_md[id];
-		if (!ch->md_info_inited)
-			return;
-		if (ch->ops && ch->ops->open)
-			ch->ops->open(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
+	ch = &diag_md[id];
+	if (!ch->md_info_inited)
+		return;
+	if (ch->ops && ch->ops->open)
+		ch->ops->open(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
 
 }
 void diag_md_close_all(void)
@@ -144,32 +142,32 @@ void diag_md_close_device(int id)
 	struct diag_md_info *ch = NULL;
 	struct diag_buf_tbl_t *entry = NULL;
 
-		ch = &diag_md[id];
-		if (!ch->md_info_inited)
-			return;
+	ch = &diag_md[id];
+	if (!ch->md_info_inited)
+		return;
 
-		if (ch->ops && ch->ops->close)
-			ch->ops->close(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
+	if (ch->ops && ch->ops->close)
+		ch->ops->close(ch->ctx, DIAG_MEMORY_DEVICE_MODE);
 
-		/*
-		 * When we close the Memory device mode, make sure we flush the
-		 * internal buffers in the table so that there are no stale
-		 * entries.
-		 */
-		spin_lock_irqsave(&ch->lock, flags);
-		for (j = 0; j < ch->num_tbl_entries; j++) {
-			entry = &ch->tbl[j];
-			if (entry->len <= 0)
-				continue;
-			if (ch->ops && ch->ops->write_done)
-				ch->ops->write_done(entry->buf, entry->len,
-						    entry->ctx,
-						    DIAG_MEMORY_DEVICE_MODE);
-			entry->buf = NULL;
-			entry->len = 0;
-			entry->ctx = 0;
-		}
-		spin_unlock_irqrestore(&ch->lock, flags);
+	/*
+	 * When we close the Memory device mode, make sure we flush the
+	 * internal buffers in the table so that there are no stale
+	 * entries.
+	 */
+	spin_lock_irqsave(&ch->lock, flags);
+	for (j = 0; j < ch->num_tbl_entries; j++) {
+		entry = &ch->tbl[j];
+		if (entry->len <= 0)
+			continue;
+		if (ch->ops && ch->ops->write_done)
+			ch->ops->write_done(entry->buf, entry->len,
+					    entry->ctx,
+					    DIAG_MEMORY_DEVICE_MODE);
+		entry->buf = NULL;
+		entry->len = 0;
+		entry->ctx = 0;
+	}
+	spin_unlock_irqrestore(&ch->lock, flags);
 
 	diag_ws_reset(DIAG_WS_MUX);
 }

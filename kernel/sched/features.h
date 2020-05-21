@@ -27,6 +27,12 @@ SCHED_FEAT(NEXT_BUDDY, false)
 SCHED_FEAT(LAST_BUDDY, true)
 
 /*
+ * skip buddy i.e task called yield() is always skipped and the
+ * next entity is selected to run irrespective of the vruntime
+ */
+SCHED_FEAT(STRICT_SKIP_BUDDY, true)
+
+/*
  * Consider buddies to be cache hot, decreases the likelyness of a
  * cache buddy being migrated away, increases cache locality.
  */
@@ -92,9 +98,14 @@ SCHED_FEAT(WA_BIAS, true)
 SCHED_FEAT(UTIL_EST, true)
 
 /*
- * Fast pre-selection of CPU candidates for EAS.
+ * Energy aware scheduling. Use platform energy model to guide scheduling
+ * decisions optimizing for energy efficiency.
  */
-SCHED_FEAT(FIND_BEST_TARGET, true)
+#ifdef CONFIG_DEFAULT_USE_ENERGY_AWARE
+SCHED_FEAT(ENERGY_AWARE, true)
+#else
+SCHED_FEAT(ENERGY_AWARE, false)
+#endif
 
 /*
  * Energy aware scheduling algorithm choices:
@@ -102,13 +113,17 @@ SCHED_FEAT(FIND_BEST_TARGET, true)
  *   Direct tasks in a schedtune.prefer_idle=1 group through
  *   the EAS path for wakeup task placement. Otherwise, put
  *   those tasks through the mainline slow path.
+ * FIND_BEST_TARGET
+ *   Limit the number of placement options for which we calculate
+ *   energy by using heuristics to select 'best idle' and
+ *   'best active' cpu options.
+ * FBT_STRICT_ORDER
+ *   ON: If the target CPU saves any energy, use that.
+ *   OFF: Use whichever of target or backup saves most.
  */
 SCHED_FEAT(EAS_PREFER_IDLE, true)
-
-/*
- * Request max frequency from schedutil whenever a RT task is running.
- */
-SCHED_FEAT(SUGOV_RT_MAX_FREQ, false)
+SCHED_FEAT(FIND_BEST_TARGET, true)
+SCHED_FEAT(FBT_STRICT_ORDER, false)
 
 /*
  * Apply schedtune boost hold to tasks of all sched classes.

@@ -1,6 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ *
  * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/slab.h>
@@ -64,10 +74,11 @@ static void ion_system_secure_heap_free(struct ion_buffer *buffer)
 	secure_heap->sys_heap->ops->free(buffer);
 }
 
-static int ion_system_secure_heap_allocate(struct ion_heap *heap,
-					   struct ion_buffer *buffer,
-					   unsigned long size,
-					   unsigned long flags)
+static int ion_system_secure_heap_allocate(
+					struct ion_heap *heap,
+					struct ion_buffer *buffer,
+					unsigned long size,
+					unsigned long flags)
 {
 	int ret = 0;
 	struct ion_system_secure_heap *secure_heap = container_of(heap,
@@ -104,7 +115,7 @@ static void process_one_prefetch(struct ion_heap *sys_heap,
 	ret = sys_heap->ops->allocate(sys_heap, &buffer, info->size,
 					buffer.flags);
 	if (ret) {
-		pr_debug("%s: Failed to prefetch 0x%llx, ret = %d\n",
+		pr_debug("%s: Failed to prefetch %#llx, ret = %d\n",
 			 __func__, info->size, ret);
 		return;
 	}
@@ -166,7 +177,7 @@ static void process_one_shrink(struct ion_system_secure_heap *secure_heap,
 	size = min_t(size_t, pool_size, info->size);
 	ret = sys_heap->ops->allocate(sys_heap, &buffer, size, buffer.flags);
 	if (ret) {
-		pr_debug("%s: Failed to shrink 0x%llx, ret = %d\n",
+		pr_debug("%s: Failed to shrink %#llx, ret = %d\n",
 			 __func__, info->size, ret);
 		return;
 	}
@@ -202,9 +213,9 @@ static void ion_system_secure_heap_prefetch_work(struct work_struct *work)
 	spin_unlock_irqrestore(&secure_heap->work_lock, flags);
 }
 
-static int alloc_prefetch_info(struct ion_prefetch_regions __user *
-			       user_regions, bool shrink,
-			       struct list_head *items)
+static int alloc_prefetch_info(
+			struct ion_prefetch_regions __user *user_regions,
+			bool shrink, struct list_head *items)
 {
 	struct prefetch_info *info;
 	u64 user_sizes;
@@ -262,10 +273,9 @@ static int __ion_system_secure_heap_resize(struct ion_heap *heap, void *ptr,
 		return -EINVAL;
 
 	for (i = 0; i < data->nr_regions; i++) {
-		struct ion_prefetch_regions *r;
-
-		r = (struct ion_prefetch_regions *)data->regions + i;
-		ret = alloc_prefetch_info(r, shrink, &items);
+		ret = alloc_prefetch_info(
+			(struct ion_prefetch_regions *)data->regions + i,
+			shrink, &items);
 		if (ret)
 			goto out_free;
 	}
@@ -419,8 +429,9 @@ got_page:
 	return page;
 }
 
-int ion_secure_page_pool_shrink(struct ion_system_heap *sys_heap,
-				int vmid, int order_idx, int nr_to_scan)
+int ion_secure_page_pool_shrink(
+		struct ion_system_heap *sys_heap,
+		int vmid, int order_idx, int nr_to_scan)
 {
 	int ret, freed = 0;
 	int order = orders[order_idx];

@@ -1,9 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #include <linux/module.h>
 #include <linux/bitops.h>
 #include <linux/cdev.h>
@@ -74,7 +79,7 @@
 #define DCC_AHB_IND			0x00
 #define DCC_APB_IND			BIT(29)
 
-#define DCC_MAX_LINK_LIST		8
+#define DCC_MAX_LINK_LIST		5
 #define DCC_INVALID_LINK_LIST		0xFF
 
 enum dcc_func_type {
@@ -158,28 +163,6 @@ static int dcc_sram_writel(struct dcc_drvdata *drvdata,
 	return 0;
 }
 
-static void dcc_sram_memset(const struct device *dev, void __iomem *dst,
-			    int c, size_t count)
-{
-	u64 qc = (u8)c;
-
-	qc |= qc << 8;
-	qc |= qc << 16;
-
-	if (!count || !IS_ALIGNED((unsigned long)dst, 4)
-	    || !IS_ALIGNED((unsigned long)count, 4)) {
-		dev_err(dev,
-			"Target address or size not aligned with 4 bytes\n");
-		return;
-	}
-
-	while (count >= 4) {
-		__raw_writel_no_log(qc, dst);
-		dst += 4;
-		count -= 4;
-	}
-}
-
 static bool dcc_ready(struct dcc_drvdata *drvdata)
 {
 	uint32_t val;
@@ -209,7 +192,7 @@ static int dcc_read_status(struct dcc_drvdata *drvdata)
 		if (bus_status) {
 
 			dev_err(drvdata->dev,
-				"Read access error for list %d err: 0x%x.\n",
+				"Read access error for list %d err: 0x%x",
 				curr_list, bus_status);
 
 			ll_cfg = dcc_readl(drvdata, DCC_LL_CFG(curr_list));
@@ -233,6 +216,12 @@ static int dcc_sw_trigger(struct dcc_drvdata *drvdata)
 	uint32_t tmp_ll_cfg = 0;
 
 	mutex_lock(&drvdata->mutex);
+
+	if (!dcc_ready(drvdata)) {
+		dev_err(drvdata->dev, "DCC is not ready\n");
+		ret = -EBUSY;
+		goto err;
+	}
 
 	for (curr_list = 0; curr_list < DCC_MAX_LINK_LIST; curr_list++) {
 		if (!drvdata->enable[curr_list])
@@ -551,7 +540,7 @@ static int __dcc_ll_cfg(struct dcc_drvdata *drvdata, int curr_list)
 	return 0;
 overstep:
 	ret = -EINVAL;
-	dcc_sram_memset(drvdata->dev, drvdata->ram_base, 0, drvdata->ram_size);
+	memset_io(drvdata->ram_base, 0, drvdata->ram_size);
 	dev_err(drvdata->dev, "DCC SRAM oversteps, 0x%x (0x%x)\n",
 		sram_offset, drvdata->ram_size);
 err:
@@ -587,35 +576,18 @@ static int dcc_valid_list(struct dcc_drvdata *drvdata, int curr_list)
 		return -EINVAL;
 
 	if (drvdata->enable[curr_list]) {
-		dev_err(drvdata->dev, "List %d is already enabled\n",
-				curr_list);
+		dev_err(drvdata->dev, "DCC is already enabled\n");
 		return -EINVAL;
 	}
 
 	lock_reg = dcc_readl(drvdata, DCC_LL_LOCK(curr_list));
 	if (lock_reg & 0x1) {
-		dev_err(drvdata->dev, "List %d is already locked\n",
-				curr_list);
+		dev_err(drvdata->dev, "DCC is already enabled\n");
 		return -EINVAL;
 	}
 
 	dev_err(drvdata->dev, "DCC list passed %d\n", curr_list);
 	return 0;
-}
-
-static bool is_dcc_enabled(struct dcc_drvdata *drvdata)
-{
-	bool dcc_enable = false;
-	int list;
-
-	for (list = 0; list < DCC_MAX_LINK_LIST; list++) {
-		if (drvdata->enable[list]) {
-			dcc_enable = true;
-			break;
-		}
-	}
-
-	return dcc_enable;
 }
 
 static int dcc_enable(struct dcc_drvdata *drvdata)
@@ -626,10 +598,7 @@ static int dcc_enable(struct dcc_drvdata *drvdata)
 
 	mutex_lock(&drvdata->mutex);
 
-	if (!is_dcc_enabled(drvdata)) {
-		dcc_sram_memset(drvdata->dev, drvdata->ram_base, 0xDE,
-			drvdata->ram_size);
-	}
+	memset_io(drvdata->ram_base, 0xDE, drvdata->ram_size);
 
 	for (list = 0; list < DCC_MAX_LINK_LIST; list++) {
 
@@ -660,11 +629,11 @@ static int dcc_enable(struct dcc_drvdata *drvdata)
 		dcc_writel(drvdata, (BIT(0) | BIT(1) | BIT(2)),
 			   DCC_LL_INT_STATUS(list));
 
-		dev_info(drvdata->dev, "All values written to enable.\n");
+		dev_info(drvdata->dev, "All values written to enable");
 		/* Make sure all config is written in sram */
 		mb();
 
-		drvdata->enable[list] = true;
+		drvdata->enable[list] = 1;
 
 		if (drvdata->func_type[list] == DCC_FUNC_TYPE_CRC) {
 			__dcc_first_crc(drvdata);
@@ -702,15 +671,31 @@ static void dcc_disable(struct dcc_drvdata *drvdata)
 		dcc_writel(drvdata, 0, DCC_LL_BASE(curr_list));
 		dcc_writel(drvdata, 0, DCC_FD_BASE(curr_list));
 		dcc_writel(drvdata, 0, DCC_LL_LOCK(curr_list));
-		drvdata->enable[curr_list] = false;
+		drvdata->enable[curr_list] = 0;
 	}
-	dcc_sram_memset(drvdata->dev, drvdata->ram_base, 0, drvdata->ram_size);
+	memset_io(drvdata->ram_base, 0, drvdata->ram_size);
 	drvdata->ram_cfg = 0;
 	drvdata->ram_start = 0;
+
 	mutex_unlock(&drvdata->mutex);
 }
 
-static ssize_t curr_list_show(struct device *dev,
+static bool is_dcc_enabled(struct dcc_drvdata *drvdata)
+{
+	bool dcc_enable = false;
+	int list;
+
+	for (list = 0; list < DCC_MAX_LINK_LIST; list++) {
+		if (drvdata->enable[list]) {
+			dcc_enable = true;
+			break;
+		}
+	}
+
+	return dcc_enable;
+}
+
+static ssize_t dcc_show_curr_list(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -729,7 +714,7 @@ err:
 	return ret;
 }
 
-static ssize_t curr_list_store(struct device *dev,
+static ssize_t dcc_store_curr_list(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t size)
 {
@@ -764,9 +749,10 @@ static ssize_t curr_list_store(struct device *dev,
 
 	return size;
 }
-static DEVICE_ATTR_RW(curr_list);
+static DEVICE_ATTR(curr_list, 0644,
+			dcc_show_curr_list, dcc_store_curr_list);
 
-static ssize_t func_type_show(struct device *dev,
+static ssize_t dcc_show_func_type(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
@@ -780,7 +766,7 @@ static ssize_t func_type_show(struct device *dev,
 	return len;
 }
 
-static ssize_t func_type_store(struct device *dev,
+static ssize_t dcc_store_func_type(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t size)
 {
@@ -790,7 +776,7 @@ static ssize_t func_type_store(struct device *dev,
 
 	if (strlen(buf) >= 10)
 		return -EINVAL;
-	if (sscanf(buf, "%8s", str) != 1)
+	if (sscanf(buf, "%s", str) != 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -822,9 +808,10 @@ out:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_RW(func_type);
+static DEVICE_ATTR(func_type, 0644,
+		   dcc_show_func_type, dcc_store_func_type);
 
-static ssize_t data_sink_show(struct device *dev,
+static ssize_t dcc_show_data_sink(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
@@ -838,7 +825,7 @@ static ssize_t data_sink_show(struct device *dev,
 	return len;
 }
 
-static ssize_t data_sink_store(struct device *dev,
+static ssize_t dcc_store_data_sink(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t size)
 {
@@ -848,7 +835,7 @@ static ssize_t data_sink_store(struct device *dev,
 
 	if (strlen(buf) >= 10)
 		return -EINVAL;
-	if (sscanf(buf, "%8s", str) != 1)
+	if (sscanf(buf, "%s", str) != 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -878,9 +865,10 @@ out:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_RW(data_sink);
+static DEVICE_ATTR(data_sink, 0644,
+		   dcc_show_data_sink, dcc_store_data_sink);
 
-static ssize_t trigger_store(struct device *dev,
+static ssize_t dcc_store_trigger(struct device *dev,
 				 struct device_attribute *attr,
 				 const char *buf, size_t size)
 {
@@ -899,9 +887,9 @@ static ssize_t trigger_store(struct device *dev,
 
 	return ret;
 }
-static DEVICE_ATTR_WO(trigger);
+static DEVICE_ATTR(trigger, 0200, NULL, dcc_store_trigger);
 
-static ssize_t enable_show(struct device *dev,
+static ssize_t dcc_show_enable(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -924,7 +912,7 @@ err:
 	return ret;
 }
 
-static ssize_t enable_store(struct device *dev,
+static ssize_t dcc_store_enable(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
 {
@@ -946,9 +934,10 @@ static ssize_t enable_store(struct device *dev,
 	return ret;
 
 }
-static DEVICE_ATTR_RW(enable);
+static DEVICE_ATTR(enable, 0644, dcc_show_enable,
+		   dcc_store_enable);
 
-static ssize_t config_show(struct device *dev,
+static ssize_t dcc_show_config(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
@@ -1102,7 +1091,7 @@ err:
 	return ret;
 }
 
-static ssize_t config_store(struct device *dev,
+static ssize_t dcc_store_config(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
 {
@@ -1131,7 +1120,8 @@ static ssize_t config_store(struct device *dev,
 	return size;
 
 }
-static DEVICE_ATTR_RW(config);
+static DEVICE_ATTR(config, 0644, dcc_show_config,
+		   dcc_store_config);
 
 static void dcc_config_reset(struct dcc_drvdata *drvdata)
 {
@@ -1154,7 +1144,7 @@ static void dcc_config_reset(struct dcc_drvdata *drvdata)
 	mutex_unlock(&drvdata->mutex);
 }
 
-static ssize_t config_reset_store(struct device *dev,
+static ssize_t dcc_store_config_reset(struct device *dev,
 				      struct device_attribute *attr,
 				      const char *buf, size_t size)
 {
@@ -1169,9 +1159,9 @@ static ssize_t config_reset_store(struct device *dev,
 
 	return size;
 }
-static DEVICE_ATTR_WO(config_reset);
+static DEVICE_ATTR(config_reset, 0200, NULL, dcc_store_config_reset);
 
-static ssize_t crc_error_show(struct device *dev,
+static ssize_t dcc_show_crc_error(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -1196,9 +1186,9 @@ err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_RO(crc_error);
+static DEVICE_ATTR(crc_error, 0444, dcc_show_crc_error, NULL);
 
-static ssize_t ready_show(struct device *dev,
+static ssize_t dcc_show_ready(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -1223,9 +1213,9 @@ err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_RO(ready);
+static DEVICE_ATTR(ready, 0444, dcc_show_ready, NULL);
 
-static ssize_t interrupt_disable_show(struct device *dev,
+static ssize_t dcc_show_interrupt_disable(struct device *dev,
 					  struct device_attribute *attr,
 					  char *buf)
 {
@@ -1235,7 +1225,7 @@ static ssize_t interrupt_disable_show(struct device *dev,
 			 (unsigned int)drvdata->interrupt_disable);
 }
 
-static ssize_t interrupt_disable_store(struct device *dev,
+static ssize_t dcc_store_interrupt_disable(struct device *dev,
 					   struct device_attribute *attr,
 					   const char *buf, size_t size)
 {
@@ -1250,7 +1240,8 @@ static ssize_t interrupt_disable_store(struct device *dev,
 	mutex_unlock(&drvdata->mutex);
 	return size;
 }
-static DEVICE_ATTR_RW(interrupt_disable);
+static DEVICE_ATTR(interrupt_disable, 0644,
+		   dcc_show_interrupt_disable, dcc_store_interrupt_disable);
 
 static int dcc_add_loop(struct dcc_drvdata *drvdata, unsigned long loop_cnt)
 {
@@ -1269,7 +1260,7 @@ static int dcc_add_loop(struct dcc_drvdata *drvdata, unsigned long loop_cnt)
 	return 0;
 }
 
-static ssize_t loop_store(struct device *dev,
+static ssize_t dcc_store_loop(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t size)
 {
@@ -1300,18 +1291,29 @@ err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_WO(loop);
+static DEVICE_ATTR(loop, 0200, NULL, dcc_store_loop);
 
-static int dcc_rd_mod_wr_add(struct dcc_drvdata *drvdata, unsigned int mask,
-			  unsigned int val)
+static ssize_t dcc_rd_mod_wr(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t size)
 {
-	int ret = 0;
+	int ret = size;
+	int nval;
+	unsigned int mask, val;
+	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 	struct dcc_config_entry *entry;
 
 	mutex_lock(&drvdata->mutex);
 
+	nval = sscanf(buf, "%x %x", &mask, &val);
+
+	if (nval <= 1 || nval > 2) {
+		ret = -EINVAL;
+		goto err;
+	}
+
 	if (drvdata->curr_list >= DCC_MAX_LINK_LIST) {
-		dev_err(drvdata->dev, "Select link list to program using curr_list\n");
+		dev_err(dev, "Select link list to program using curr_list\n");
 		ret = -EINVAL;
 		goto err;
 	}
@@ -1338,29 +1340,7 @@ err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-
-static ssize_t rd_mod_wr_store(struct device *dev,
-				    struct device_attribute *attr,
-				    const char *buf, size_t size)
-{
-	int ret;
-	int nval;
-	unsigned int mask, val;
-	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
-
-	nval = sscanf(buf, "%x %x", &mask, &val);
-
-	if (nval <= 1 || nval > 2)
-		return -EINVAL;
-
-	ret = dcc_rd_mod_wr_add(drvdata, mask, val);
-	if (ret)
-		return ret;
-
-	return size;
-
-}
-static DEVICE_ATTR_WO(rd_mod_wr);
+static DEVICE_ATTR(rd_mod_wr, 0200, NULL, dcc_rd_mod_wr);
 
 static int dcc_add_write(struct dcc_drvdata *drvdata, unsigned int addr,
 			 unsigned int write_val, int apb_bus)
@@ -1384,7 +1364,7 @@ static int dcc_add_write(struct dcc_drvdata *drvdata, unsigned int addr,
 	return 0;
 }
 
-static ssize_t config_write_store(struct device *dev,
+static ssize_t dcc_write(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t size)
 {
@@ -1422,9 +1402,9 @@ err:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_WO(config_write);
+static DEVICE_ATTR(config_write, 0200, NULL, dcc_write);
 
-static ssize_t cti_trig_show(struct device *dev,
+static ssize_t dcc_show_cti_trig(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
@@ -1432,7 +1412,7 @@ static ssize_t cti_trig_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", drvdata->cti_trig);
 }
 
-static ssize_t cti_trig_store(struct device *dev,
+static ssize_t dcc_store_cti_trig(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t size)
 {
@@ -1464,7 +1444,8 @@ out:
 	mutex_unlock(&drvdata->mutex);
 	return ret;
 }
-static DEVICE_ATTR_RW(cti_trig);
+static DEVICE_ATTR(cti_trig, 0644,
+		   dcc_show_cti_trig, dcc_store_cti_trig);
 
 static const struct device_attribute *dcc_attrs[] = {
 	&dev_attr_func_type,
@@ -1641,7 +1622,7 @@ static int dcc_dt_parse(struct dcc_drvdata *drvdata, struct device_node *np)
 		return ret;
 
 	if (curr_link_list >= DCC_MAX_LINK_LIST) {
-		dev_err(drvdata->dev, "List configuration failed.\n");
+		dev_err(drvdata->dev, "List configuration failed");
 		return ret;
 	}
 	drvdata->curr_list = curr_link_list;
@@ -1676,10 +1657,6 @@ static int dcc_dt_parse(struct dcc_drvdata *drvdata, struct device_node *np)
 			case DCC_READ:
 				ret = dcc_config_add(drvdata, val1,
 							val2, apb_bus);
-				break;
-			case DCC_READ_WRITE:
-				ret = dcc_rd_mod_wr_add(drvdata, val1,
-							val2);
 				break;
 			case DCC_WRITE:
 				ret = dcc_add_write(drvdata, val1,
@@ -1772,7 +1749,7 @@ static int dcc_probe(struct platform_device *pdev)
 		drvdata->nr_config[i] = 0;
 	}
 
-	dcc_sram_memset(drvdata->dev, drvdata->ram_base, 0, drvdata->ram_size);
+	memset_io(drvdata->ram_base, 0, drvdata->ram_size);
 
 	drvdata->curr_list = DCC_INVALID_LINK_LIST;
 
@@ -1812,6 +1789,7 @@ static struct platform_driver dcc_driver = {
 	.remove         = dcc_remove,
 	.driver         = {
 		.name   = "msm-dcc",
+		.owner	= THIS_MODULE,
 		.of_match_table	= msm_dcc_match,
 	},
 };

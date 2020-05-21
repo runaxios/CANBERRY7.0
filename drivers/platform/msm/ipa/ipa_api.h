@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/ipa_mhi.h>
@@ -181,7 +188,7 @@ struct ipa_api_controller {
 	int (*ipa_tx_dp_mul)(enum ipa_client_type dst,
 			struct ipa_tx_data_desc *data_desc);
 
-	void (*ipa_free_skb)(struct ipa_rx_data *data);
+	void (*ipa_free_skb)(struct ipa_rx_data *);
 
 	int (*ipa_setup_sys_pipe)(struct ipa_sys_connect_params *sys_in,
 		u32 *clnt_hdl);
@@ -211,10 +218,6 @@ struct ipa_api_controller {
 	int (*ipa_suspend_wdi_pipe)(u32 clnt_hdl);
 
 	int (*ipa_get_wdi_stats)(struct IpaHwStatsWDIInfoData_t *stats);
-
-	int (*ipa_uc_bw_monitor)(struct ipa_wdi_bw_info *info);
-
-	int (*ipa_set_wlan_tx_info)(struct ipa_wdi_tx_info *info);
 
 	u16 (*ipa_get_smem_restr_bytes)(void);
 
@@ -344,6 +347,8 @@ struct ipa_api_controller {
 
 	enum ipa_client_type (*ipa_get_client_mapping)(int pipe_idx);
 
+	enum ipa_rm_resource_name (*ipa_get_rm_resource_from_ep)(int pipe_idx);
+
 	bool (*ipa_get_modem_cfg_emb_pipe_flt)(void);
 
 	enum ipa_transport_type (*ipa_get_transport_type)(void);
@@ -404,7 +409,7 @@ struct ipa_api_controller {
 
 	int (*ipa_setup_uc_ntn_pipes)(struct ipa_ntn_conn_in_params *in,
 		ipa_notify_cb notify, void *priv, u8 hdr_len,
-		struct ipa_ntn_conn_out_params *outp);
+		struct ipa_ntn_conn_out_params *);
 
 	int (*ipa_tear_down_uc_offload_pipes)(int ipa_ep_idx_ul,
 		int ipa_ep_idx_dl, struct ipa_ntn_conn_in_params *params);
@@ -436,19 +441,18 @@ struct ipa_api_controller {
 		struct ipa_smmu_out_params *out);
 	int (*ipa_is_vlan_mode)(enum ipa_vlan_ifaces iface, bool *res);
 
-	int (*ipa_wigig_internal_init)(
+	bool (*ipa_pm_is_used)(void);
+
+	int (*ipa_wigig_uc_init)(
 		struct ipa_wdi_uc_ready_params *inout,
 		ipa_wigig_misc_int_cb int_notify,
 		phys_addr_t *uc_db_pa);
 
 	int (*ipa_conn_wigig_rx_pipe_i)(void *in,
-		struct ipa_wigig_conn_out_params *out,
-		struct dentry **parent);
+		struct ipa_wigig_conn_out_params *out);
 
 	int (*ipa_conn_wigig_client_i)(void *in,
-		struct ipa_wigig_conn_out_params *out,
-		ipa_notify_cb tx_notify,
-		void *priv);
+		struct ipa_wigig_conn_out_params *out);
 
 	int (*ipa_disconn_wigig_pipe_i)(enum ipa_client_type client,
 		struct ipa_wigig_pipe_setup_info_smmu *pipe_smmu,
@@ -470,18 +474,6 @@ struct ipa_api_controller {
 		bool (*teth_port_state)(void), enum ipa_client_type client);
 
 	void (*ipa_deregister_client_callback)(enum ipa_client_type client);
-
-	int (*ipa_uc_debug_stats_alloc)(
-		struct IpaHwOffloadStatsAllocCmdData_t cmdinfo);
-
-	int (*ipa_uc_debug_stats_dealloc)(uint32_t prot_id);
-
-	bool (*ipa_get_lan_rx_napi)(void);
-
-	void (*ipa_get_gsi_stats)(int prot_id,
-		struct ipa_uc_dbg_ring_stats *stats);
-
-	int (*ipa_get_prot_id)(enum ipa_client_type client);
 };
 
 #ifdef CONFIG_IPA3

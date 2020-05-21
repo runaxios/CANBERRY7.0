@@ -111,13 +111,26 @@ static int map_addr(struct sk_buff *skb, unsigned int protoff,
 		newaddr = ct->tuplehash[!dir].tuple.src.u3;
 		newport = ct_sip_info->forced_dport ? :
 			  ct->tuplehash[!dir].tuple.src.u.udp.port;
+	} else if (nf_inet_addr_cmp(&ct->tuplehash[dir].tuple.src.u3, addr) &&
+	    ct->tuplehash[dir].tuple.src.u.udp.port != port) {
+		newaddr = ct->tuplehash[!dir].tuple.dst.u3;
+		newport = 0;
+	} else if (nf_inet_addr_cmp(&ct->tuplehash[dir].tuple.dst.u3, addr) &&
+		   ct->tuplehash[dir].tuple.dst.u.udp.port != port) {
+		newaddr = ct->tuplehash[!dir].tuple.src.u3;
+		newport = 0;
 	} else
 		return 1;
 
 	if (nf_inet_addr_cmp(&newaddr, addr) && newport == port)
 		return 1;
 
-	buflen = sip_sprintf_addr_port(ct, buffer, &newaddr, ntohs(newport));
+	if (newport == 0)
+		buflen = sip_sprintf_addr(ct, buffer, &newaddr, false);
+	else
+		buflen = sip_sprintf_addr_port(ct, buffer, &newaddr,
+					       ntohs(newport));
+
 	return mangle_packet(skb, protoff, dataoff, dptr, datalen,
 			     matchoff, matchlen, buffer, buflen);
 }
@@ -316,7 +329,7 @@ static void nf_nat_sip_seq_adjust(struct sk_buff *skb, unsigned int protoff,
 static void nf_nat_sip_expected(struct nf_conn *ct,
 				struct nf_conntrack_expect *exp)
 {
-	struct nf_nat_range2 range;
+	struct nf_nat_range range;
 
 	/* This must be a fresh one. */
 	BUG_ON(ct->status & IPS_NAT_DONE_MASK);

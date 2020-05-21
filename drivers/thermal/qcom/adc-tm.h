@@ -1,8 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #ifndef __QCOM_ADC_TM_H__
 #define __QCOM_ADC_TM_H__
 
@@ -104,12 +111,11 @@ struct adc_tm_cmn_prop {
 };
 
 struct adc_tm_ops {
-	int (*get_temp)(struct adc_tm_sensor *sensor, int *temp);
-	int (*init)(struct adc_tm_chip *chip, uint32_t dt_chans);
-	int (*set_trips)(struct adc_tm_sensor *sensor, int low_temp,
-							int high_temp);
-	int (*interrupts_reg)(struct adc_tm_chip *chip);
-	int (*shutdown)(struct adc_tm_chip *chip);
+	int (*get_temp)(struct adc_tm_sensor *, int *);
+	int (*init)(struct adc_tm_chip *, uint32_t);
+	int (*set_trips)(struct adc_tm_sensor *, int, int);
+	int (*interrupts_reg)(struct adc_tm_chip *);
+	int (*shutdown)(struct adc_tm_chip *);
 };
 
 struct adc_tm_chip {
@@ -226,8 +232,8 @@ struct adc_tm_config {
  *	which takes the adc properties and returns the physical result
  */
 struct adc_tm_reverse_scale_fn {
-	int32_t (*chan)(const struct adc_tm_data *data,
-		struct adc_tm_config *tm_config);
+	int32_t (*chan)(const struct adc_tm_data *,
+		struct adc_tm_config *);
 };
 
 /**

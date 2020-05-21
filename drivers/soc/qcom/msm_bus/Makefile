@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 #
 # Makefile for msm-bus driver specific files
 #
@@ -12,8 +11,10 @@ ifdef CONFIG_QCOM_BUS_CONFIG_RPMH
 	obj-$(CONFIG_OF) += msm_bus_of_rpmh.o
 else
 	obj-y += msm_bus_fabric_adhoc.o msm_bus_arb_adhoc.o msm_bus_rules.o \
-		msm_bus_bimc_adhoc.o msm_bus_noc_adhoc.o
+		msm_bus_bimc_adhoc.o msm_bus_noc_adhoc.o msm_bus_qnoc_adhoc.o
 	obj-$(CONFIG_OF) += msm_bus_of_adhoc.o
 endif
+
+obj-$(CONFIG_DEBUG_BUS_VOTER) += msm_bus_dbg_voter.o
 
 obj-$(CONFIG_DEBUG_FS) += msm_bus_dbg.o

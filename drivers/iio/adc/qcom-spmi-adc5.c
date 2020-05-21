@@ -1,6 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/bitops.h>
@@ -19,7 +28,6 @@
 #include <linux/slab.h>
 #include <linux/log2.h>
 #include <linux/qpnp/qpnp-revid.h>
-#include <linux/ipc_logging.h>
 
 #include <dt-bindings/iio/qcom,spmi-vadc.h>
 
@@ -80,8 +88,7 @@
  */
 #define ADC_CONV_TIME_MIN_US			263
 #define ADC_CONV_TIME_MAX_US			264
-#define ADC_CONV_TIME_RETRY_POLL		570
-#define ADC_CONV_TIME_RETRY				190
+#define ADC_CONV_TIME_RETRY			400
 #define ADC_CONV_TIMEOUT			msecs_to_jiffies(100)
 
 /* CAL peripheral */
@@ -159,10 +166,9 @@ struct adc_chip {
 	struct completion	complete;
 	struct mutex		lock;
 	bool			skip_usb_wa;
-	void			*ipc_log0;
-	void			*ipc_log1;
 	struct pmic_revid_data	*pmic_rev_id;
 	const struct adc_data	*data;
+	int			adc_irq;
 };
 
 static const struct vadc_prescale_ratio adc_prescale_ratios[] = {
@@ -269,16 +275,13 @@ static int adc_read_voltage_data(struct adc_chip *adc, u16 *data)
 	return ret;
 }
 
-static int adc_poll_wait_eoc(struct adc_chip *adc, bool poll_only)
+static int adc_poll_wait_eoc(struct adc_chip *adc)
 {
 	unsigned int count, retry;
 	u8 status1;
 	int ret;
 
-	if (poll_only)
-		retry = ADC_CONV_TIME_RETRY_POLL;
-	else
-		retry = ADC_CONV_TIME_RETRY;
+	retry = ADC_CONV_TIME_RETRY;
 
 	for (count = 0; count < retry; count++) {
 		ret = adc_read(adc, ADC_USR_STATUS1, &status1, 1);
@@ -299,7 +302,7 @@ static int adc_wait_eoc(struct adc_chip *adc)
 	int ret;
 
 	if (adc->poll_eoc) {
-		ret = adc_poll_wait_eoc(adc, true);
+		ret = adc_poll_wait_eoc(adc);
 		if (ret < 0) {
 			pr_err("EOC bit not set\n");
 			return ret;
@@ -309,7 +312,7 @@ static int adc_wait_eoc(struct adc_chip *adc)
 							ADC_CONV_TIMEOUT);
 		if (!ret) {
 			pr_debug("Did not get completion timeout.\n");
-			ret = adc_poll_wait_eoc(adc, false);
+			ret = adc_poll_wait_eoc(adc);
 			if (ret < 0) {
 				pr_err("EOC bit not set\n");
 				return ret;
@@ -648,6 +651,7 @@ static int adc_read_raw(struct iio_dev *indio_dev,
 
 static const struct iio_info adc_info = {
 	.read_raw = adc_read_raw,
+	.driver_module = THIS_MODULE,
 	.of_xlate = adc_of_xlate,
 };
 
@@ -735,13 +739,11 @@ static const struct adc_channels adc_chans_pmic5[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_PM5_SMB_TEMP)
 	[ADC_AMUX_THM3]			= ADC_CHAN_TEMP("amux_thm3", 1,
 					SCALE_HW_CALIB_PM5_SMB_TEMP)
-	[ADC_GPIO1_PU2]	= ADC_CHAN_TEMP("gpio1_pu2", 1,
-					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO2_PU2]	= ADC_CHAN_TEMP("gpio2_pu2", 1,
-					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO3_PU2]	= ADC_CHAN_TEMP("gpio3_pu2", 1,
-					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO4_PU2]	= ADC_CHAN_TEMP("gpio4_pu2", 1,
+	[ADC_GPIO1_PU2]			= ADC_CHAN_VOLT("gpio1_pu2", 1,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_GPIO2_PU2] 		= ADC_CHAN_VOLT("gpio2_pu2", 1,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_GPIO4_PU2]			= ADC_CHAN_TEMP("gpio4_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 };
 
@@ -849,11 +851,6 @@ static int adc_get_dt_channel_data(struct device *dev,
 		prop->avg_samples = VADC_DEF_AVG_SAMPLES;
 	}
 
-	prop->scale_fn_type = -EINVAL;
-	ret = of_property_read_u32(node, "qcom,scale-fn-type", &value);
-	if (!ret && value < SCALE_HW_CALIB_MAX)
-		prop->scale_fn_type = value;
-
 	prop->lut_index = VADC_DEF_LUT_INDEX;
 
 	ret = of_property_read_u32(node, "qcom,lut-index", &value);
@@ -947,10 +944,8 @@ static int adc_get_dt_data(struct adc_chip *adc, struct device_node *node)
 			return ret;
 		}
 
-		if (prop.scale_fn_type == -EINVAL)
-			prop.scale_fn_type =
-				data->adc_chans[prop.channel].scale_fn_type;
-
+		prop.scale_fn_type =
+			data->adc_chans[prop.channel].scale_fn_type;
 		adc->chan_props[index] = prop;
 
 		adc_chan = &data->adc_chans[prop.channel];
@@ -970,7 +965,6 @@ static int adc_get_dt_data(struct adc_chip *adc, struct device_node *node)
 
 static const struct pmic_rev_data pmic_data[] = {
 	{PM6150_SUBTYPE,	1},
-	{PM7250B_SUBTYPE,	0},
 };
 
 bool skip_usb_in_wa(struct pmic_revid_data *pmic_rev_id)
@@ -998,10 +992,9 @@ static int adc_probe(struct platform_device *pdev)
 	struct adc_chip *adc;
 	struct regmap *regmap;
 	const __be32 *prop_addr;
-	int ret, irq_eoc;
+	int ret;
 	u32 reg;
 	bool skip_usb_wa = false;
-	char adc_name[40];
 
 	regmap = dev_get_regmap(dev->parent, NULL);
 	if (!regmap)
@@ -1031,6 +1024,7 @@ static int adc_probe(struct platform_device *pdev)
 	adc->regmap = regmap;
 	adc->dev = dev;
 	adc->pmic_rev_id = pmic_rev_id;
+	dev_set_drvdata(&pdev->dev, adc);
 
 	prop_addr = of_get_address(dev->of_node, 0, NULL, NULL);
 	if (!prop_addr) {
@@ -1056,13 +1050,13 @@ static int adc_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	irq_eoc = platform_get_irq(pdev, 0);
-	if (irq_eoc < 0) {
-		if (irq_eoc == -EPROBE_DEFER || irq_eoc == -EINVAL)
-			return irq_eoc;
+	adc->adc_irq = platform_get_irq(pdev, 0);
+	if (adc->adc_irq < 0) {
+		if (adc->adc_irq == -EPROBE_DEFER || adc->adc_irq == -EINVAL)
+			return adc->adc_irq;
 		adc->poll_eoc = true;
 	} else {
-		ret = devm_request_irq(dev, irq_eoc, adc_isr, 0,
+		ret = devm_request_irq(dev, adc->adc_irq, adc_isr, 0,
 				       "pm-adc5", adc);
 		if (ret)
 			return ret;
@@ -1076,33 +1070,48 @@ static int adc_probe(struct platform_device *pdev)
 	indio_dev->channels = adc->iio_chans;
 	indio_dev->num_channels = adc->nchannels;
 
-	snprintf(adc_name, sizeof(adc_name), "vadc_%s_0",
-					node->parent->full_name);
-
-	adc->ipc_log0 = ipc_log_context_create(IPC_LOGPAGES,
-							adc_name, 0);
-
-	if (!adc->ipc_log0)
-		pr_err("%s : unable to create IPC Logging 0 for %s ADC\n",
-					__func__, node->parent->full_name);
-
-	snprintf(adc_name, sizeof(adc_name), "vadc_%s_1",
-					node->parent->full_name);
-
-	adc->ipc_log1 = ipc_log_context_create(IPC_LOGPAGES,
-							adc_name, 0);
-
-	if (!adc->ipc_log1)
-		pr_err("%s : unable to create IPC Logging 1 for %s ADC\n",
-					__func__, node->parent->full_name);
-
 	return devm_iio_device_register(dev, indio_dev);
 }
+
+static int adc_restore(struct device *dev)
+{
+	int ret = 0;
+	struct adc_chip *adc = dev_get_drvdata(dev);
+
+	dev_dbg(dev, "%s\n", __func__);
+
+	if (adc->adc_irq > 0) {
+		ret = devm_request_irq(dev, adc->adc_irq, adc_isr, 0,
+				       "pm-adc5", adc);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
+}
+
+static int adc_freeze(struct device *dev)
+{
+	struct adc_chip *adc = dev_get_drvdata(dev);
+
+	dev_dbg(dev, "%s\n", __func__);
+
+	if (adc->adc_irq > 0)
+		devm_free_irq(dev, adc->adc_irq, adc);
+
+	return 0;
+}
+
+static const struct dev_pm_ops adc_pm_ops = {
+	.freeze = adc_freeze,
+	.restore = adc_restore,
+};
 
 static struct platform_driver adc_driver = {
 	.driver = {
 		.name = "qcom-spmi-adc5.c",
 		.of_match_table = adc_match_table,
+		.pm = &adc_pm_ops,
 	},
 	.probe = adc_probe,
 };

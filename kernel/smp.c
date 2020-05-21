@@ -217,7 +217,7 @@ static void flush_smp_call_function_queue(bool warn_cpu_offline)
 	call_single_data_t *csd, *csd_next;
 	static bool warned;
 
-	lockdep_assert_irqs_disabled();
+	WARN_ON(!irqs_disabled());
 
 	head = this_cpu_ptr(&call_single_queue);
 	entry = llist_del_all(head);
@@ -770,6 +770,7 @@ void wake_up_all_idle_cpus(void)
 	for_each_online_cpu(cpu) {
 		if (cpu == smp_processor_id())
 			continue;
+
 		if (s2idle_state == S2IDLE_STATE_ENTER ||
 		    !cpu_isolated(cpu))
 			wake_up_if_idle(cpu);

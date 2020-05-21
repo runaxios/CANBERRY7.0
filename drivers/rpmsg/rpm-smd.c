@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -683,11 +691,8 @@ int msm_rpm_smd_buffer_request(struct msm_rpm_request *cdata,
 		}
 		slp->buf = PTR_ALIGN(&slp->ubuf[0], sizeof(u32));
 		memcpy(slp->buf, buf, size);
-		if (tr_insert(&tr_root, slp)) {
+		if (tr_insert(&tr_root, slp))
 			pr_err("Error updating sleep request\n");
-			kfree(slp);
-			return -EINVAL;
-		}
 	} else {
 		/* handle unsent requests */
 		tr_update(slp, buf);
@@ -1182,7 +1187,7 @@ static void msm_rpm_log_request(struct msm_rpm_request *cdata)
 	}
 
 	pos += scnprintf(buf + pos, buflen - pos, "\n");
-	pr_info("request info %s\n", buf);
+	printk(buf);
 }
 
 static int msm_rpm_send_smd_buffer(char *buf, uint32_t size)

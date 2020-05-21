@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -40,7 +47,6 @@ module_param(poll_msec, int, 0444);
 #define L3_BIT 0x2
 
 #define QCOM_CPU_PART_KRYO4XX_GOLD 0x804
-#define QCOM_CPU_PART_KRYO5XX_GOLD 0xD0D
 #define QCOM_CPU_PART_KRYO4XX_SILVER_V1 0x803
 #define QCOM_CPU_PART_KRYO4XX_SILVER_V2 0x805
 
@@ -276,7 +282,6 @@ static void kryo_parse_l1_l2_cache_error(u64 errxstatus, u64 errxmisc,
 		}
 		break;
 	case QCOM_CPU_PART_KRYO4XX_GOLD:
-	case QCOM_CPU_PART_KRYO5XX_GOLD:
 		switch (KRYO_ERRXMISC_LVL_GOLD(errxmisc)) {
 		case L1_GOLD_DC_BIT:
 		case L1_GOLD_IC_BIT:

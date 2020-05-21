@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 /*
@@ -18,6 +26,9 @@
  *
  */
 
+
+/* Uncomment the line below to enable debug messages */
+/* #define DEBUG 1 */
 #define pr_fmt(fmt)	"pfk_ext4 [%s]: " fmt, __func__
 
 #include <linux/module.h>
@@ -61,6 +72,29 @@ static inline bool pfk_ext4_is_ready(void)
 }
 
 /**
+ * pfk_ext4_dump_inode() - dumps all interesting info about inode to the screen
+ *
+ *
+ */
+/*
+ * static void pfk_ext4_dump_inode(const struct inode* inode)
+ * {
+ *	struct ext4_crypt_info *ci = ext4_encryption_info((struct inode*)inode);
+ *
+ *	pr_debug("dumping inode with address 0x%p\n", inode);
+ *	pr_debug("S_ISREG is %d\n", S_ISREG(inode->i_mode));
+ *	pr_debug("EXT4_INODE_ENCRYPT flag is %d\n",
+ *		ext4_test_inode_flag((struct inode*)inode, EXT4_INODE_ENCRYPT));
+ *	if (ci) {
+ *		pr_debug("crypt_info address 0x%p\n", ci);
+ *		pr_debug("ci->ci_data_mode %d\n", ci->ci_data_mode);
+ *	} else {
+ *		pr_debug("crypt_info is NULL\n");
+ *	}
+ * }
+ */
+
+/**
  * pfk_is_ext4_type() - return true if inode belongs to ICE EXT4 PFE
  * @inode: inode pointer
  */
@@ -101,6 +135,7 @@ static int pfk_ext4_parse_cipher(const struct inode *inode,
 
 	return 0;
 }
+
 
 int pfk_ext4_parse_inode(const struct bio *bio,
 	const struct inode *inode,

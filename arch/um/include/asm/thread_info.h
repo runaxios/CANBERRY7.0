@@ -6,9 +6,6 @@
 #ifndef __UM_THREAD_INFO_H
 #define __UM_THREAD_INFO_H
 
-#define THREAD_SIZE_ORDER CONFIG_KERNEL_STACK_ORDER
-#define THREAD_SIZE ((1 << CONFIG_KERNEL_STACK_ORDER) * PAGE_SIZE)
-
 #ifndef __ASSEMBLY__
 
 #include <asm/types.h>
@@ -40,6 +37,10 @@ struct thread_info {
 	.real_thread = NULL,			\
 }
 
+#define init_thread_info	(init_thread_union.thread_info)
+#define init_stack		(init_thread_union.stack)
+
+#define THREAD_SIZE ((1 << CONFIG_KERNEL_STACK_ORDER) * PAGE_SIZE)
 /* how to get the thread information struct from C */
 static inline struct thread_info *current_thread_info(void)
 {
@@ -52,6 +53,8 @@ static inline struct thread_info *current_thread_info(void)
 	return ti;
 }
 
+#define THREAD_SIZE_ORDER CONFIG_KERNEL_STACK_ORDER
+
 #endif
 
 #define TIF_SYSCALL_TRACE	0	/* syscall trace active */
@@ -63,6 +66,7 @@ static inline struct thread_info *current_thread_info(void)
 #define TIF_RESTORE_SIGMASK	7
 #define TIF_NOTIFY_RESUME	8
 #define TIF_SECCOMP		9	/* secure computing */
+#define TIF_MM_RELEASED         10	/* task MM has been released */
 
 #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
 #define _TIF_SIGPENDING		(1 << TIF_SIGPENDING)

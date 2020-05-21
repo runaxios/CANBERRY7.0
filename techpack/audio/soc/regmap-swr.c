@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/device.h>
@@ -46,7 +54,6 @@ static int regmap_swr_gather_write(void *context,
 	for (i = 0; i < (val_len / val_bytes); i++) {
 		value = (u8 *)val + (val_bytes * i);
 		ret = swr_write(swr, swr->dev_num, (reg_addr + i), value);
-		dev_dbg(dev, "%s: swr[%x]=%x", __func__, reg_addr + i, (int) value[0]);
 		if (ret < 0) {
 			dev_err(dev, "%s: write reg 0x%x failed, err %d\n",
 				__func__, (reg_addr + i), ret);
@@ -108,10 +115,8 @@ static int regmap_swr_raw_multi_reg_write(void *context, const void *data,
 		buf += (map->format.reg_bytes + map->format.pad_bytes);
 		val[i] = *buf;
 		buf += map->format.val_bytes;
-		dev_dbg(dev, "%s: swr[%x]=%x", __func__, (int) reg[i], (int) val[i]);
 	}
 	ret = swr_bulk_write(swr, swr->dev_num, reg, val, num_regs);
-
 	if (ret)
 		dev_err(dev, "%s: multi reg write failed\n", __func__);
 
@@ -157,7 +162,6 @@ static int regmap_swr_read(void *context,
 	size_t addr_bytes;
 	int ret = 0;
 	u16 reg_addr = 0;
-	u8 val_u8;
 
 	if (map == NULL) {
 		dev_err(dev, "%s: regmap is NULL\n", __func__);
@@ -175,8 +179,6 @@ static int regmap_swr_read(void *context,
 	}
 	reg_addr = *(u16 *)reg;
 	ret = swr_read(swr, swr->dev_num, reg_addr, val, val_size);
-	val_u8 = *(u8 *)val;
-	dev_dbg(dev, "%s: swr[%x]:%x", __func__, (int) reg_addr, (int) val_u8);
 	if (ret < 0)
 		dev_err(dev, "%s: codec reg 0x%x read failed %d\n",
 			__func__, reg_addr, ret);

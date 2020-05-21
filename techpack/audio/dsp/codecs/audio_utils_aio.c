@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (C) 2008 Google, Inc.
  * Copyright (C) 2008 HTC Corporation
  * Copyright (c) 2009-2019, The Linux Foundation. All rights reserved.

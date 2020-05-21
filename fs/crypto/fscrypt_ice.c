@@ -1,9 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "fscrypt_ice.h"
+
+extern int fscrypt_get_mode_key_size(int mode);
 
 int fscrypt_using_hardware_encryption(const struct inode *inode)
 {
@@ -13,6 +22,30 @@ int fscrypt_using_hardware_encryption(const struct inode *inode)
 		ci->ci_data_mode == FS_ENCRYPTION_MODE_PRIVATE;
 }
 EXPORT_SYMBOL(fscrypt_using_hardware_encryption);
+
+size_t fscrypt_get_ice_encryption_key_size(const struct inode *inode)
+{
+	struct fscrypt_info *ci = NULL;
+
+	if (inode)
+		ci = inode->i_crypt_info;
+	if (!ci)
+		return 0;
+
+	return fscrypt_get_mode_key_size(ci->ci_data_mode) / 2;
+}
+
+size_t fscrypt_get_ice_encryption_salt_size(const struct inode *inode)
+{
+	struct fscrypt_info *ci = NULL;
+
+	if (inode)
+		ci = inode->i_crypt_info;
+	if (!ci)
+		return 0;
+
+        return fscrypt_get_mode_key_size(ci->ci_data_mode) / 2;
+}
 
 /*
  * Retrieves encryption key from the inode
@@ -37,6 +70,7 @@ char *fscrypt_get_ice_encryption_key(const struct inode *inode)
 char *fscrypt_get_ice_encryption_salt(const struct inode *inode)
 {
 	struct fscrypt_info *ci = NULL;
+	int size = 0;
 
 	if (!inode)
 		return NULL;
@@ -45,7 +79,11 @@ char *fscrypt_get_ice_encryption_salt(const struct inode *inode)
 	if (!ci)
 		return NULL;
 
-	return &(ci->ci_raw_key[fscrypt_get_ice_encryption_key_size(inode)]);
+	size = fscrypt_get_ice_encryption_key_size(inode);
+	if (!size)
+		return NULL;
+
+	return &(ci->ci_raw_key[size]);
 }
 
 /*
@@ -78,9 +116,8 @@ bool fscrypt_is_ice_encryption_info_equal(const struct inode *inode1,
 	if (inode1 == inode2)
 		return true;
 
-	/*
-	 * both do not belong to ice, so we don't care, they are equal
-	 * for us
+	/* both do not belong to ice, so we don't care, they are equal
+	 *for us
 	 */
 	if (!fscrypt_should_be_processed_by_ice(inode1) &&
 			!fscrypt_should_be_processed_by_ice(inode2))

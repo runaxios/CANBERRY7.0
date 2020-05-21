@@ -1,15 +1,20 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _ION_KERNEL_H
 #define _ION_KERNEL_H
 
 #include <linux/dma-buf.h>
-#include <linux/bitmap.h>
 #include "../uapi/ion.h"
-#include "../uapi/msm_ion.h"
 
 #ifdef CONFIG_ION
 
@@ -20,33 +25,12 @@
 struct dma_buf *ion_alloc(size_t len, unsigned int heap_id_mask,
 			  unsigned int flags);
 
-static inline unsigned int ion_get_flags_num_vm_elems(unsigned int flags)
-{
-	unsigned long vm_flags = flags & ION_FLAGS_CP_MASK;
-
-	return ((unsigned int)bitmap_weight(&vm_flags, BITS_PER_LONG));
-}
-
-int ion_populate_vm_list(unsigned long flags, unsigned int *vm_list,
-			 int nelems);
-
 #else
 
 static inline struct dma_buf *ion_alloc(size_t len, unsigned int heap_id_mask,
 					unsigned int flags)
 {
-	return -ENOMEM;
-}
-
-static inline unsigned int ion_get_flags_num_vm_elems(unsigned int flags)
-{
-	return 0;
-}
-
-static inline int ion_populate_vm_list(unsigned long flags,
-				       unsigned int *vm_list, int nelems)
-{
-	return -EINVAL;
+	return ERR_PTR(-ENOMEM);
 }
 
 #endif /* CONFIG_ION */

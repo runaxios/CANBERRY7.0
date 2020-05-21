@@ -1,4 +1,12 @@
 # auto-detect subdirs
+ifeq ($(CONFIG_ARCH_SDM845), y)
+include $(srctree)/techpack/audio/config/sdm845auto.conf
+export
+endif
+ifeq ($(CONFIG_ARCH_SDM670), y)
+include $(srctree)/techpack/audio/config/sdm670auto_static.conf
+export
+endif
 ifeq ($(CONFIG_ARCH_SDXPOORWILLS), y)
 include $(srctree)/techpack/audio/config/sdxpoorwillsauto.conf
 export
@@ -11,14 +19,10 @@ ifeq ($(CONFIG_ARCH_SDMSHRIKE), y)
 include $(srctree)/techpack/audio/config/sm8150auto.conf
 export
 endif
-ifeq ($(CONFIG_ARCH_KONA), y)
-include $(srctree)/techpack/audio/config/konaauto.conf
-endif
 
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE     += \
                 -I$(srctree)/techpack/audio/include/uapi \
-                -I$(srctree)/techpack/audio/include
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
 # Needed to be compatible with the O= option
@@ -27,6 +31,21 @@ LINUXINCLUDE    += \
                 -I$(srctree)/techpack/audio/include/elliptic \
                 -I$(srctree)/techpack/audio/include
 
+#for mius start
+ifeq ($(CONFIG_US_PROXIMITY), y)
+LINUXINCLUDE    += \
+                -I$(srctree)/techpack/audio/include/mius
+endif
+#for mius end
+
+ifeq ($(CONFIG_ARCH_SDM845), y)
+LINUXINCLUDE    += \
+                -include $(srctree)/techpack/audio/config/sdm845autoconf.h
+endif
+ifeq ($(CONFIG_ARCH_SDM670), y)
+LINUXINCLUDE    += \
+                -include $(srctree)/techpack/audio/config/sdm670autoconf.h
+endif
 ifeq ($(CONFIG_ARCH_SDXPOORWILLS), y)
 LINUXINCLUDE    += \
                 -include $(srctree)/techpack/audio/config/sdxpoorwillsautoconf.h
@@ -39,14 +58,14 @@ ifeq ($(CONFIG_ARCH_SDMSHRIKE), y)
 LINUXINCLUDE    += \
                 -include $(srctree)/techpack/audio/config/sm8150autoconf.h
 endif
-ifeq ($(CONFIG_ARCH_KONA), y)
-LINUXINCLUDE    += \
-                -include $(srctree)/techpack/audio/config/konaautoconf.h
-endif
 
 obj-y += soc/
 obj-y += dsp/
-# already built-in, comment out
-#obj-y += dsp/elliptic/
+obj-y += dsp/elliptic/
+#for mius start
+ifeq ($(CONFIG_US_PROXIMITY), y)
+obj-y += dsp/mius/
+endif
+#for mius end
 obj-y += ipc/
 obj-y += asoc/

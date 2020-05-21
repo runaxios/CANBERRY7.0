@@ -1,7 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __FG_CORE_H__
@@ -73,8 +80,6 @@
 #define FG_PARALLEL_EN_VOTER	"fg_parallel_en"
 #define MEM_ATTN_IRQ_VOTER	"fg_mem_attn_irq"
 
-#define DEBUG_BOARD_VOTER	"fg_debug_board"
-
 #define BUCKET_COUNT			8
 #define BUCKET_SOC_PCT			(256 / BUCKET_COUNT)
 
@@ -88,16 +93,15 @@
 #define BATT_MISS_SOC			50
 #define ESR_SOH_SOC			50
 #define EMPTY_SOC			0
-#define VBAT_CRITICAL_LOW_THR		2800
-#define EMPTY_DEBOUNCE_TIME_COUNT_MAX		5
 
-#define VBAT_RESTART_FG_EMPTY_UV		3500000
+#define VBAT_RESTART_FG_EMPTY_UV		3700000
 #define TEMP_THR_RESTART_FG		150
 #define RESTART_FG_START_WORK_MS		1000
 #define RESTART_FG_WORK_MS		2000
 #define EMPTY_REPORT_SOC		1
 
-#define CRITICAL_HIGH_TEMP			580
+#define VBAT_CRITICAL_LOW_THR		2800
+#define EMPTY_DEBOUNCE_TIME_COUNT_MAX		5
 
 enum prof_load_status {
 	PROFILE_MISSING,
@@ -117,7 +121,6 @@ enum fg_debug_flag {
 	FG_BUS_READ		= BIT(6), /* Show REGMAP reads */
 	FG_CAP_LEARN		= BIT(7), /* Show capacity learning */
 	FG_TTF			= BIT(8), /* Show time to full */
-	FG_FVSS			= BIT(9), /* Show FVSS */
 };
 
 /* SRAM access */
@@ -186,7 +189,6 @@ enum fg_sram_param_id {
 	FG_SRAM_VBAT_TAU,
 	FG_SRAM_VBAT_FINAL,
 	FG_SRAM_IBAT_FINAL,
-	FG_SRAM_IBAT_FLT,
 	FG_SRAM_ESR,
 	FG_SRAM_ESR_MDL,
 	FG_SRAM_ESR_ACT,
@@ -218,13 +220,9 @@ enum fg_sram_param_id {
 	FG_SRAM_KI_COEFF_LOW_DISCHG,
 	FG_SRAM_KI_COEFF_MED_DISCHG,
 	FG_SRAM_KI_COEFF_HI_DISCHG,
-	FG_SRAM_KI_COEFF_LO_MED_DCHG_THR,
-	FG_SRAM_KI_COEFF_MED_HI_DCHG_THR,
 	FG_SRAM_KI_COEFF_LOW_CHG,
 	FG_SRAM_KI_COEFF_MED_CHG,
 	FG_SRAM_KI_COEFF_HI_CHG,
-	FG_SRAM_KI_COEFF_LO_MED_CHG_THR,
-	FG_SRAM_KI_COEFF_MED_HI_CHG_THR,
 	FG_SRAM_KI_COEFF_FULL_SOC,
 	FG_SRAM_KI_COEFF_CUTOFF,
 	FG_SRAM_ESR_TIGHT_FILTER,
@@ -321,7 +319,6 @@ struct fg_batt_props {
 	char		*batt_profile;
 	int		float_volt_uv;
 	int		vbatt_full_mv;
-	int		ffc_vbatt_full_mv;
 	int		fastchg_curr_ma;
 	int		nom_cap_uah;
 	int		*therm_coeffs;
@@ -329,7 +326,6 @@ struct fg_batt_props {
 	int		therm_pull_up_kohms;
 	int		*rslow_normal_coeffs;
 	int		*rslow_low_coeffs;
-	int		ffc_term_curr_ma;
 };
 
 struct fg_cyc_ctr_data {
@@ -413,22 +409,6 @@ static const struct fg_pt fg_tsmc_osc_table[] = {
 	{  90,		444992 },
 };
 
-#define BATT_MA_AVG_SAMPLES		8
-struct batt_params {
-	bool		update_now;
-	int		batt_raw_soc;
-	int		batt_soc;
-	int		samples_num;
-	int		samples_index;
-	int		batt_ma_avg_samples[BATT_MA_AVG_SAMPLES];
-	int		batt_ma_avg;
-	int		batt_ma_prev;
-	int		batt_ma;
-	int		batt_mv;
-	int		batt_temp;
-	struct timespec	last_soc_change_time;
-};
-
 struct fg_memif {
 	struct fg_dma_address	*addr_map;
 	int			num_partitions;
@@ -448,9 +428,6 @@ struct fg_dev {
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
 	struct power_supply	*pc_port_psy;
-#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
-	struct power_supply *max_verify_psy;
-#endif
 	struct fg_irq_info	*irqs;
 	struct votable		*awake_votable;
 	struct votable		*delta_bsoc_irq_en_votable;
@@ -470,7 +447,6 @@ struct fg_dev {
 	u32			mem_if_base;
 	u32			rradc_base;
 	u32			wa_flags;
-	int			cycle_count;
 	int			batt_id_ohms;
 	int			charge_status;
 	int			prev_charge_status;
@@ -484,6 +460,8 @@ struct fg_dev {
 	int			delta_soc;
 	int			last_msoc;
 	int			last_recharge_volt_mv;
+	int			vbatt_full_volt_uv;
+	int			vbat_critical_low_count;
 	bool			profile_available;
 	enum prof_load_status	profile_load_status;
 	bool			battery_missing;
@@ -492,25 +470,19 @@ struct fg_dev {
 	bool			recharge_soc_adjusted;
 	bool			soc_reporting_ready;
 	bool			use_ima_single_mode;
+	bool			report_full;
 	bool			use_dma;
 	bool			qnovo_enable;
 	bool			empty_restart_fg;
-	bool			report_full;
-	bool			profile_already_find;
 	bool			input_present;
 	enum fg_version		version;
-	struct batt_params	param;
-	struct delayed_work	soc_monitor_work;
 	struct completion	soc_update;
 	struct completion	soc_ready;
 	struct delayed_work	profile_load_work;
 	struct work_struct	status_change_work;
 	struct delayed_work	sram_dump_work;
 	struct delayed_work	empty_restart_fg_work;
-	int			fake_temp;
-	int			fake_authentic;
-	int			fake_chip_ok;
-	int			maxim_cycle_count;
+	struct delayed_work	soc_work;
 };
 
 /* Debugfs data structures are below */
@@ -547,8 +519,6 @@ extern int fg_decode_voltage_24b(struct fg_sram_param *sp,
 extern int fg_decode_voltage_15b(struct fg_sram_param *sp,
 	enum fg_sram_param_id id, int val);
 extern int fg_decode_current_16b(struct fg_sram_param *sp,
-	enum fg_sram_param_id id, int val);
-extern int fg_decode_current_24b(struct fg_sram_param *sp,
 	enum fg_sram_param_id id, int val);
 extern int fg_decode_cc_soc(struct fg_sram_param *sp,
 	enum fg_sram_param_id id, int value);

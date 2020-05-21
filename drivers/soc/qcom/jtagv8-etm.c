@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -1607,7 +1613,7 @@ static int jtag_mm_etm_probe(struct platform_device *pdev, uint32_t cpu)
 					 "qcom,save-restore-disable");
 
 	if (skip_etm_save_restore())
-		etmdata->save_restore_disabled = true;
+		etmdata->save_restore_disabled = 1;
 
 	/* Allocate etm state save space per core */
 	etmdata->state = devm_kzalloc(dev,
@@ -1727,6 +1733,7 @@ static struct platform_driver jtag_mm_driver = {
 	.remove         = jtag_mm_remove,
 	.driver         = {
 		.name   = "msm-jtagv8-mm",
+		.owner	= THIS_MODULE,
 		.of_match_table	= msm_qdss_mm_match,
 		},
 };

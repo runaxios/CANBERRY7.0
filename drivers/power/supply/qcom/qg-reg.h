@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __QG_REG_H__
@@ -121,7 +128,6 @@
 #define QG_SDAM_ESR_DISCHARGE_DELTA_OFFSET	0x6E /* 4-byte 0x6E-0x71 */
 #define QG_SDAM_ESR_CHARGE_SF_OFFSET		0x72 /* 2-byte 0x72-0x73 */
 #define QG_SDAM_ESR_DISCHARGE_SF_OFFSET		0x74 /* 2-byte 0x74-0x75 */
-#define QG_SDAM_BATT_AGE_LEVEL_OFFSET		0x76 /* 1-byte 0x76 */
 #define QG_SDAM_MAGIC_OFFSET			0x80 /* 4-byte 0x80-0x83 */
 #define QG_SDAM_MAX_OFFSET			0xA4
 

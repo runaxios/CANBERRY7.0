@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2013-2015, 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2013-2015, 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -18,7 +24,7 @@
 
 #define ESOC_MAX_PON_TRIES	5
 
-#define BOOT_FAIL_ACTION_DEF BOOT_FAIL_ACTION_NOP
+#define BOOT_FAIL_ACTION_DEF BOOT_FAIL_ACTION_PANIC
 
 enum esoc_pon_state {
 	PON_INIT,
@@ -29,21 +35,20 @@ enum esoc_pon_state {
 
 enum {
 	 PWR_OFF = 0x1,
-	 SHUTDOWN,
-	 RESET,
-	 PEER_CRASH,
-	 IN_DEBUG,
-	 CRASH,
 	 PWR_ON,
 	 BOOT,
 	 RUN,
+	 CRASH,
+	 IN_DEBUG,
+	 SHUTDOWN,
+	 RESET,
+	 PEER_CRASH,
 };
 
 struct mdm_drv {
 	unsigned int mode;
 	struct esoc_eng cmd_eng;
 	struct completion pon_done;
-	struct completion ssr_ready;
 	struct completion req_eng_wait;
 	struct esoc_clink *esoc_clink;
 	enum esoc_pon_state pon_state;
@@ -56,7 +61,7 @@ struct mdm_drv {
 };
 #define to_mdm_drv(d)	container_of(d, struct mdm_drv, cmd_eng)
 
-#define S3_RESET_DELAY_MS	1000
+#define S3_RESET_DELAY_MS	2000
 
 static void esoc_client_link_power_off(struct esoc_clink *esoc_clink,
 							unsigned int flags);
@@ -144,14 +149,6 @@ static void mdm_handle_clink_evt(enum esoc_evt evt,
 		"ESOC_INVALID_STATE: Calling complete with state: PON_FAIL\n");
 		mdm_drv->pon_state = PON_FAIL;
 		complete(&mdm_drv->pon_done);
-		complete(&mdm_drv->ssr_ready);
-		break;
-	case ESOC_BOOT_STATE:
-		if (mdm_drv->mode == PWR_OFF) {
-			esoc_mdm_log(
-			"ESOC_BOOT_STATE: Observed status high from modem.\n");
-			mdm_drv->mode = BOOT;
-		}
 		break;
 	case ESOC_RUN_STATE:
 		esoc_mdm_log(
@@ -159,14 +156,12 @@ static void mdm_handle_clink_evt(enum esoc_evt evt,
 		mdm_drv->pon_state = PON_SUCCESS;
 		mdm_drv->mode = RUN,
 		complete(&mdm_drv->pon_done);
-		complete(&mdm_drv->ssr_ready);
 		break;
 	case ESOC_RETRY_PON_EVT:
 		esoc_mdm_log(
 		"ESOC_RETRY_PON_EVT: Calling complete with state: PON_RETRY\n");
 		mdm_drv->pon_state = PON_RETRY;
 		complete(&mdm_drv->pon_done);
-		complete(&mdm_drv->ssr_ready);
 		break;
 	case ESOC_UNEXPECTED_RESET:
 		esoc_mdm_log("evt_state: ESOC_UNEXPECTED_RESET\n");
@@ -176,16 +171,19 @@ static void mdm_handle_clink_evt(enum esoc_evt evt,
 			esoc_mdm_log("evt_state: ESOC_ERR_FATAL\n");
 
 		/*
-		 * Ignore all modem errfatals if the status is not up
-		 * or modem in run state.
+		 * Modem can crash while we are waiting for pon_done during
+		 * a subsystem_get(). Setting mode to CRASH will prevent a
+		 * subsequent subsystem_get() from entering poweron ops. Avoid
+		 * this by seting mode to CRASH only if device was up and
+		 * running.
 		 */
-		if (mdm_drv->mode <= CRASH) {
+		if (mdm_drv->mode == CRASH)
 			esoc_mdm_log(
-			"Modem in crash state or not booted. Ignoring.\n");
+			"Modem in crash state already. Ignoring.\n");
+		if (mdm_drv->mode != RUN)
+			esoc_mdm_log("Modem not up. Ignoring.\n");
+		if (mdm_drv->mode == CRASH || mdm_drv->mode != RUN)
 			return;
-		}
-		esoc_mdm_log("Setting crash flag\n");
-		mdm_drv->mode = CRASH;
 		queue_work(mdm_drv->mdm_queue, &mdm_drv->ssr_work);
 		break;
 	case ESOC_REQ_ENG_ON:
@@ -203,16 +201,12 @@ static void mdm_ssr_fn(struct work_struct *work)
 	struct mdm_drv *mdm_drv = container_of(work, struct mdm_drv, ssr_work);
 	struct mdm_ctrl *mdm = get_esoc_clink_data(mdm_drv->esoc_clink);
 
-	/* Wait for pon to complete. Start SSR only if pon is success */
-	wait_for_completion(&mdm_drv->ssr_ready);
-	if (mdm_drv->pon_state != PON_SUCCESS) {
-		esoc_mdm_log("Got errfatal but ignoring as boot failed\n");
-		return;
-	}
-
 	esoc_client_link_mdm_crash(mdm_drv->esoc_clink);
+
 	mdm_wait_for_status_low(mdm, false);
-	esoc_mdm_log("Starting SSR work\n");
+
+	esoc_mdm_log("Starting SSR work and setting crash state\n");
+	mdm_drv->mode = CRASH;
 
 	/*
 	 * If restarting esoc fails, the SSR framework triggers a kernel panic
@@ -295,14 +289,12 @@ static int mdm_subsys_shutdown(const struct subsys_desc *crashed_subsys,
 	 container_of(crashed_subsys, struct esoc_clink, subsys);
 	struct mdm_drv *mdm_drv = esoc_get_drv_data(esoc_clink);
 	const struct esoc_clink_ops * const clink_ops = esoc_clink->clink_ops;
-	struct mdm_ctrl *mdm = get_esoc_clink_data(mdm_drv->esoc_clink);
 
 	esoc_mdm_log("Shutdown request from SSR\n");
 
 	mutex_lock(&mdm_drv->poff_lock);
 	if (mdm_drv->mode == CRASH || mdm_drv->mode == PEER_CRASH) {
 		esoc_mdm_log("Shutdown in crash mode\n");
-		mdm_wait_for_status_low(mdm, false);
 		if (mdm_dbg_stall_cmd(ESOC_PREPARE_DEBUG)) {
 			/* We want to mask debug command.
 			 * In this case return success
@@ -375,9 +367,7 @@ static void mdm_subsys_retry_powerup_cleanup(struct esoc_clink *esoc_clink,
 	esoc_client_link_power_off(esoc_clink, poff_flags);
 	mdm_disable_irqs(mdm);
 	mdm_drv->pon_state = PON_INIT;
-	mdm_drv->mode = PWR_OFF;
 	reinit_completion(&mdm_drv->pon_done);
-	reinit_completion(&mdm_drv->ssr_ready);
 	reinit_completion(&mdm_drv->req_eng_wait);
 }
 
@@ -390,7 +380,7 @@ static int mdm_handle_boot_fail(struct esoc_clink *esoc_clink, u8 *pon_trial)
 	if (*pon_trial == atomic_read(&mdm_drv->n_pon_tries)) {
 		esoc_mdm_log("Reached max. number of boot trials\n");
 		atomic_set(&mdm_drv->boot_fail_action,
-					BOOT_FAIL_ACTION_NOP);
+					BOOT_FAIL_ACTION_PANIC);
 	}
 
 	switch (atomic_read(&mdm_drv->boot_fail_action)) {
@@ -425,7 +415,6 @@ static int mdm_handle_boot_fail(struct esoc_clink *esoc_clink, u8 *pon_trial)
 		break;
 	case BOOT_FAIL_ACTION_NOP:
 		esoc_mdm_log("Leaving the modem in its curent state\n");
-		mdm_drv->mode = PWR_OFF;
 		return -EIO;
 	case BOOT_FAIL_ACTION_SHUTDOWN:
 	default:
@@ -589,7 +578,6 @@ int esoc_ssr_probe(struct esoc_clink *esoc_clink, struct esoc_drv *drv)
 	}
 	esoc_set_drv_data(esoc_clink, mdm_drv);
 	init_completion(&mdm_drv->pon_done);
-	init_completion(&mdm_drv->ssr_ready);
 	init_completion(&mdm_drv->req_eng_wait);
 	INIT_WORK(&mdm_drv->ssr_work, mdm_ssr_fn);
 	mdm_drv->esoc_clink = esoc_clink;
@@ -628,7 +616,7 @@ static struct esoc_compat compat_table[] = {
 		.data = NULL,
 	},
 	{
-		.name = "SDX55M",
+		.name = "SDXPRAIRIE",
 		.data = NULL,
 	},
 };

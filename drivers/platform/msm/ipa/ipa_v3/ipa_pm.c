@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/debugfs.h>
@@ -138,7 +145,7 @@ enum ipa_pm_state {
  */
 struct ipa_pm_client {
 	char name[IPA_PM_MAX_EX_CL];
-	void (*callback)(void *user_data, enum ipa_pm_cb_event);
+	void (*callback)(void*, enum ipa_pm_cb_event);
 	void *callback_params;
 	enum ipa_pm_state state;
 	bool skip_clk_vote;
@@ -242,7 +249,7 @@ static int calculate_throughput(void)
 			/* default case */
 			if (client->group == IPA_PM_GROUP_DEFAULT) {
 				client_tput[n++] = client->throughput;
-			} else if (!group_voted[client->group]) {
+			} else if (group_voted[client->group] == false) {
 				client_tput[n++] = ipa_pm_ctx->group_tput
 					[client->group];
 				group_voted[client->group] = true;
@@ -705,7 +712,6 @@ int ipa_pm_register(struct ipa_pm_register_params *params, u32 *hdl)
 {
 	struct ipa_pm_client *client;
 	struct wakeup_source *wlock;
-	int elem;
 
 	if (ipa_pm_ctx == NULL) {
 		IPA_PM_ERR("PM_ctx is null\n");
@@ -721,13 +727,12 @@ int ipa_pm_register(struct ipa_pm_register_params *params, u32 *hdl)
 
 	mutex_lock(&ipa_pm_ctx->client_mutex);
 
-	elem = find_next_open_array_element(params->name);
-	*hdl = elem;
-	if (elem < 0 || elem > IPA_PM_MAX_CLIENTS) {
+	*hdl = find_next_open_array_element(params->name);
+
+	if (*hdl > IPA_CLIENT_MAX) {
 		mutex_unlock(&ipa_pm_ctx->client_mutex);
-		IPA_PM_ERR("client already registered or full array elem=%d\n",
-			elem);
-		return elem;
+		IPA_PM_ERR("client is already registered or array is full\n");
+		return *hdl;
 	}
 
 	ipa_pm_ctx->clients[*hdl] = kzalloc(sizeof
@@ -971,13 +976,12 @@ static int ipa_pm_activate_helper(struct ipa_pm_client *client, bool sync)
  */
 int ipa_pm_activate(u32 hdl)
 {
-	if (unlikely(ipa_pm_ctx == NULL)) {
+	if (ipa_pm_ctx == NULL) {
 		IPA_PM_ERR("PM_ctx is null\n");
 		return -EINVAL;
 	}
 
-	if (unlikely(hdl >= IPA_PM_MAX_CLIENTS ||
-		ipa_pm_ctx->clients[hdl] == NULL)) {
+	if (hdl >= IPA_PM_MAX_CLIENTS || ipa_pm_ctx->clients[hdl] == NULL) {
 		IPA_PM_ERR("Invalid Param\n");
 		return -EINVAL;
 	}
@@ -994,13 +998,12 @@ int ipa_pm_activate(u32 hdl)
  */
 int ipa_pm_activate_sync(u32 hdl)
 {
-	if (unlikely(ipa_pm_ctx == NULL)) {
+	if (ipa_pm_ctx == NULL) {
 		IPA_PM_ERR("PM_ctx is null\n");
 		return -EINVAL;
 	}
 
-	if (unlikely(hdl >= IPA_PM_MAX_CLIENTS ||
-		ipa_pm_ctx->clients[hdl] == NULL)) {
+	if (hdl >= IPA_PM_MAX_CLIENTS || ipa_pm_ctx->clients[hdl] == NULL) {
 		IPA_PM_ERR("Invalid Param\n");
 		return -EINVAL;
 	}
@@ -1215,7 +1218,7 @@ int ipa_pm_handle_suspend(u32 pipe_bitmask)
 	for (i = 0; i < IPA3_MAX_NUM_PIPES; i++) {
 		if (pipe_bitmask & (1 << i)) {
 			client = ipa_pm_ctx->clients_by_pipe[i];
-			if (client && !client_notified[client->hdl]) {
+			if (client && client_notified[client->hdl] == false) {
 				if (client->callback) {
 					client->callback(client->callback_params
 						, IPA_PM_REQUEST_WAKEUP);

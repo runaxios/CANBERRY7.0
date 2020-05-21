@@ -167,7 +167,7 @@ static void default_key_status(struct dm_target *ti, status_type_t type,
 }
 
 static int default_key_prepare_ioctl(struct dm_target *ti,
-				     struct block_device **bdev)
+				     struct block_device **bdev, fmode_t *mode)
 {
 	struct default_key_c *dkc = ti->private;
 	struct dm_dev *dev = dkc->dev;

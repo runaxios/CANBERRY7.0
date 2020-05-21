@@ -1,8 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright(C) 2016 Linaro Limited. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  * Author: Mathieu Poirier <mathieu.poirier@linaro.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/circ_buf.h>
@@ -33,28 +43,39 @@ static void tmc_etb_enable_hw(struct tmc_drvdata *drvdata)
 
 static void tmc_etb_dump_hw(struct tmc_drvdata *drvdata)
 {
+	bool lost = false;
 	char *bufp;
-	u32 read_data, lost;
+	const u32 *barrier;
+	u32 read_data, status;
 	int i;
 
-	/* Check if the buffer wrapped around. */
-	lost = readl_relaxed(drvdata->base + TMC_STS) & TMC_STS_FULL;
+	/*
+	 * Get a hold of the status register and see if a wrap around
+	 * has occurred.
+	 */
+	status = readl_relaxed(drvdata->base + TMC_STS);
+	if (status & TMC_STS_FULL)
+		lost = true;
+
 	bufp = drvdata->buf;
 	drvdata->len = 0;
+	barrier = barrier_pkt;
 	while (1) {
 		for (i = 0; i < drvdata->memwidth; i++) {
 			read_data = readl_relaxed(drvdata->base + TMC_RRD);
 			if (read_data == 0xFFFFFFFF)
-				goto done;
+				return;
+
+			if (lost && *barrier) {
+				read_data = *barrier;
+				barrier++;
+			}
+
 			memcpy(bufp, &read_data, 4);
 			bufp += 4;
 			drvdata->len += 4;
 		}
 	}
-done:
-	if (lost)
-		coresight_insert_barrier_packet(drvdata->buf);
-	return;
 }
 
 static void tmc_etb_disable_hw(struct tmc_drvdata *drvdata)
@@ -97,24 +118,6 @@ static void tmc_etf_disable_hw(struct tmc_drvdata *drvdata)
 	tmc_disable_hw(drvdata);
 
 	CS_LOCK(drvdata->base);
-}
-
-/*
- * Return the available trace data in the buffer from @pos, with
- * a maximum limit of @len, updating the @bufpp on where to
- * find it.
- */
-ssize_t tmc_etb_get_sysfs_trace(struct tmc_drvdata *drvdata,
-				loff_t pos, size_t len, char **bufpp)
-{
-	ssize_t actual = len;
-
-	/* Adjust the len to available size @pos */
-	if (pos + actual > drvdata->len)
-		actual = drvdata->len - pos;
-	if (actual > 0)
-		*bufpp = drvdata->buf + pos;
-	return actual;
 }
 
 static int tmc_enable_etf_sink_sysfs(struct coresight_device *csdev)
@@ -510,6 +513,36 @@ static void tmc_update_etf_buffer(struct coresight_device *csdev,
 	CS_LOCK(drvdata->base);
 }
 
+static void tmc_abort_etf_sink(struct coresight_device *csdev)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+	unsigned long flags;
+	enum tmc_mode mode;
+
+	spin_lock_irqsave(&drvdata->spinlock, flags);
+	if (drvdata->reading)
+		goto out0;
+
+	if (drvdata->config_type == TMC_CONFIG_TYPE_ETB) {
+		tmc_etb_disable_hw(drvdata);
+	} else {
+
+		mode = readl_relaxed(drvdata->base + TMC_MODE);
+		if (mode == TMC_MODE_CIRCULAR_BUFFER)
+			tmc_etb_disable_hw(drvdata);
+		else
+			goto out1;
+	}
+out0:
+	drvdata->enable = false;
+	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+
+	dev_info(drvdata->dev, "TMC aborted\n");
+	return;
+out1:
+	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+}
+
 static const struct coresight_ops_sink tmc_etf_sink_ops = {
 	.enable		= tmc_enable_etf_sink,
 	.disable	= tmc_disable_etf_sink,
@@ -518,6 +551,7 @@ static const struct coresight_ops_sink tmc_etf_sink_ops = {
 	.set_buffer	= tmc_set_etf_buffer,
 	.reset_buffer	= tmc_reset_etf_buffer,
 	.update_buffer	= tmc_update_etf_buffer,
+	.abort		= tmc_abort_etf_sink,
 };
 
 static const struct coresight_ops_link tmc_etf_link_ops = {

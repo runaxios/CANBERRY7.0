@@ -239,9 +239,9 @@ drop_note:
 	return;
 }
 
-static void pcmidi_sustained_note_release(struct timer_list *t)
+static void pcmidi_sustained_note_release(unsigned long data)
 {
-	struct pcmidi_sustain *pms = from_timer(pms, t, timer);
+	struct pcmidi_sustain *pms = (struct pcmidi_sustain *)data;
 
 	pcmidi_send_note(pms->pm, pms->status, pms->note, pms->velocity);
 	pms->in_use = 0;
@@ -256,7 +256,8 @@ static void init_sustain_timers(struct pcmidi_snd *pm)
 		pms = &pm->sustained_notes[i];
 		pms->in_use = 0;
 		pms->pm = pm;
-		timer_setup(&pms->timer, pcmidi_sustained_note_release, 0);
+		setup_timer(&pms->timer, pcmidi_sustained_note_release,
+			(unsigned long)pms);
 	}
 }
 
@@ -555,14 +556,10 @@ static void pcmidi_setup_extra_keys(
 
 static int pcmidi_set_operational(struct pcmidi_snd *pm)
 {
-	int rc;
-
 	if (pm->ifnum != 1)
 		return 0; /* only set up ONCE for interace 1 */
 
-	rc = pcmidi_get_output_report(pm);
-	if (rc < 0)
-		return rc;
+	pcmidi_get_output_report(pm);
 	pcmidi_submit_output_report(pm, 0xc1);
 	return 0;
 }
@@ -691,11 +688,7 @@ static int pcmidi_snd_initialise(struct pcmidi_snd *pm)
 	spin_lock_init(&pm->rawmidi_in_lock);
 
 	init_sustain_timers(pm);
-	err = pcmidi_set_operational(pm);
-	if (err < 0) {
-		pk_error("failed to find output report\n");
-		goto fail_register;
-	}
+	pcmidi_set_operational(pm);
 
 	/* register it */
 	err = snd_card_register(card);

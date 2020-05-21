@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/dma-mapping.h>
@@ -71,7 +77,7 @@
 #define IPA_POLL_FOR_EMPTINESS_SLEEP_USEC 20
 #define IPA_CHANNEL_STOP_IN_PROC_TO_MSEC 5
 #define IPA_CHANNEL_STOP_IN_PROC_SLEEP_USEC 200
-#define IPA_MHIP_HOLB_TMO 31 /* value to match granularity on ipa HW 4.5 */
+#define IPA_MHIP_HOLB_TMO 500 /* 500ms this should be less than tag timeout */
 
 enum mhip_re_type {
 	MHIP_RE_XFER = 0x2,
@@ -319,12 +325,6 @@ enum ipa_mpm_gsi_state {
 	GSI_STOPPED,
 };
 
-enum ipa_mpm_remote_state {
-	MPM_MHIP_REMOTE_STOP,
-	MPM_MHIP_REMOTE_START,
-	MPM_MHIP_REMOTE_ERR,
-};
-
 struct ipa_mpm_channel {
 	struct ipa_mpm_channel_props chan_props;
 	struct ipa_mpm_event_props evt_props;
@@ -384,7 +384,6 @@ struct ipa_mpm_mhi_driver {
 	struct mutex mhi_mutex;
 	bool in_lpm;
 	struct ipa_mpm_clk_cnt_type clk_cnt;
-	enum ipa_mpm_remote_state remote_state;
 };
 
 struct ipa_mpm_context {
@@ -422,7 +421,7 @@ static void ipa_mpm_change_gsi_state(int probe_id,
 	enum ipa_mpm_gsi_state next_state);
 static int ipa_mpm_probe(struct platform_device *pdev);
 static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
-	int probe_id, bool is_force, bool *is_acted);
+	int probe_id);
 static void ipa_mpm_vote_unvote_ipa_clk(enum ipa_mpm_clk_vote_type vote,
 	int probe_id);
 static enum mhip_status_type ipa_mpm_start_stop_mhip_chan(
@@ -501,7 +500,7 @@ static int ipa_mpm_start_mhip_holb_tmo(u32 clnt_hdl)
 
 	memset(&holb_cfg, 0, sizeof(holb_cfg));
 	holb_cfg.en = IPA_HOLB_TMR_EN;
-	/* 31 ms timer, which is less than tag timeout */
+	/* 500 ms timer, which is less than tag timeout */
 	holb_cfg.tmr_val = IPA_MHIP_HOLB_TMO;
 	return ipa3_cfg_ep_holb(clnt_hdl, &holb_cfg);
 }
@@ -543,7 +542,7 @@ static dma_addr_t ipa_mpm_smmu_map(void *va_addr,
 	}
 
 	if (carved_iova >= cb->va_end) {
-		IPA_MPM_ERR("running out of carved_iova %lx\n", carved_iova);
+		IPA_MPM_ERR("running out of carved_iova %x\n", carved_iova);
 		ipa_assert();
 	}
 	/*
@@ -1366,20 +1365,12 @@ static void ipa_mpm_mhip_shutdown(int mhip_idx)
 	IPA_MPM_FUNC_EXIT();
 }
 
-/**
- * @ipa_mpm_vote_unvote_pcie_clk - Vote/Unvote PCIe Clock per probe_id
- *                                 Returns if success or failure.
- * @ipa_mpm_clk_vote_type - Vote or Unvote for PCIe Clock
- * @probe_id - MHI probe_id per client.
- * @is_force - Forcebly casts vote - should be true only in probe.
- * @is_acted - Output param - This indicates the clk is actually voted or not
- *             The flag output is checked only when we vote for clocks.
- * Return value: PCIe clock voting is success or failure.
+/*
+ * Turning on/OFF PCIE Clock is done once for all clients.
+ * Always vote for Probe_ID 0 as a standard.
  */
 static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
-	int probe_id,
-	bool is_force,
-	bool *is_acted)
+	int probe_id)
 {
 	int result = 0;
 
@@ -1393,34 +1384,26 @@ static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
 		return -EINVAL;
 	}
 
-	if (!is_acted) {
-		IPA_MPM_ERR("Invalid clk_vote ptr\n");
-		return -EFAULT;
-	}
-
 	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
 	if (ipa_mpm_ctx->md[probe_id].mhi_dev == NULL) {
 		IPA_MPM_ERR("MHI not initialized yet\n");
-		*is_acted = false;
 		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
 		return 0;
 	}
 
-	if (!ipa_mpm_ctx->md[probe_id].init_complete &&
-		!is_force) {
+	if (!ipa_mpm_ctx->md[probe_id].init_complete) {
 		/*
 		 * SSR might be in progress, dont have to vote/unvote for
 		 * IPA clocks as it will be taken care in remove_cb/subsequent
 		 * probe.
 		 */
 		IPA_MPM_DBG("SSR in progress, return\n");
-		*is_acted = false;
 		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
 		return 0;
 	}
 	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
 
-	IPA_MPM_DBG("PCIe clock vote/unvote = %d probe_id = %d clk_cnt = %d\n",
+	IPA_MPM_ERR("PCIe clock vote/unvote = %d probe_id = %d clk_cnt = %d\n",
 		vote, probe_id,
 		atomic_read(&ipa_mpm_ctx->md[probe_id].clk_cnt.pcie_clk_cnt));
 
@@ -1430,7 +1413,6 @@ static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
 		if (result) {
 			IPA_MPM_ERR("mhi_sync_get failed for probe_id %d\n",
 				result, probe_id);
-			*is_acted = false;
 			return result;
 		}
 
@@ -1444,7 +1426,6 @@ static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
 			IPA_MPM_DBG("probe_id %d PCIE clock already devoted\n",
 				probe_id);
 			WARN_ON(1);
-			*is_acted = true;
 			return 0;
 		}
 		mhi_device_put(ipa_mpm_ctx->md[probe_id].mhi_dev, MHI_VOTE_BUS);
@@ -1452,7 +1433,6 @@ static int ipa_mpm_vote_unvote_pcie_clk(enum ipa_mpm_clk_vote_type vote,
 		atomic_dec(&ipa_mpm_ctx->md[probe_id].clk_cnt.pcie_clk_cnt);
 		atomic_dec(&ipa_mpm_ctx->pcie_clk_total_cnt);
 	}
-	*is_acted = true;
 	return result;
 }
 
@@ -1465,7 +1445,7 @@ static void ipa_mpm_vote_unvote_ipa_clk(enum ipa_mpm_clk_vote_type vote,
 	if (vote > CLK_OFF)
 		return;
 
-	IPA_MPM_DBG("IPA clock vote/unvote = %d probe_id = %d clk_cnt = %d\n",
+	IPA_MPM_ERR("IPA clock vote/unvote = %d probe_id = %d clk_cnt = %d\n",
 		vote, probe_id,
 		atomic_read(&ipa_mpm_ctx->md[probe_id].clk_cnt.ipa_clk_cnt));
 
@@ -1488,79 +1468,6 @@ static void ipa_mpm_vote_unvote_ipa_clk(enum ipa_mpm_clk_vote_type vote,
 		atomic_dec(&ipa_mpm_ctx->md[probe_id].clk_cnt.ipa_clk_cnt);
 		atomic_dec(&ipa_mpm_ctx->ipa_clk_total_cnt);
 	}
-}
-
-/**
- * @ipa_mpm_start_stop_remote_mhip_chan - Start/Stop Remote device side MHIP
- *                                        channels.
- * @ipa_mpm_clk_vote_type - Vote or Unvote for PCIe Clock
- * @probe_id - MHI probe_id per client.
- * @ipa_mpm_start_stop_type - Start/Stop remote channels.
- * @is_force - Forcebly casts remote channels to be started/stopped.
- *             should be true only in probe.
- * Return value: 0 if success or error value.
- */
-static int ipa_mpm_start_stop_remote_mhip_chan(
-	int probe_id,
-	enum ipa_mpm_start_stop_type start_stop,
-	bool is_force)
-{
-	int ret = 0;
-	struct mhi_device *mhi_dev = ipa_mpm_ctx->md[probe_id].mhi_dev;
-
-	/* Sanity check to make sure Remote channels can be started.
-	 * If probe in progress, mhi_prepare_for_transfer will start
-	 * the remote channels so no need to start it from here.
-	 */
-	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-	if (!ipa_mpm_ctx->md[probe_id].init_complete && !is_force) {
-		IPA_MPM_ERR("MHI not initialized yet, probe in progress\n");
-		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-		return ret;
-	}
-
-	/* For error state, expect modem SSR to recover from error */
-	if (ipa_mpm_ctx->md[probe_id].remote_state == MPM_MHIP_REMOTE_ERR) {
-		IPA_MPM_ERR("Remote channels in err state for %d\n", probe_id);
-		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-		return -EFAULT;
-	}
-	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-
-	if (start_stop == MPM_MHIP_START) {
-		if (ipa_mpm_ctx->md[probe_id].remote_state ==
-				MPM_MHIP_REMOTE_START) {
-			IPA_MPM_DBG("Remote channel already started for %d\n",
-				probe_id);
-		} else {
-			ret = mhi_resume_transfer(mhi_dev);
-			mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-			if (ret)
-				ipa_mpm_ctx->md[probe_id].remote_state =
-							MPM_MHIP_REMOTE_ERR;
-			else
-				ipa_mpm_ctx->md[probe_id].remote_state =
-							MPM_MHIP_REMOTE_START;
-			mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-		}
-	} else {
-		if (ipa_mpm_ctx->md[probe_id].remote_state ==
-				MPM_MHIP_REMOTE_STOP) {
-			IPA_MPM_DBG("Remote channel already stopped for %d\n",
-					probe_id);
-		} else {
-			ret = mhi_pause_transfer(mhi_dev);
-			mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-			if (ret)
-				ipa_mpm_ctx->md[probe_id].remote_state =
-							MPM_MHIP_REMOTE_ERR;
-			else
-				ipa_mpm_ctx->md[probe_id].remote_state =
-							MPM_MHIP_REMOTE_STOP;
-			mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-		}
-	}
-	return ret;
 }
 
 static enum mhip_status_type ipa_mpm_start_stop_mhip_chan(
@@ -1604,13 +1511,13 @@ static enum mhip_status_type ipa_mpm_start_stop_mhip_chan(
 		return MHIP_STATUS_EP_NOT_FOUND;
 	}
 
-	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+	mutex_lock(&ipa_mpm_ctx->md[probe_id].mutex);
 	if (!ipa_mpm_ctx->md[probe_id].init_complete) {
 		IPA_MPM_ERR("MHIP probe %d not initialized\n", probe_id);
-		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mutex);
 		return MHIP_STATUS_EP_NOT_READY;
 	}
-	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mutex);
 
 	ep = &ipa3_ctx->ep[ipa_ep_idx];
 
@@ -1730,7 +1637,6 @@ int ipa_mpm_notify_wan_state(struct wan_ioctl_notify_wan_state *state)
 	static enum mhip_status_type status;
 	int ret = 0;
 	enum ipa_mpm_mhip_client_type mhip_client = IPA_MPM_MHIP_TETH;
-	bool is_acted = true;
 
 	if (!state)
 		return -EPERM;
@@ -1754,40 +1660,12 @@ int ipa_mpm_notify_wan_state(struct wan_ioctl_notify_wan_state *state)
 
 	if (state->up) {
 		/* Start UL MHIP channel for offloading tethering connection */
-		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id,
-			false, &is_acted);
+		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id);
 		if (ret) {
-			IPA_MPM_ERR("Err %d cloking on PCIe clk %d\n", ret);
+			IPA_MPM_ERR("Error cloking on PCIe clk, err = %d\n",
+				ret);
 			return ret;
 		}
-
-		/*
-		 * Make sure to start Device side channels before
-		 * starting Host side UL channels. This is to make
-		 * sure device side access host side only after
-		 * Host IPA gets voted.
-		 */
-		ret = ipa_mpm_start_stop_remote_mhip_chan(probe_id,
-							MPM_MHIP_START,
-							false);
-		if (ret) {
-			/*
-			 * This can fail only when modem is in SSR state.
-			 * Eventually there would be a remove callback,
-			 * so return a failure.
-			 */
-			IPA_MPM_ERR("MHIP remote chan start fail = %d\n", ret);
-
-			if (is_acted)
-				ipa_mpm_vote_unvote_pcie_clk(CLK_OFF,
-					probe_id,
-					false,
-					&is_acted);
-
-			return ret;
-		}
-		IPA_MPM_DBG("MHIP remote channels are started\n");
-
 		status = ipa_mpm_start_stop_mhip_chan(
 				IPA_MPM_MHIP_CHAN_UL, probe_id, MPM_MHIP_START);
 		switch (status) {
@@ -1799,52 +1677,23 @@ int ipa_mpm_notify_wan_state(struct wan_ioctl_notify_wan_state *state)
 		case MHIP_STATUS_NO_OP:
 			IPA_MPM_DBG("UL chan already start, status = %d\n",
 					status);
-			if (is_acted) {
-				return ipa_mpm_vote_unvote_pcie_clk(CLK_OFF,
-						probe_id,
-						false,
-						&is_acted);
-			}
-			break;
+			ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
+			return ret;
 		case MHIP_STATUS_FAIL:
 		case MHIP_STATUS_BAD_STATE:
 		case MHIP_STATUS_EP_NOT_FOUND:
 			IPA_MPM_ERR("UL chan start err =%d\n", status);
-			if (is_acted)
-				ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-					false, &is_acted);
+			ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 			ipa_assert();
 			return -EFAULT;
 		default:
 			IPA_MPM_ERR("Err not found\n");
-			if (is_acted)
-				ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-					false, &is_acted);
+			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 			ret = -EFAULT;
 			break;
 		}
 		ipa_mpm_ctx->md[probe_id].mhip_client = mhip_client;
 	} else {
-		/*
-		 * Make sure to stop Device side channels before
-		 * stopping Host side UL channels. This is to make
-		 * sure device side doesn't access host IPA after
-		 * Host IPA gets devoted.
-		 */
-		ret = ipa_mpm_start_stop_remote_mhip_chan(probe_id,
-						MPM_MHIP_STOP,
-						false);
-		if (ret) {
-			/*
-			 * This can fail only when modem is in SSR state.
-			 * Eventually there would be a remove callback,
-			 * so return a failure.
-			 */
-			IPA_MPM_ERR("MHIP remote chan stop fail = %d\n", ret);
-			return ret;
-		}
-		IPA_MPM_DBG("MHIP remote channels are stopped\n");
-
 		status = ipa_mpm_start_stop_mhip_chan(
 					IPA_MPM_MHIP_CHAN_UL, probe_id,
 					MPM_MHIP_STOP);
@@ -1869,11 +1718,10 @@ int ipa_mpm_notify_wan_state(struct wan_ioctl_notify_wan_state *state)
 			return -EFAULT;
 		}
 		/* Stop UL MHIP channel for offloading tethering connection */
-		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-					false, &is_acted);
+		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 
 		if (ret) {
-			IPA_MPM_ERR("Error cloking off PCIe clk, err = %d\n",
+			IPA_MPM_ERR("Error cloking on PCIe clk, err = %d\n",
 				ret);
 			return ret;
 		}
@@ -1956,7 +1804,7 @@ static void ipa_mpm_read_channel(enum ipa_client_type chan)
 
 	ep = &ipa3_ctx->ep[ipa_ep_idx];
 
-	IPA_MPM_DBG("Reading channel for chan %d, ep = %d, gsi_chan_hdl = %d\n",
+	IPA_MPM_ERR("Reading channel for chan %d, ep = %d, gsi_chan_hdl = %d\n",
 		chan, ep, ep->gsi_chan_hdl);
 
 	res = ipa3_get_gsi_chan_info(&chan_info, ep->gsi_chan_hdl);
@@ -1981,7 +1829,6 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 	u32 evt_ring_db_addr_low, evt_ring_db_addr_high;
 	u32 wp_addr;
 	int pipe_idx;
-	bool is_acted = true;
 
 	IPA_MPM_FUNC_ENTRY();
 
@@ -1993,7 +1840,7 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 	probe_id = get_idx_from_id(mhi_id);
 
 	if (probe_id >= IPA_MPM_MHIP_CH_ID_MAX) {
-		IPA_MPM_ERR("chan=%pK is not supported for now\n", mhi_id);
+		IPA_MPM_ERR("chan=%s is not supported for now\n", mhi_id);
 		return -EPERM;
 	}
 
@@ -2017,15 +1864,7 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 	ipa_mpm_ctx->mhi_parent_dev =
 		ipa_mpm_ctx->md[probe_id].mhi_dev->dev.parent;
 
-	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-	ipa_mpm_ctx->md[probe_id].remote_state = MPM_MHIP_REMOTE_STOP;
-	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-	ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id, true, &is_acted);
-	if (ret) {
-		IPA_MPM_ERR("Err %d voitng PCIe clocks\n", ret);
-		return -EPERM;
-	}
-
+	ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id);
 	ipa_mpm_vote_unvote_ipa_clk(CLK_ON, probe_id);
 	ipa_mpm_ctx->md[probe_id].in_lpm = false;
 	IPA_MPM_DBG("ul chan = %d, dl_chan = %d\n", ul_prod, dl_cons);
@@ -2069,33 +1908,6 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		ch->evt_props.device_db =
 			ipa_mpm_ctx->dev_info.erdb_base +
 			ch->chan_props.ch_ctx.erindex * 8;
-
-		/* connect Host GSI pipes with MHI' protocol */
-		ret = ipa_mpm_connect_mhip_gsi_pipe(ul_prod,
-			probe_id, &ul_out_params);
-		if (ret) {
-			IPA_MPM_ERR("failed connecting MPM client %d\n",
-					ul_prod);
-			goto fail_gsi_setup;
-		}
-
-		ch->evt_props.ev_ctx.update_rp_addr =
-			ipa_mpm_smmu_map_doorbell(
-				MHIP_SMMU_DOMAIN_PCIE,
-				ul_out_params.db_reg_phs_addr_lsb);
-		if (ch->evt_props.ev_ctx.update_rp_addr == 0)
-			ipa_assert();
-
-		ipa_mpm_ctx->md[probe_id].ul_prod.db_device_iova =
-			ch->evt_props.ev_ctx.update_rp_addr;
-
-		ret = __ipa_mpm_configure_mhi_device(
-				ch, probe_id, DMA_TO_HIPA);
-		if (ret) {
-			IPA_MPM_ERR("configure_mhi_dev fail %d\n",
-					ret);
-			goto fail_smmu;
-		}
 	}
 
 	if (dl_cons != IPA_CLIENT_MAX) {
@@ -2123,8 +1935,19 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		ch->evt_props.device_db =
 			ipa_mpm_ctx->dev_info.erdb_base +
 			ch->chan_props.ch_ctx.erindex * 8;
+	}
+	/* connect Host GSI pipes with MHI' protocol */
+	if (ul_prod != IPA_CLIENT_MAX)  {
+		ret = ipa_mpm_connect_mhip_gsi_pipe(ul_prod,
+			probe_id, &ul_out_params);
+		if (ret) {
+			IPA_MPM_ERR("failed connecting MPM client %d\n",
+					ul_prod);
+			goto fail_gsi_setup;
+		}
+	}
 
-		/* connect Host GSI pipes with MHI' protocol */
+	if (dl_cons != IPA_CLIENT_MAX) {
 		ret = ipa_mpm_connect_mhip_gsi_pipe(dl_cons,
 			probe_id, &dl_out_params);
 		if (ret) {
@@ -2132,7 +1955,30 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 				dl_cons);
 			goto fail_gsi_setup;
 		}
+	}
 
+	if (ul_prod != IPA_CLIENT_MAX) {
+		ch = &ipa_mpm_ctx->md[probe_id].ul_prod;
+		ch->evt_props.ev_ctx.update_rp_addr =
+			ipa_mpm_smmu_map_doorbell(
+				MHIP_SMMU_DOMAIN_PCIE,
+				ul_out_params.db_reg_phs_addr_lsb);
+		if (ch->evt_props.ev_ctx.update_rp_addr == 0)
+			ipa_assert();
+		ipa_mpm_ctx->md[probe_id].ul_prod.db_device_iova =
+			ch->evt_props.ev_ctx.update_rp_addr;
+
+		ret = __ipa_mpm_configure_mhi_device(
+				ch, probe_id, DMA_TO_HIPA);
+		if (ret) {
+			IPA_MPM_ERR("configure_mhi_dev fail %d\n",
+					ret);
+			goto fail_smmu;
+		}
+	}
+
+	if (dl_cons != IPA_CLIENT_MAX) {
+		ch = &ipa_mpm_ctx->md[probe_id].dl_cons;
 		ch->evt_props.ev_ctx.update_rp_addr =
 			ipa_mpm_smmu_map_doorbell(
 					MHIP_SMMU_DOMAIN_PCIE,
@@ -2162,18 +2008,14 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		 * to MHI driver. remove_cb will be called eventually when
 		 * Device side comes from where pending cleanup happens.
 		 */
-		mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+		mutex_lock(&ipa_mpm_ctx->md[probe_id].mutex);
 		atomic_inc(&ipa_mpm_ctx->probe_cnt);
 		ipa_mpm_ctx->md[probe_id].init_complete = false;
-		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+		mutex_unlock(&ipa_mpm_ctx->md[probe_id].mutex);
 		IPA_MPM_FUNC_EXIT();
 		return 0;
 	}
 
-	/* mhi_prepare_for_transfer translates to starting remote channels */
-	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
-	ipa_mpm_ctx->md[probe_id].remote_state = MPM_MHIP_REMOTE_START;
-	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
 	/*
 	 * Ring initial channel db - Host Side UL and Device side DL channel.
 	 * To ring doorbell, write "WP" into doorbell register.
@@ -2193,16 +2035,18 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 
 		iowrite32(wp_addr, db_addr);
 
-		IPA_MPM_DBG("Host UL TR  DB = 0X%pK, wp_addr = 0X%0x",
+		IPA_MPM_DBG("Host UL TR  DB = 0X%0x, wp_addr = 0X%0x",
 			db_addr, wp_addr);
 
 		iounmap(db_addr);
 		ipa_mpm_read_channel(ul_prod);
+	}
 
-		/* Ring UL PRODUCER EVENT RING (HOST IPA -> DEVICE IPA) Doorbell
-		 * Ring the event DB to a value outside the
-		 * ring range such that rp and wp never meet.
-		 */
+	/* Ring UL PRODUCER EVENT RING (HOST IPA -> DEVICE IPA) Doorbell
+	 * Ring the event DB to a value outside the
+	 * ring range such that rp and wp never meet.
+	 */
+	if (ul_prod != IPA_CLIENT_MAX) {
 		ipa_ep_idx = ipa3_get_ep_mapping(ul_prod);
 
 		if (ipa_ep_idx == IPA_EP_NOT_ALLOCATED) {
@@ -2211,7 +2055,7 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		}
 		ep = &ipa3_ctx->ep[ipa_ep_idx];
 
-		IPA_MPM_DBG("for ep_idx %d , gsi_evt_ring_hdl = %ld\n",
+		IPA_MPM_DBG("for ep_idx %d , gsi_evt_ring_hdl = %d\n",
 			ipa_ep_idx, ep->gsi_evt_ring_hdl);
 		gsi_query_evt_ring_db_addr(ep->gsi_evt_ring_hdl,
 			&evt_ring_db_addr_low, &evt_ring_db_addr_high);
@@ -2223,13 +2067,15 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 
 		wp_addr = ipa_mpm_ctx->md[probe_id].ul_prod_ring.er_pa +
 			((IPA_MPM_RING_LEN + 1) * GSI_EVT_RING_RE_SIZE_16B);
-		IPA_MPM_DBG("Host UL ER  DB = 0X%pK, wp_addr = 0X%0x",
+		IPA_MPM_DBG("Host UL ER  DB = 0X%0x, wp_addr = 0X%0x",
 			db_addr, wp_addr);
 
 		iowrite32(wp_addr, db_addr);
 		iounmap(db_addr);
+	}
 
-		/* Ring DEVICE IPA DL CONSUMER Event Doorbell */
+	/* Ring DEVICE IPA DL CONSUMER Event Doorbell */
+	if (ul_prod != IPA_CLIENT_MAX) {
 		db_addr = ioremap((phys_addr_t)
 			(ipa_mpm_ctx->md[probe_id].ul_prod.evt_props.device_db),
 			4);
@@ -2250,18 +2096,20 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		wp_addr = ipa_mpm_ctx->md[probe_id].dl_prod_ring.tr_pa +
 			((IPA_MPM_RING_LEN - 1) * GSI_CHAN_RE_SIZE_16B);
 
-		IPA_MPM_DBG("Device DL TR  DB = 0X%pK, wp_addr = 0X%0x",
+		IPA_MPM_DBG("Device DL TR  DB = 0X%0X, wp_addr = 0X%0x",
 			db_addr, wp_addr);
 
 		iowrite32(wp_addr, db_addr);
 
 		iounmap(db_addr);
+	}
 
-		/*
-		 * Ring event ring DB on Device side.
-		 * ipa_mpm should ring the event DB to a value outside the
-		 * ring range such that rp and wp never meet.
-		 */
+	/*
+	 * Ring event ring DB on Device side.
+	 * ipa_mpm should ring the event DB to a value outside the
+	 * ring range such that rp and wp never meet.
+	 */
+	if (dl_cons != IPA_CLIENT_MAX) {
 		db_addr =
 		ioremap(
 		(phys_addr_t)
@@ -2272,11 +2120,13 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 			((IPA_MPM_RING_LEN + 1) * GSI_EVT_RING_RE_SIZE_16B);
 
 		iowrite32(wp_addr, db_addr);
-		IPA_MPM_DBG("Device  UL ER  DB = 0X%pK,wp_addr = 0X%0x",
+		IPA_MPM_DBG("Device  UL ER  DB = 0X%0X,wp_addr = 0X%0x",
 			db_addr, wp_addr);
 		iounmap(db_addr);
+	}
 
-		/* Ring DL EVENT RING CONSUMER (DEVICE IPA CONSUMER) Doorbell */
+	/* Ring DL EVENT RING CONSUMER (DEVICE IPA CONSUMER) Doorbell */
+	if (dl_cons != IPA_CLIENT_MAX) {
 		ipa_ep_idx = ipa3_get_ep_mapping(dl_cons);
 
 		if (ipa_ep_idx == IPA_EP_NOT_ALLOCATED) {
@@ -2294,7 +2144,7 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 		wp_addr = ipa_mpm_ctx->md[probe_id].dl_prod_ring.tr_pa +
 			((IPA_MPM_RING_LEN + 1) * GSI_EVT_RING_RE_SIZE_16B);
 		iowrite32(wp_addr, db_addr);
-		IPA_MPM_DBG("Host  DL ER  DB = 0X%pK, wp_addr = 0X%0x",
+		IPA_MPM_DBG("Host  DL ER  DB = 0X%0X, wp_addr = 0X%0x",
 			db_addr, wp_addr);
 		iounmap(db_addr);
 	}
@@ -2304,51 +2154,21 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 	 */
 	switch (ipa_mpm_ctx->md[probe_id].teth_state) {
 	case IPA_MPM_TETH_INIT:
-		/*
-		 * Make sure to stop Device side channels before
-		 * stopping Host side UL channels. This is to make
-		 * sure Device side doesn't access host side IPA if
-		 * Host IPA gets unvoted.
-		 */
-		ret = ipa_mpm_start_stop_remote_mhip_chan(probe_id,
-						MPM_MHIP_STOP, true);
-		if (ret) {
-			/*
-			 * This can fail only when modem is in SSR.
-			 * Eventually there would be a remove callback,
-			 * so return a failure.
-			 */
-			IPA_MPM_ERR("MHIP remote chan stop fail = %d\n", ret);
-			return ret;
-		}
 		if (ul_prod != IPA_CLIENT_MAX) {
 			/* No teth started yet, disable UL channel */
-			ipa_ep_idx = ipa3_get_ep_mapping(ul_prod);
-			if (ipa_ep_idx == IPA_EP_NOT_ALLOCATED) {
-				IPA_MPM_ERR("fail to alloc EP.\n");
-				goto fail_stop_channel;
-			}
-			ret = ipa3_stop_gsi_channel(ipa_ep_idx);
-			if (ret) {
-				IPA_MPM_ERR("MHIP Stop channel err = %d\n",
-					ret);
-				goto fail_stop_channel;
-			}
-			ipa_mpm_change_gsi_state(probe_id,
-				IPA_MPM_MHIP_CHAN_UL,
-				GSI_STOPPED);
+			ipa_mpm_start_stop_mhip_chan(IPA_MPM_MHIP_CHAN_UL,
+						probe_id, MPM_MHIP_STOP);
 		}
-		if (is_acted)
-			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-							true, &is_acted);
+		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		break;
 	case IPA_MPM_TETH_INPROGRESS:
 	case IPA_MPM_TETH_CONNECTED:
 		IPA_MPM_DBG("UL channel is already started, continue\n");
 		ipa_mpm_change_teth_state(probe_id, IPA_MPM_TETH_CONNECTED);
 
-		/* Lift the delay for rmnet USB prod pipe */
+
 		if (probe_id == IPA_MPM_MHIP_CH_ID_1) {
+			/* Lift the delay for rmnet USB prod pipe */
 			pipe_idx = ipa3_get_ep_mapping(IPA_CLIENT_USB_PROD);
 			ipa3_xdci_ep_delay_rm(pipe_idx);
 		}
@@ -2363,25 +2183,22 @@ static int ipa_mpm_mhi_probe_cb(struct mhi_device *mhi_dev,
 	/* Check if ODL pipe is connected to MHIP DPL pipe before probe */
 	if (probe_id == IPA_MPM_MHIP_CH_ID_2 &&
 		ipa3_is_odl_connected()) {
-		IPA_MPM_DBG("setting DPL DMA to ODL\n");
+		IPA_MPM_ERR("setting DPL DMA to ODL\n");
 		ret = ipa_mpm_set_dma_mode(IPA_CLIENT_MHI_PRIME_DPL_PROD,
 			IPA_CLIENT_USB_DPL_CONS, false);
 	}
-	mutex_lock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+	mutex_lock(&ipa_mpm_ctx->md[probe_id].mutex);
 	ipa_mpm_ctx->md[probe_id].init_complete = true;
-	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mhi_mutex);
+	mutex_unlock(&ipa_mpm_ctx->md[probe_id].mutex);
 	IPA_MPM_FUNC_EXIT();
 	return 0;
 
 fail_gsi_setup:
 fail_start_channel:
-fail_stop_channel:
 fail_smmu:
 	if (ipa_mpm_ctx->dev_info.ipa_smmu_enabled)
 		IPA_MPM_DBG("SMMU failed\n");
-	if (is_acted)
-		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id, true,
-					&is_acted);
+	ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 	ipa_mpm_vote_unvote_ipa_clk(CLK_OFF, probe_id);
 	ipa_assert();
 	return ret;
@@ -2524,12 +2341,7 @@ static void ipa_mpm_mhi_status_cb(struct mhi_device *mhi_dev,
 			IPA_MPM_DBG("Already out of lpm\n");
 		}
 		break;
-	case MHI_CB_EE_RDDM:
-	case MHI_CB_PENDING_DATA:
-	case MHI_CB_SYS_ERROR:
-	case MHI_CB_FATAL_ERROR:
-	case MHI_CB_EE_MISSION_MODE:
-	case MHI_CB_DTR_SIGNAL:
+	default:
 		IPA_MPM_ERR("unexpected event %d\n", mhi_cb);
 		break;
 	}
@@ -2562,9 +2374,8 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 	int i;
 	enum ipa_mpm_mhip_client_type mhip_client;
 	enum mhip_status_type status;
-	int pipe_idx;
-	bool is_acted = true;
 	int ret = 0;
+	int pipe_idx;
 
 	if (ipa_mpm_ctx == NULL) {
 		IPA_MPM_ERR("MPM not platform probed yet, returning ..\n");
@@ -2580,15 +2391,8 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 		}
 	}
 
-	if ((probe_id < IPA_MPM_MHIP_CH_ID_0) ||
-		(probe_id >= IPA_MPM_MHIP_CH_ID_MAX)) {
+	if (probe_id == IPA_MPM_MHIP_CH_ID_MAX) {
 		IPA_MPM_ERR("Unknown probe_id\n");
-		return 0;
-	}
-
-	if (probe_id == IPA_MPM_MHIP_CH_ID_0) {
-		/* For rndis, the MPM processing happens in WAN State IOCTL */
-		IPA_MPM_DBG("MPM Xdci connect for rndis, no -op\n");
 		return 0;
 	}
 
@@ -2597,33 +2401,11 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 
 	ipa_mpm_ctx->md[probe_id].mhip_client = mhip_client;
 
-	ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id,
-		false, &is_acted);
+	ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON, probe_id);
 	if (ret) {
 		IPA_MPM_ERR("Error cloking on PCIe clk, err = %d\n", ret);
-			return ret;
-	}
-
-	/*
-	 * Make sure to start Device side channels before
-	 * starting Host side UL channels. This is to make
-	 * sure device side access host side IPA only when
-	 * Host IPA gets voted.
-	 */
-	ret = ipa_mpm_start_stop_remote_mhip_chan(probe_id,
-						MPM_MHIP_START, false);
-	if (ret) {
-		/*
-		 * This can fail only when modem is in SSR state.
-		 * Eventually there would be a remove callback,
-		 * so return a failure. Dont have to unvote PCIE here.
-		 */
-		IPA_MPM_ERR("MHIP remote chan start fail = %d\n",
-				ret);
 		return ret;
 	}
-
-	IPA_MPM_DBG("MHIP remote channel start success\n");
 
 	switch (mhip_client) {
 	case IPA_MPM_MHIP_USB_RMNET:
@@ -2636,18 +2418,14 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 		atomic_set(&ipa_mpm_ctx->adpl_over_usb_available, 1);
 		return 0;
 	default:
-		IPA_MPM_ERR("mhip_client = %d not processed\n", mhip_client);
-		if (is_acted) {
-			ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-				false, &is_acted);
-			if (ret) {
-				IPA_MPM_ERR("Err unvoting PCIe clk, err = %d\n",
+		IPA_MPM_DBG("mhip_client = %d not processed\n", mhip_client);
+		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
+		if (ret) {
+			IPA_MPM_ERR("Error unvoting on PCIe clk, err = %d\n",
 					ret);
-				return ret;
-			}
+			return ret;
 		}
-		ipa_assert();
-		return -EINVAL;
+		return 0;
 	}
 
 	if (mhip_client != IPA_MPM_MHIP_USB_DPL)
@@ -2664,33 +2442,26 @@ int ipa_mpm_mhip_xdci_pipe_enable(enum ipa_usb_teth_prot xdci_teth_prot)
 
 		/* Lift the delay for rmnet USB prod pipe */
 		ipa3_xdci_ep_delay_rm(pipe_idx);
-		if (status == MHIP_STATUS_NO_OP && is_acted) {
+		if (status == MHIP_STATUS_NO_OP) {
 			/* Channels already have been started,
 			 * we can devote for pcie clocks
 			 */
-			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-				false, &is_acted);
+			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		}
 		break;
 	case MHIP_STATUS_EP_NOT_READY:
-		if (is_acted)
-			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-				false, &is_acted);
+		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		ipa_mpm_change_teth_state(probe_id, IPA_MPM_TETH_INPROGRESS);
 		break;
 	case MHIP_STATUS_FAIL:
 	case MHIP_STATUS_BAD_STATE:
 	case MHIP_STATUS_EP_NOT_FOUND:
 		IPA_MPM_ERR("UL chan cant be started err =%d\n", status);
-		if (is_acted)
-			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-				false, &is_acted);
+		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		ret = -EFAULT;
 		break;
 	default:
-		if (is_acted)
-			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-				false, &is_acted);
+		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		IPA_MPM_ERR("Err not found\n");
 		break;
 	}
@@ -2704,7 +2475,6 @@ int ipa_mpm_mhip_xdci_pipe_disable(enum ipa_usb_teth_prot xdci_teth_prot)
 	enum ipa_mpm_mhip_client_type mhip_client;
 	enum mhip_status_type status;
 	int ret = 0;
-	bool is_acted = true;
 
 	if (ipa_mpm_ctx == NULL) {
 		IPA_MPM_ERR("MPM not platform probed, returning ..\n");
@@ -2720,39 +2490,13 @@ int ipa_mpm_mhip_xdci_pipe_disable(enum ipa_usb_teth_prot xdci_teth_prot)
 		}
 	}
 
-	if ((probe_id < IPA_MPM_MHIP_CH_ID_0) ||
-		(probe_id >= IPA_MPM_MHIP_CH_ID_MAX)) {
-		IPA_MPM_ERR("Unknown probe_id\n");
+	if (probe_id == IPA_MPM_MHIP_CH_ID_MAX) {
+		IPA_MPM_ERR("Invalid probe_id\n");
 		return 0;
 	}
 
-	if (probe_id == IPA_MPM_MHIP_CH_ID_0) {
-		/* For rndis, the MPM processing happens in WAN State IOCTL */
-		IPA_MPM_DBG("MPM Xdci disconnect for rndis, no -op\n");
-		return 0;
-	}
-
-	IPA_MPM_DBG("xdci disconnect prot %d mhip_client = %d probe_id = %d\n",
+	IPA_MPM_ERR("xdci disconnect prot %d mhip_client = %d probe_id = %d\n",
 			xdci_teth_prot, mhip_client, probe_id);
-	/*
-	 * Make sure to stop Device side channels before
-	 * stopping Host side UL channels. This is to make
-	 * sure device side doesn't access host side IPA if
-	 * Host IPA gets unvoted.
-	 */
-	ret = ipa_mpm_start_stop_remote_mhip_chan(probe_id,
-						MPM_MHIP_STOP, false);
-	if (ret) {
-		/*
-		 * This can fail only when modem is in SSR state.
-		 * Eventually there would be a remove callback,
-		 * so return a failure.
-		 */
-		IPA_MPM_ERR("MHIP remote chan stop fail = %d\n", ret);
-		return ret;
-	}
-
-	IPA_MPM_DBG("MHIP remote channels are stopped\n");
 
 	switch (mhip_client) {
 	case IPA_MPM_MHIP_USB_RMNET:
@@ -2775,8 +2519,7 @@ int ipa_mpm_mhip_xdci_pipe_disable(enum ipa_usb_teth_prot xdci_teth_prot)
 			ipa_mpm_ctx->md[probe_id].mhip_client =
 				IPA_MPM_MHIP_NONE;
 		}
-		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-			false, &is_acted);
+		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		if (ret)
 			IPA_MPM_ERR("Error clking off PCIe clk err%d\n", ret);
 		atomic_set(&ipa_mpm_ctx->adpl_over_usb_available, 0);
@@ -2799,8 +2542,7 @@ int ipa_mpm_mhip_xdci_pipe_disable(enum ipa_usb_teth_prot xdci_teth_prot)
 	case MHIP_STATUS_BAD_STATE:
 	case MHIP_STATUS_EP_NOT_FOUND:
 		IPA_MPM_ERR("UL chan cant be started err =%d\n", status);
-		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-			false, &is_acted);
+		ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 		return -EFAULT;
 		break;
 	default:
@@ -2808,8 +2550,7 @@ int ipa_mpm_mhip_xdci_pipe_disable(enum ipa_usb_teth_prot xdci_teth_prot)
 		break;
 	}
 
-	ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id,
-		false, &is_acted);
+	ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF, probe_id);
 
 	if (ret) {
 		IPA_MPM_ERR("Error cloking off PCIe clk, err = %d\n", ret);
@@ -3054,7 +2795,7 @@ int ipa_mpm_panic_handler(char *buf, int size)
  * @note Cannot be called from atomic context
  *
  */
-int ipa3_get_mhip_gsi_stats(struct ipa_uc_dbg_ring_stats *stats)
+int ipa3_get_mhip_gsi_stats(struct ipa3_uc_dbg_ring_stats *stats)
 {
 	int i;
 
@@ -3101,7 +2842,6 @@ int ipa3_get_mhip_gsi_stats(struct ipa_uc_dbg_ring_stats *stats)
 int ipa3_mpm_enable_adpl_over_odl(bool enable)
 {
 	int ret;
-	bool is_acted = true;
 
 	IPA_MPM_FUNC_ENTRY();
 
@@ -3115,21 +2855,19 @@ int ipa3_mpm_enable_adpl_over_odl(bool enable)
 		IPA_MPM_DBG("mpm enabling ADPL over ODL\n");
 
 		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_ON,
-			IPA_MPM_MHIP_CH_ID_2, false, &is_acted);
+			IPA_MPM_MHIP_CH_ID_2);
 		if (ret) {
-			IPA_MPM_ERR("Err %d cloking on PCIe clk\n", ret);
-				return ret;
+			IPA_MPM_ERR("Error cloking on PCIe clk, err = %d\n",
+				ret);
+			return ret;
 		}
 
 		ret = ipa_mpm_set_dma_mode(IPA_CLIENT_MHI_PRIME_DPL_PROD,
 			IPA_CLIENT_ODL_DPL_CONS, false);
 		if (ret) {
 			IPA_MPM_ERR("MPM failed to set dma mode to ODL\n");
-			if (is_acted)
-				ipa_mpm_vote_unvote_pcie_clk(CLK_OFF,
-					IPA_MPM_MHIP_CH_ID_2,
-					false,
-					&is_acted);
+			ipa_mpm_vote_unvote_pcie_clk(CLK_OFF,
+				IPA_MPM_MHIP_CH_ID_2);
 			return ret;
 		}
 
@@ -3138,25 +2876,21 @@ int ipa3_mpm_enable_adpl_over_odl(bool enable)
 	} else {
 		/* dec clk count and set DMA to USB */
 		IPA_MPM_DBG("mpm disabling ADPL over ODL\n");
+
 		ret = ipa_mpm_vote_unvote_pcie_clk(CLK_OFF,
-						IPA_MPM_MHIP_CH_ID_2,
-						false,
-						&is_acted);
+			IPA_MPM_MHIP_CH_ID_2);
 		if (ret) {
-			IPA_MPM_ERR("Err %d cloking off PCIe clk\n",
+			IPA_MPM_ERR("Error cloking off PCIe clk, err = %d\n",
 				ret);
-			return ret;
+				return ret;
 		}
 
 		ret = ipa_mpm_set_dma_mode(IPA_CLIENT_MHI_PRIME_DPL_PROD,
 			IPA_CLIENT_USB_DPL_CONS, false);
 		if (ret) {
 			IPA_MPM_ERR("MPM failed to set dma mode to USB\n");
-			if (ipa_mpm_vote_unvote_pcie_clk(CLK_ON,
-							IPA_MPM_MHIP_CH_ID_2,
-							false,
-							&is_acted))
-				IPA_MPM_ERR("Err clocking on pcie\n");
+			ipa_mpm_vote_unvote_pcie_clk(CLK_ON,
+				IPA_MPM_MHIP_CH_ID_2);
 			return ret;
 		}
 

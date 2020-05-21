@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/types.h>
@@ -77,10 +85,10 @@ static void slpi_load_fw(struct work_struct *slpi_ldr_work)
 	struct platform_device *pdev = slpi_private;
 	struct slpi_loader_private *priv = NULL;
 	int ret;
-	const char *firmware_name = NULL;
+	const char *firmware_name = "slpi";
 
 	if (!pdev) {
-		pr_err("%s: Platform device null\n", __func__);
+		dev_err(&pdev->dev, "%s: Platform device null\n", __func__);
 		goto fail;
 	}
 
@@ -96,6 +104,8 @@ static void slpi_load_fw(struct work_struct *slpi_ldr_work)
 		pr_err("can't get fw name.\n");
 		goto fail;
 	}
+
+	dev_info(&pdev->dev, "get fw name: %s \n", firmware_name);
 
 	priv = platform_get_drvdata(pdev);
 	if (!priv) {
@@ -115,7 +125,15 @@ static void slpi_load_fw(struct work_struct *slpi_ldr_work)
 	return;
 
 fail:
-	pr_err("%s: SLPI image loading failed\n", __func__);
+	/** Load SLPI subsystem with default name **/
+	priv->pil_h = subsystem_get_with_fwname("slpi", "slpi");
+	if (IS_ERR(priv->pil_h)) {
+		dev_err(&pdev->dev, "%s: SLPI image re-loading failed\n", __func__);
+	}
+	else {
+		dev_dbg(&pdev->dev, "%s: SLPI image is loaded\n", __func__);
+	}
+	return;
 }
 
 static void slpi_loader_do(struct platform_device *pdev)
@@ -426,6 +444,7 @@ MODULE_DEVICE_TABLE(of, msm_ssc_sensors_dt_match);
 static struct platform_driver sensors_ssc_driver = {
 	.driver = {
 		.name = "sensors-ssc",
+		.owner = THIS_MODULE,
 		.of_match_table = msm_ssc_sensors_dt_match,
 	},
 	.probe = sensors_ssc_probe,

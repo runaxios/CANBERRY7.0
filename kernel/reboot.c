@@ -2,7 +2,6 @@
  *  linux/kernel/reboot.c
  *
  *  Copyright (C) 2013  Linus Torvalds
- *  Copyright (C) 2020 XiaoMi, Inc.
  */
 
 #define pr_fmt(fmt)	"reboot: " fmt
@@ -32,8 +31,6 @@ EXPORT_SYMBOL(cad_pid);
 #define DEFAULT_REBOOT_MODE
 #endif
 enum reboot_mode reboot_mode DEFAULT_REBOOT_MODE;
-enum reboot_mode panic_reboot_mode = REBOOT_UNDEFINED;
-#define POWEROFF_CHARGER_COMMANDLINE_LENGTH 20
 
 /*
  * This variable is used privately to keep track of whether or not
@@ -46,23 +43,12 @@ int reboot_default = 1;
 int reboot_cpu;
 enum reboot_type reboot_type = BOOT_ACPI;
 int reboot_force;
-static char poweroff_charger_mode[POWEROFF_CHARGER_COMMANDLINE_LENGTH];
 
 /*
  * If set, this is used for preparing the system to power off.
  */
 
 void (*pm_power_off_prepare)(void);
-
-static int check_poweroff_charger_mode(void)
-{
-	static const char poweroff_charger[] = "charger";
-
-	if (!strncmp(poweroff_charger_mode, poweroff_charger, sizeof(poweroff_charger) - 1))
-		return true;
-
-	return false;
-}
 
 /**
  *	emergency_restart - reboot the system
@@ -117,33 +103,6 @@ int unregister_reboot_notifier(struct notifier_block *nb)
 	return blocking_notifier_chain_unregister(&reboot_notifier_list, nb);
 }
 EXPORT_SYMBOL(unregister_reboot_notifier);
-
-static void devm_unregister_reboot_notifier(struct device *dev, void *res)
-{
-	WARN_ON(unregister_reboot_notifier(*(struct notifier_block **)res));
-}
-
-int devm_register_reboot_notifier(struct device *dev, struct notifier_block *nb)
-{
-	struct notifier_block **rcnb;
-	int ret;
-
-	rcnb = devres_alloc(devm_unregister_reboot_notifier,
-			    sizeof(*rcnb), GFP_KERNEL);
-	if (!rcnb)
-		return -ENOMEM;
-
-	ret = register_reboot_notifier(nb);
-	if (!ret) {
-		*rcnb = nb;
-		devres_add(dev, rcnb);
-	} else {
-		devres_free(rcnb);
-	}
-
-	return ret;
-}
-EXPORT_SYMBOL(devm_register_reboot_notifier);
 
 /*
  *	Notifier list for kernel code which wants to be called
@@ -254,7 +213,6 @@ void migrate_to_reboot_cpu(void)
  */
 void kernel_restart(char *cmd)
 {
-	kmsg_dump(KMSG_DUMP_RESTART);
 	kernel_restart_prepare(cmd);
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
@@ -262,6 +220,7 @@ void kernel_restart(char *cmd)
 		pr_emerg("Restarting system\n");
 	else
 		pr_emerg("Restarting system with command '%s'\n", cmd);
+	kmsg_dump(KMSG_DUMP_RESTART);
 	machine_restart(cmd);
 }
 EXPORT_SYMBOL_GPL(kernel_restart);
@@ -281,11 +240,11 @@ static void kernel_shutdown_prepare(enum system_states state)
  */
 void kernel_halt(void)
 {
-	kmsg_dump(KMSG_DUMP_HALT);
 	kernel_shutdown_prepare(SYSTEM_HALT);
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
 	pr_emerg("System halted\n");
+	kmsg_dump(KMSG_DUMP_HALT);
 	machine_halt();
 }
 EXPORT_SYMBOL_GPL(kernel_halt);
@@ -297,18 +256,18 @@ EXPORT_SYMBOL_GPL(kernel_halt);
  */
 void kernel_power_off(void)
 {
-	kmsg_dump(KMSG_DUMP_POWEROFF);
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	if (pm_power_off_prepare)
 		pm_power_off_prepare();
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
 	pr_emerg("Power down\n");
+	kmsg_dump(KMSG_DUMP_POWEROFF);
 	machine_power_off();
 }
 EXPORT_SYMBOL_GPL(kernel_power_off);
 
-DEFINE_MUTEX(system_transition_mutex);
+static DEFINE_MUTEX(reboot_mutex);
 
 /*
  * Reboot system call: for obvious reasons only root may call it,
@@ -325,13 +284,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	char buffer[256];
 	int ret = 0;
 
-	if (check_poweroff_charger_mode()){
-		pr_warn("poweroff charging skip this detect\n");
-	} else {
-		/* We only trust the superuser with rebooting the system. */
-		if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
-			return -EPERM;
-	}
+	/* We only trust the superuser with rebooting the system. */
+	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+		return -EPERM;
 
 	/* For safety, we require "magic" arguments. */
 	if (magic1 != LINUX_REBOOT_MAGIC1 ||
@@ -356,7 +311,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	if ((cmd == LINUX_REBOOT_CMD_POWER_OFF) && !pm_power_off)
 		cmd = LINUX_REBOOT_CMD_HALT;
 
-	mutex_lock(&system_transition_mutex);
+	mutex_lock(&reboot_mutex);
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
 		kernel_restart(NULL);
@@ -407,7 +362,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		ret = -EINVAL;
 		break;
 	}
-	mutex_unlock(&system_transition_mutex);
+	mutex_unlock(&reboot_mutex);
 	return ret;
 }
 
@@ -536,8 +491,6 @@ EXPORT_SYMBOL_GPL(orderly_reboot);
 static int __init reboot_setup(char *str)
 {
 	for (;;) {
-		enum reboot_mode *mode;
-
 		/*
 		 * Having anything passed on the command line via
 		 * reboot= will cause us to disable DMI checking
@@ -545,24 +498,17 @@ static int __init reboot_setup(char *str)
 		 */
 		reboot_default = 0;
 
-		if (!strncmp(str, "panic_", 6)) {
-			mode = &panic_reboot_mode;
-			str += 6;
-		} else {
-			mode = &reboot_mode;
-		}
-
 		switch (*str) {
 		case 'w':
-			*mode = REBOOT_WARM;
+			reboot_mode = REBOOT_WARM;
 			break;
 
 		case 'c':
-			*mode = REBOOT_COLD;
+			reboot_mode = REBOOT_COLD;
 			break;
 
 		case 'h':
-			*mode = REBOOT_HARD;
+			reboot_mode = REBOOT_HARD;
 			break;
 
 		case 's':
@@ -579,11 +525,11 @@ static int __init reboot_setup(char *str)
 				if (rc)
 					return rc;
 			} else
-				*mode = REBOOT_SOFT;
+				reboot_mode = REBOOT_SOFT;
 			break;
 		}
 		case 'g':
-			*mode = REBOOT_GPIO;
+			reboot_mode = REBOOT_GPIO;
 			break;
 
 		case 'b':
@@ -609,11 +555,3 @@ static int __init reboot_setup(char *str)
 	return 1;
 }
 __setup("reboot=", reboot_setup);
-
-static int __init get_poweroff_charger_mode(char *line)
-{
-	strlcpy(poweroff_charger_mode, line, sizeof(poweroff_charger_mode));
-	pr_warn("get_poweroff_charger_mode = %s\n", poweroff_charger_mode);
-	return 1;
-}
-__setup("androidboot.mode=", get_poweroff_charger_mode);

@@ -86,6 +86,15 @@ static const struct k_clock clock_realtime, clock_monotonic;
 #endif
 
 /*
+ * parisc wants ENOTSUP instead of EOPNOTSUPP
+ */
+#ifndef ENOTSUP
+# define ENANOSLEEP_NOTSUP EOPNOTSUPP
+#else
+# define ENANOSLEEP_NOTSUP ENOTSUP
+#endif
+
+/*
  * The timer ID is turned into a timer address by idr_find().
  * Verifying a valid ID consists of:
  *
@@ -219,21 +228,21 @@ static int posix_ktime_get_ts(clockid_t which_clock, struct timespec64 *tp)
  */
 static int posix_get_monotonic_raw(clockid_t which_clock, struct timespec64 *tp)
 {
-	ktime_get_raw_ts64(tp);
+	getrawmonotonic64(tp);
 	return 0;
 }
 
 
 static int posix_get_realtime_coarse(clockid_t which_clock, struct timespec64 *tp)
 {
-	ktime_get_coarse_real_ts64(tp);
+	*tp = current_kernel_time64();
 	return 0;
 }
 
 static int posix_get_monotonic_coarse(clockid_t which_clock,
 						struct timespec64 *tp)
 {
-	ktime_get_coarse_ts64(tp);
+	*tp = get_monotonic_coarse64();
 	return 0;
 }
 
@@ -245,13 +254,13 @@ static int posix_get_coarse_res(const clockid_t which_clock, struct timespec64 *
 
 static int posix_get_boottime(const clockid_t which_clock, struct timespec64 *tp)
 {
-	ktime_get_boottime_ts64(tp);
+	get_monotonic_boottime64(tp);
 	return 0;
 }
 
 static int posix_get_tai(clockid_t which_clock, struct timespec64 *tp)
 {
-	ktime_get_clocktai_ts64(tp);
+	timekeeping_clocktai64(tp);
 	return 0;
 }
 
@@ -330,8 +339,8 @@ void posixtimer_rearm(struct siginfo *info)
 
 int posix_timer_event(struct k_itimer *timr, int si_private)
 {
-	enum pid_type type;
-	int ret = -1;
+	struct task_struct *task;
+	int shared, ret = -1;
 	/*
 	 * FIXME: if ->sigq is queued we can race with
 	 * dequeue_signal()->posixtimer_rearm().
@@ -345,8 +354,13 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 	 */
 	timr->sigq->info.si_sys_private = si_private;
 
-	type = !(timr->it_sigev_notify & SIGEV_THREAD_ID) ? PIDTYPE_TGID : PIDTYPE_PID;
-	ret = send_sigqueue(timr->sigq, timr->it_pid, type);
+	rcu_read_lock();
+	task = pid_task(timr->it_pid, PIDTYPE_PID);
+	if (task) {
+		shared = !(timr->it_sigev_notify & SIGEV_THREAD_ID);
+		ret = send_sigqueue(timr->sigq, task, shared);
+	}
+	rcu_read_unlock();
 	/* If we failed to send the signal the timer stops. */
 	return ret > 0;
 }
@@ -425,13 +439,11 @@ static enum hrtimer_restart posix_timer_fn(struct hrtimer *timer)
 
 static struct pid *good_sigevent(sigevent_t * event)
 {
-	struct pid *pid = task_tgid(current);
-	struct task_struct *rtn;
+	struct task_struct *rtn = current->group_leader;
 
 	switch (event->sigev_notify) {
 	case SIGEV_SIGNAL | SIGEV_THREAD_ID:
-		pid = find_vpid(event->sigev_notify_thread_id);
-		rtn = pid_task(pid, PIDTYPE_PID);
+		rtn = find_task_by_vpid(event->sigev_notify_thread_id);
 		if (!rtn || !same_thread_group(rtn, current))
 			return NULL;
 		/* FALLTHRU */
@@ -441,7 +453,7 @@ static struct pid *good_sigevent(sigevent_t * event)
 			return NULL;
 		/* FALLTHRU */
 	case SIGEV_NONE:
-		return pid;
+		return task_pid(rtn);
 	default:
 		return NULL;
 	}
@@ -457,7 +469,7 @@ static struct k_itimer * alloc_posix_timer(void)
 		kmem_cache_free(posix_timers_cache, tmr);
 		return NULL;
 	}
-	clear_siginfo(&tmr->sigq->info);
+	memset(&tmr->sigq->info, 0, sizeof(siginfo_t));
 	return tmr;
 }
 
@@ -737,7 +749,7 @@ static int do_timer_gettime(timer_t timer_id,  struct itimerspec64 *setting)
 
 /* Get the time remaining on a POSIX.1b interval timer. */
 SYSCALL_DEFINE2(timer_gettime, timer_t, timer_id,
-		struct __kernel_itimerspec __user *, setting)
+		struct itimerspec __user *, setting)
 {
 	struct itimerspec64 cur_setting;
 
@@ -749,8 +761,7 @@ SYSCALL_DEFINE2(timer_gettime, timer_t, timer_id,
 	return ret;
 }
 
-#ifdef CONFIG_COMPAT_32BIT_TIME
-
+#ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE2(timer_gettime, timer_t, timer_id,
 		       struct compat_itimerspec __user *, setting)
 {
@@ -763,7 +774,6 @@ COMPAT_SYSCALL_DEFINE2(timer_gettime, timer_t, timer_id,
 	}
 	return ret;
 }
-
 #endif
 
 /*
@@ -902,8 +912,8 @@ retry:
 
 /* Set a POSIX.1b interval timer */
 SYSCALL_DEFINE4(timer_settime, timer_t, timer_id, int, flags,
-		const struct __kernel_itimerspec __user *, new_setting,
-		struct __kernel_itimerspec __user *, old_setting)
+		const struct itimerspec __user *, new_setting,
+		struct itimerspec __user *, old_setting)
 {
 	struct itimerspec64 new_spec, old_spec;
 	struct itimerspec64 *rtn = old_setting ? &old_spec : NULL;
@@ -923,7 +933,7 @@ SYSCALL_DEFINE4(timer_settime, timer_t, timer_id, int, flags,
 	return error;
 }
 
-#ifdef CONFIG_COMPAT_32BIT_TIME
+#ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE4(timer_settime, timer_t, timer_id, int, flags,
 		       struct compat_itimerspec __user *, new,
 		       struct compat_itimerspec __user *, old)
@@ -1036,7 +1046,7 @@ void exit_itimers(struct signal_struct *sig)
 }
 
 SYSCALL_DEFINE2(clock_settime, const clockid_t, which_clock,
-		const struct __kernel_timespec __user *, tp)
+		const struct timespec __user *, tp)
 {
 	const struct k_clock *kc = clockid_to_kclock(which_clock);
 	struct timespec64 new_tp;
@@ -1051,7 +1061,7 @@ SYSCALL_DEFINE2(clock_settime, const clockid_t, which_clock,
 }
 
 SYSCALL_DEFINE2(clock_gettime, const clockid_t, which_clock,
-		struct __kernel_timespec __user *, tp)
+		struct timespec __user *,tp)
 {
 	const struct k_clock *kc = clockid_to_kclock(which_clock);
 	struct timespec64 kernel_tp;
@@ -1092,7 +1102,7 @@ SYSCALL_DEFINE2(clock_adjtime, const clockid_t, which_clock,
 }
 
 SYSCALL_DEFINE2(clock_getres, const clockid_t, which_clock,
-		struct __kernel_timespec __user *, tp)
+		struct timespec __user *, tp)
 {
 	const struct k_clock *kc = clockid_to_kclock(which_clock);
 	struct timespec64 rtn_tp;
@@ -1109,7 +1119,7 @@ SYSCALL_DEFINE2(clock_getres, const clockid_t, which_clock,
 	return error;
 }
 
-#ifdef CONFIG_COMPAT_32BIT_TIME
+#ifdef CONFIG_COMPAT
 
 COMPAT_SYSCALL_DEFINE2(clock_settime, clockid_t, which_clock,
 		       struct compat_timespec __user *, tp)
@@ -1144,10 +1154,6 @@ COMPAT_SYSCALL_DEFINE2(clock_gettime, clockid_t, which_clock,
 	return err;
 }
 
-#endif
-
-#ifdef CONFIG_COMPAT
-
 COMPAT_SYSCALL_DEFINE2(clock_adjtime, clockid_t, which_clock,
 		       struct compat_timex __user *, utp)
 {
@@ -1171,10 +1177,6 @@ COMPAT_SYSCALL_DEFINE2(clock_adjtime, clockid_t, which_clock,
 
 	return err;
 }
-
-#endif
-
-#ifdef CONFIG_COMPAT_32BIT_TIME
 
 COMPAT_SYSCALL_DEFINE2(clock_getres, clockid_t, which_clock,
 		       struct compat_timespec __user *, tp)
@@ -1207,8 +1209,8 @@ static int common_nsleep(const clockid_t which_clock, int flags,
 }
 
 SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
-		const struct __kernel_timespec __user *, rqtp,
-		struct __kernel_timespec __user *, rmtp)
+		const struct timespec __user *, rqtp,
+		struct timespec __user *, rmtp)
 {
 	const struct k_clock *kc = clockid_to_kclock(which_clock);
 	struct timespec64 t;
@@ -1216,7 +1218,7 @@ SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
 	if (!kc)
 		return -EINVAL;
 	if (!kc->nsleep)
-		return -EOPNOTSUPP;
+		return -ENANOSLEEP_NOTSUP;
 
 	if (get_timespec64(&t, rqtp))
 		return -EFAULT;
@@ -1231,8 +1233,7 @@ SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
 	return kc->nsleep(which_clock, flags, &t);
 }
 
-#ifdef CONFIG_COMPAT_32BIT_TIME
-
+#ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 		       struct compat_timespec __user *, rqtp,
 		       struct compat_timespec __user *, rmtp)
@@ -1243,7 +1244,7 @@ COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 	if (!kc)
 		return -EINVAL;
 	if (!kc->nsleep)
-		return -EOPNOTSUPP;
+		return -ENANOSLEEP_NOTSUP;
 
 	if (compat_get_timespec64(&t, rqtp))
 		return -EFAULT;
@@ -1257,7 +1258,6 @@ COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 
 	return kc->nsleep(which_clock, flags, &t);
 }
-
 #endif
 
 static const struct k_clock clock_realtime = {

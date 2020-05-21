@@ -64,15 +64,6 @@ config REGULATOR_PROXY_CONSUMER
 	  stop working if performed before the driver managing the hardware has
 	  probed.
 
-config REGULATOR_88PG86X
-	tristate "Marvell 88PG86X voltage regulators"
-	depends on I2C
-	select REGMAP_I2C
-	help
-	  This driver supports Marvell 88PG867 and 88PG868 voltage regulators.
-	  They provide two I2C-controlled DC/DC step-down converters with
-	  sleep mode and separate enable pins.
-
 config REGULATOR_88PM800
 	tristate "Marvell 88PM800 Power regulators"
 	depends on MFD_88PM800
@@ -190,17 +181,6 @@ config REGULATOR_BCM590XX
 	  BCM590xx PMUs. This will enable support for the software
 	  controllable LDO/Switching regulators.
 
-config REGULATOR_BD718XX
-	tristate "ROHM BD71837 Power Regulator"
-	depends on MFD_ROHM_BD718XX
-	help
-	  This driver supports voltage regulators on ROHM BD71837 PMIC.
-	  This will enable support for the software controllable buck
-	  and LDO regulators.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called bd71837-regulator.
-
 config REGULATOR_BD9571MWV
 	tristate "ROHM BD9571MWV Regulators"
 	depends on MFD_BD9571MWV
@@ -274,7 +254,7 @@ config REGULATOR_DA9210
 	  interface.
 
 config REGULATOR_DA9211
-	tristate "Dialog Semiconductor DA9211/DA9212/DA9213/DA9223/DA9214/DA9224/DA9215/DA9225 regulator"
+	tristate "Dialog Semiconductor DA9211/DA9212/DA9213/DA9214/DA9215 regulator"
 	depends on I2C
 	select REGMAP_I2C
 	help
@@ -356,6 +336,15 @@ config REGULATOR_ISL6271A
 	depends on I2C
 	help
 	  This driver supports ISL6271A voltage regulator chip.
+
+config REGULATOR_PM8008
+	bool "Qualcomm Technologies Inc. PM8008 regulator driver"
+	depends on MFD_I2C_PMIC
+	help
+	  Say Y here to support the PM8008 PMIC chip.
+	  This driver controls PM8008 PMIC chip and the voltage
+	  regulators found in Qualcomm Technologies Inc. PM8008
+	  PMIC.
 
 config REGULATOR_LM363X
 	tristate "TI LM363X voltage regulators"
@@ -643,12 +632,12 @@ config REGULATOR_PCF50633
 	 on PCF50633
 
 config REGULATOR_PFUZE100
-	tristate "Freescale PFUZE100/200/3000/3001 regulator driver"
+	tristate "Freescale PFUZE100/200/3000 regulator driver"
 	depends on I2C
 	select REGMAP_I2C
 	help
 	  Say y here to support the regulators found on the Freescale
-	  PFUZE100/200/3000/3001 PMIC.
+	  PFUZE100/200/3000 PMIC.
 
 config REGULATOR_PV88060
 	tristate "Powerventure Semiconductor PV88060 regulator"
@@ -692,15 +681,6 @@ config REGULATOR_QCOM_RPM
 	  Qualcomm RPM as a module. The module will be named
 	  "qcom_rpm-regulator".
 
-config REGULATOR_QCOM_RPMH
-	tristate "Qualcomm Technologies, Inc. RPMh regulator driver"
-	depends on QCOM_RPMH || COMPILE_TEST
-	help
-	  This driver supports control of PMIC regulators via the RPMh hardware
-	  block found on Qualcomm Technologies Inc. SoCs.  RPMh regulator
-	  control allows for voting on regulator state between multiple
-	  processors within the SoC.
-
 config REGULATOR_QCOM_SMD_RPM
 	tristate "Qualcomm SMD based RPM regulator driver"
 	depends on QCOM_SMD_RPM
@@ -742,7 +722,7 @@ config REGULATOR_QPNP_LABIBB
           are SPMI based PMIC implementations. LAB regulator can be used as a
           regular positive boost regulator. IBB can be used as a regular
           negative boost regulator. LAB/IBB regulators can also be used
-          together for LCD or AMOLED on QTI PMICs like PMI8998.
+          together for LCD or AMOLED.
 
 config REGULATOR_QPNP_LCDB
         tristate "Qualcomm Technologies, Inc. QPNP LCDB support"
@@ -821,13 +801,6 @@ config REGULATOR_S5M8767
 	 via I2C bus. S5M8767A have 9 Bucks and 28 LDOs output and
 	 supports DVS mode with 8bits of output voltage control.
 
-config REGULATOR_SC2731
-	tristate "Spreadtrum SC2731 power regulator driver"
-	depends on MFD_SC27XX_PMIC || COMPILE_TEST
-	help
-	  This driver provides support for the voltage regulators on the
-	  SC2731 PMIC.
-
 config REGULATOR_SKY81452
 	tristate "Skyworks Solutions SKY81452 voltage regulator"
 	depends on MFD_SKY81452
@@ -868,13 +841,6 @@ config REGULATOR_STW481X_VMMC
 	help
 	  This driver supports the internal VMMC regulator in the STw481x
 	  PMIC chips.
-
-config REGULATOR_SY8106A
-	tristate "Silergy SY8106A regulator"
-	depends on I2C && (OF || COMPILE_TEST)
-	select REGMAP_I2C
-	help
-	  This driver supports SY8106A single output regulator.
 
 config REGULATOR_TPS51632
 	tristate "TI TPS51632 Power Regulator"
@@ -1007,14 +973,6 @@ config REGULATOR_TWL4030
 	  This driver supports the voltage regulators provided by
 	  this family of companion chips.
 
-config REGULATOR_UNIPHIER
-	tristate "UniPhier regulator driver"
-	depends on ARCH_UNIPHIER || COMPILE_TEST
-	depends on OF && MFD_SYSCON
-	default ARCH_UNIPHIER
-	help
-	  Support for regulators implemented on Socionext UniPhier SoCs.
-
 config REGULATOR_VCTRL
 	tristate "Voltage controlled regulators"
 	depends on OF
@@ -1057,6 +1015,24 @@ config REGULATOR_WM8994
 	  This driver provides support for the voltage regulators on the
 	  WM8994 CODEC.
 
+config REGULATOR_CPR
+	bool "RBCPR regulator driver for APC"
+	depends on OF
+	help
+	  Compile in RBCPR (RapidBridge Core Power Reduction) driver to support
+	  corner vote for APC power rail. The driver takes PTE process voltage
+	  suggestions in efuse as initial settings. It converts corner vote
+	  to voltage value before writing to a voltage regulator API, such as
+	  that provided by spm-regulator driver.
+
+config REGULATOR_MEM_ACC
+	tristate "QTI Memory accelerator regulator driver"
+	help
+	  Say y here to enable the memory accelerator driver for Qualcomm
+	  Technologies, Inc. (QTI) chips. The accelerator controls delays
+	  applied for memory accesses.  This driver configures the power-mode
+	  (corner) for the memory accelerator.
+
 config REGULATOR_REFGEN
 	tristate "Qualcomm Technologies, Inc. REFGEN regulator driver"
 	depends on OF
@@ -1067,8 +1043,9 @@ config REGULATOR_REFGEN
 	  enable/disable control.
 
 config REGULATOR_RPMH
-	tristate "Qualcomm Technologies, Inc. Legacy RPMh regulator driver"
-	depends on QCOM_RPMH
+	tristate "Qualcomm Technologies, Inc. RPMh regulator driver"
+	depends on OF
+	depends on QTI_RPMH_API
 	help
 	  This driver supports control of PMIC regulators via the RPMh hardware
 	  block found on Qualcomm Technologies Inc. SoCs.  RPMh regulator
@@ -1082,27 +1059,36 @@ config REGULATOR_RPM_SMD
 	help
 	  Compile in support for the RPM SMD regulator driver which is used for
 	  setting voltages and other parameters of the various power rails
-	  supplied by some Qualcomm Technologies Inc. PMICs. The RPM SMD regulator driver should
+	  supplied by some Qualcomm PMICs. The RPM SMD regulator driver should
 	  be used on systems which contain an RPM which communicates with the
 	  application processor over SMD.
+
+config REGULATOR_SPM
+	bool "SPM regulator driver"
+	depends on SPMI
+	help
+	  Enable support for the SPM regulator driver which is used for
+	  setting voltages of processor supply regulators via the SPM module
+	  found inside chips of Qualcomm Technologies Inc. The SPM regulator
+	  driver can be used on QTI SoCs where the APSS processor cores are
+	  supplied by their own PMIC regulator.
 
 config REGULATOR_STUB
 	tristate "Stub Regulator"
 	help
-	  This driver adds stub regulator support. It allows for consumers to
-	  request their regulator devices and to use all of the standard
-	  regulator functions. It is useful for bringing up new platforms when
-	  the real hardware based regulator implementation is not yet available.
-	  Consumers can use stub regulator device with proper constraint
-	  checking while the real regulator driver is being developed.
+	  This driver adds stub regulator support. The driver is absent of any
+	  real hardware based implementation. It allows for clients to register
+	  their regulator device constraints and use all of the standard
+	  regulator interfaces. This is useful for bringing up new platforms
+	  when the real hardware based implementation may not be yet available.
+	  Clients can use the real regulator device names with proper
+	  constraint checking while the real driver is being developed.
 
-config REGULATOR_PM8008
-	bool "Qualcomm Technologies Inc. PM8008 regulator driver"
-	depends on MFD_I2C_PMIC
-	help
-	  Say Y here to support the PM8008 PMIC chip.
-	  This driver controls PM8008 PMIC chip and the voltage
-	  regulators found in Qualcomm Technologies Inc. PM8008
-	  PMIC.
+config VIRTIO_REGULATOR
+	tristate "Virtio regulator driver"
+	depends on VIRTIO
+	---help---
+	  This is the virtual regulator driver for virtio.
+
 endif
 

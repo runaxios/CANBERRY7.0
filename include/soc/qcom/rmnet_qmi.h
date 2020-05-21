@@ -1,7 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _RMNET_QMI_H
@@ -25,7 +32,6 @@ void rmnet_set_powersave_format(void *port);
 void rmnet_clear_powersave_format(void *port);
 void rmnet_get_packets(void *port, u64 *rx, u64 *tx);
 int rmnet_get_powersave_notif(void *port);
-struct net_device *rmnet_get_real_dev(void *port);
 #else
 static inline void *rmnet_get_qmi_pt(void *port)
 {
@@ -78,9 +84,5 @@ static inline int rmnet_get_powersave_notif(void *port)
 	return 0;
 }
 
-static inline struct net_device *rmnet_get_real_dev(void *port)
-{
-	return NULL;
-}
 #endif /* CONFIG_QCOM_QMI_RMNET */
 #endif /*_RMNET_QMI_H*/

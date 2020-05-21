@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -355,7 +363,7 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 						THERMAL_TRIP_CONFIGURABLE_HI,
 						THERMAL_DEVICE_ENABLED);
 				if (rc)
-					pr_err("high rearm failed\n");
+					pr_err("high rearm failed");
 			} else {
 				upper_thr = true;
 				tm->sensor[i].thr_state.high_th_state =
@@ -377,7 +385,7 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 						THERMAL_TRIP_CONFIGURABLE_LOW,
 						THERMAL_DEVICE_ENABLED);
 				if (rc)
-					pr_err("low rearm failed\n");
+					pr_err("low rearm failed");
 			} else {
 				lower_thr = true;
 				tm->sensor[i].thr_state.low_th_state =

@@ -2,7 +2,7 @@
  * The input core
  *
  * Copyright (c) 1999-2002 Vojtech Pavlik
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  */
 
 /*
@@ -51,9 +51,11 @@ static LIST_HEAD(input_handler_list);
  * input handlers.
  */
 static DEFINE_MUTEX(input_mutex);
-
 static const struct input_value input_value_sync = { EV_SYN, SYN_REPORT, 1 };
 
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+static struct touch_event_info *touch_info;
+#endif
 
 #ifdef CONFIG_LAST_TOUCH_EVENTS
 static int input_device_is_touch(struct input_dev *input_dev)
@@ -65,7 +67,10 @@ static int input_device_is_touch(struct input_dev *input_dev)
 static inline void touch_press_release_events_collect(struct input_dev *dev,
 		 unsigned int type, unsigned int code, int value)
 {
-	struct tp_touch_event *touch_event_buf;
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+	char ch[64] = {0x0,};
+#endif
+	struct touch_event *touch_event_buf;
 	struct touch_event_info *touch_events;
 
 	if (!dev->touch_events)
@@ -108,6 +113,10 @@ static inline void touch_press_release_events_collect(struct input_dev *dev,
 			if (value == 0) {
 				if (touch_events->touch_is_pressed) {
 					touch_events->touch_is_pressed = false;
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+					touch_events->click_num++;
+					snprintf(ch, sizeof(ch), "%llu", touch_events->click_num);
+#endif
 				}
 				touch_events->finger_bitmap = 0;
 			}
@@ -145,7 +154,7 @@ static void input_start_autorepeat(struct input_dev *dev, int code)
 {
 	if (test_bit(EV_REP, dev->evbit) &&
 	    dev->rep[REP_PERIOD] && dev->rep[REP_DELAY] &&
-	    dev->timer.function) {
+	    dev->timer.data) {
 		dev->repeat_key = code;
 		mod_timer(&dev->timer,
 			  jiffies + msecs_to_jiffies(dev->rep[REP_DELAY]));
@@ -248,9 +257,9 @@ static void input_pass_event(struct input_dev *dev,
  * dev->event_lock here to avoid racing with input_event
  * which may cause keys get "stuck".
  */
-static void input_repeat_key(struct timer_list *t)
+static void input_repeat_key(unsigned long data)
 {
-	struct input_dev *dev = from_timer(dev, t, timer);
+	struct input_dev *dev = (void *) data;
 	unsigned long flags;
 
 	spin_lock_irqsave(&dev->event_lock, flags);
@@ -1128,12 +1137,12 @@ static inline void input_wakeup_procfs_readers(void)
 	wake_up(&input_devices_poll_wait);
 }
 
-static __poll_t input_proc_devices_poll(struct file *file, poll_table *wait)
+static unsigned int input_proc_devices_poll(struct file *file, poll_table *wait)
 {
 	poll_wait(file, &input_devices_poll_wait, wait);
 	if (file->f_version != input_devices_state) {
 		file->f_version = input_devices_state;
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 	}
 
 	return 0;
@@ -1379,6 +1388,49 @@ static const struct file_operations input_last_touch_events_fileops = {
 	.llseek		= seq_lseek,
 	.release	= seq_release,
 };
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+#define MAX_CLICK_SIZE 30
+static ssize_t input_touch_count_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+{
+	char tmp[MAX_CLICK_SIZE];
+
+	if (*pos != 0)
+		return 0;
+	if (touch_info == NULL)
+		return -EINVAL;
+	snprintf(tmp, MAX_CLICK_SIZE, "%llu\n", touch_info->click_num);
+	if (copy_to_user(buf, tmp, strlen(tmp))) {
+		return -EFAULT;
+	}
+	*pos += strlen(tmp);
+
+	return strlen(tmp);
+}
+
+static ssize_t input_touch_count_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+{
+	char tmp[MAX_CLICK_SIZE];
+	char ch[64] = {0x0,};
+
+	if (count > MAX_CLICK_SIZE || (touch_info) == NULL)
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, count)) {
+		return -EFAULT;
+	}
+
+	if (sscanf(tmp, "%llu\n", &touch_info->click_num) != 1)
+		return -EINVAL;
+	else {
+		snprintf(ch, sizeof(ch), "%llu", touch_info->click_num);
+		return count;
+	}
+}
+
+static const struct file_operations input_touch_count_fileops = {
+	.read		= input_touch_count_read,
+	.write		= input_touch_count_write,
+};
+#endif
 #endif
 
 static int __init input_proc_init(void)
@@ -1403,10 +1455,19 @@ static int __init input_proc_init(void)
 				&input_last_touch_events_fileops);
 	if (!entry)
 		goto fail3;
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+	entry = proc_create("touch_count", S_IWUSR | S_IRUSR, proc_bus_input_dir,
+				&input_touch_count_fileops);
+	if (!entry)
+		goto fail4;
+#endif
 #endif
 
 	return 0;
 #ifdef CONFIG_LAST_TOUCH_EVENTS
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+ fail4: remove_proc_entry("last_touch_events", proc_bus_input_dir);
+#endif
  fail3: remove_proc_entry("handlers", proc_bus_input_dir);
 #endif
  fail2:	remove_proc_entry("devices", proc_bus_input_dir);
@@ -1417,6 +1478,9 @@ static int __init input_proc_init(void)
 static void input_proc_exit(void)
 {
 #ifdef CONFIG_LAST_TOUCH_EVENTS
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+	remove_proc_entry("touch_count", proc_bus_input_dir);
+#endif
 	remove_proc_entry("last_touch_events", proc_bus_input_dir);
 #endif
 	remove_proc_entry("devices", proc_bus_input_dir);
@@ -1922,7 +1986,7 @@ struct input_dev *input_allocate_device(void)
 		device_initialize(&dev->dev);
 		mutex_init(&dev->mutex);
 		spin_lock_init(&dev->event_lock);
-		timer_setup(&dev->timer, NULL, 0);
+		init_timer(&dev->timer);
 		INIT_LIST_HEAD(&dev->h_list);
 		INIT_LIST_HEAD(&dev->node);
 
@@ -2081,7 +2145,8 @@ void input_set_capability(struct input_dev *dev, unsigned int type, unsigned int
 		break;
 
 	default:
-		pr_err("%s: unknown type %u (code %u)\n", __func__, type, code);
+		pr_err("input_set_capability: unknown type %u (code %u)\n",
+		       type, code);
 		dump_stack();
 		return;
 	}
@@ -2184,6 +2249,7 @@ static void devm_input_device_unregister(struct device *dev, void *res)
  */
 void input_enable_softrepeat(struct input_dev *dev, int delay, int period)
 {
+	dev->timer.data = (unsigned long) dev;
 	dev->timer.function = input_repeat_key;
 	dev->rep[REP_DELAY] = delay;
 	dev->rep[REP_PERIOD] = period;
@@ -2308,6 +2374,9 @@ int input_register_device(struct input_dev *dev)
 		dev->touch_events->touch_event_num = 0;
 		dev->touch_events->touch_slot = 0;
 		dev->touch_events->finger_bitmap = 0;
+#ifdef CONFIG_TOUCH_COUNT_DUMP
+		touch_info = dev->touch_events;
+#endif
 	}
 #endif
 	return 0;

@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 
@@ -646,9 +654,8 @@ struct adm_cmd_set_pp_params {
 
 #define ASM_STREAM_CMD_REGISTER_PP_EVENTS 0x00013213
 #define ASM_STREAM_PP_EVENT 0x00013214
-#define ASM_STREAM_CMD_REGISTER_IEC_61937_FMT_UPDATE 0x1321C
-#define ASM_IEC_61937_MEDIA_FMT_EVENT 0x1321D
-
+#define ASM_STREAM_CMD_REGISTER_IEC_61937_FMT_UPDATE 0x13333
+#define ASM_IEC_61937_MEDIA_FMT_EVENT 0x13334
 
 #define DSP_STREAM_CMD "ADSP Stream Cmd"
 #define DSP_STREAM_CALLBACK "ADSP Stream Callback Event"
@@ -843,12 +850,6 @@ struct audproc_softvolume_params {
 /* Param ID of Channel Mixer used by AUDPROC_MODULE_ID_MFC */
 #define AUDPROC_CHMIXER_PARAM_ID_COEFF                      0x00010342
 
-/*
- * ID of the Media Format Converter (MFC) module present in EC REF COPP.
- * This module supports the all param IDs supported by AUDPROC_MODULE_ID_MFC.
- */
-#define AUDPROC_MODULE_ID_MFC_EC_REF                        0x0001092C
-
 
 struct adm_cmd_set_pp_params_v5 {
 	struct apr_hdr hdr;
@@ -874,14 +875,11 @@ struct adm_cmd_set_pp_params_v5 {
 	 */
 } __packed;
 
-/* Maximum number of channels supported by MFC media fmt params */
-#define AUDPROC_MFC_OUT_CHANNELS_MAX 8
-
 struct audproc_mfc_param_media_fmt {
 	uint32_t sampling_rate;
 	uint16_t bits_per_sample;
 	uint16_t num_channels;
-	uint16_t channel_type[AUDPROC_MFC_OUT_CHANNELS_MAX];
+	uint16_t channel_type[8];
 } __packed;
 
 struct audproc_volume_ctrl_master_gain {
@@ -1354,10 +1352,7 @@ struct adm_cmd_connect_afe_port_v5 {
 #define INT_FM_TX 0x3005
 #define RT_PROXY_PORT_001_RX	0x2000
 #define RT_PROXY_PORT_001_TX	0x2001
-#define AFE_LOOPBACK_TX	0x6001
 #define DISPLAY_PORT_RX	0x6020
-
-#define AFE_LANE_MASK_INVALID 0
 
 #define AFE_PORT_INVALID 0xFFFF
 #define SLIMBUS_INVALID AFE_PORT_INVALID
@@ -1434,7 +1429,7 @@ struct adm_cmd_connect_afe_port_v5 {
 
 /* End of the range of port IDs for TDM devices. */
 #define AFE_PORT_ID_TDM_PORT_RANGE_END \
-	(AFE_PORT_ID_TDM_PORT_RANGE_START+0x60-1)
+	(AFE_PORT_ID_TDM_PORT_RANGE_START+0x50-1)
 
 /* Size of the range of port IDs for TDM ports. */
 #define AFE_PORT_ID_TDM_PORT_RANGE_SIZE \
@@ -1504,9 +1499,6 @@ struct adm_cmd_connect_afe_port_v5 {
 #define AFE_PORT_ID_SENARY_PCM_RX                0x103E
 /* ID of the senary auxiliary PCM Tx port. */
 #define AFE_PORT_ID_SENARY_PCM_TX                0x103F
-
-#define AFE_PORT_ID_PRIMARY_META_MI2S_RX         0x1300
-#define AFE_PORT_ID_SECONDARY_META_MI2S_RX       0x1302
 
 #define AFE_PORT_ID_PRIMARY_SPDIF_RX             0x5000
 #define AFE_PORT_ID_PRIMARY_SPDIF_TX             0x5001
@@ -1587,9 +1579,6 @@ struct adm_cmd_connect_afe_port_v5 {
 
 /* AFE VA Codec DMA Tx port 1 */
 #define AFE_PORT_ID_VA_CODEC_DMA_TX_1            0xB023
-
-/* AFE VA Codec DMA Tx port 2 */
-#define AFE_PORT_ID_VA_CODEC_DMA_TX_2            0xB025
 
 /* AFE Rx Codec DMA Rx port 0 */
 #define AFE_PORT_ID_RX_CODEC_DMA_RX_0            0xB030
@@ -1832,40 +1821,6 @@ struct adm_cmd_connect_afe_port_v5 {
 	(AFE_PORT_ID_QUINARY_TDM_TX + 0x0C)
 #define AFE_PORT_ID_QUINARY_TDM_TX_7 \
 	(AFE_PORT_ID_QUINARY_TDM_TX + 0x0E)
-
-#define AFE_PORT_ID_SENARY_TDM_RX \
-	(AFE_PORT_ID_TDM_PORT_RANGE_START + 0x50)
-#define AFE_PORT_ID_SENARY_TDM_RX_1 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x02)
-#define AFE_PORT_ID_SENARY_TDM_RX_2 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x04)
-#define AFE_PORT_ID_SENARY_TDM_RX_3 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x06)
-#define AFE_PORT_ID_SENARY_TDM_RX_4 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x08)
-#define AFE_PORT_ID_SENARY_TDM_RX_5 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x0A)
-#define AFE_PORT_ID_SENARY_TDM_RX_6 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x0C)
-#define AFE_PORT_ID_SENARY_TDM_RX_7 \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x0E)
-
-#define AFE_PORT_ID_SENARY_TDM_TX \
-	(AFE_PORT_ID_TDM_PORT_RANGE_START + 0x51)
-#define AFE_PORT_ID_SENARY_TDM_TX_1 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x02)
-#define AFE_PORT_ID_SENARY_TDM_TX_2 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x04)
-#define AFE_PORT_ID_SENARY_TDM_TX_3 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x06)
-#define AFE_PORT_ID_SENARY_TDM_TX_4 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x08)
-#define AFE_PORT_ID_SENARY_TDM_TX_5 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x0A)
-#define AFE_PORT_ID_SENARY_TDM_TX_6 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x0C)
-#define AFE_PORT_ID_SENARY_TDM_TX_7 \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x0E)
 
 #define AFE_PORT_ID_INVALID             0xFFFF
 
@@ -2529,8 +2484,6 @@ struct afe_port_data_cmd_rt_proxy_port_read_v2 {
 #define AFE_MODULE_AUDIO_DEV_INTERFACE    0x0001020C
 #define AFE_PORT_SAMPLE_RATE_8K           8000
 #define AFE_PORT_SAMPLE_RATE_16K          16000
-#define AFE_PORT_SAMPLE_RATE_32K          32000
-#define AFE_PORT_SAMPLE_RATE_44_1K        44100
 #define AFE_PORT_SAMPLE_RATE_48K          48000
 #define AFE_PORT_SAMPLE_RATE_96K          96000
 #define AFE_PORT_SAMPLE_RATE_176P4K       176400
@@ -2542,7 +2495,6 @@ struct afe_port_data_cmd_rt_proxy_port_read_v2 {
 #define AFE_NON_LINEAR_DATA_PACKED_60958 0x3
 #define AFE_GENERIC_COMPRESSED           0x8
 #define AFE_LINEAR_PCM_DATA_PACKED_16BIT 0X6
-#define AFE_DSD_DOP_W_MARKER_DATA        0x9
 
 /* This param id is used to configure I2S interface */
 #define AFE_PARAM_ID_I2S_CONFIG	0x0001020D
@@ -2647,101 +2599,8 @@ struct afe_param_id_i2s_cfg {
  * - #NON_LINEAR_DATA
  * - #LINEAR_PCM_DATA_PACKED_IN_60958
  * - #NON_LINEAR_DATA_PACKED_IN_60958
- * - #AFE_DSD_DOP_W_MARKER_DATA
  */
 		u16                  reserved;
-	/* This field must be set to zero. */
-} __packed;
-
-/* This param id is used to configure META I2S interface */
-#define AFE_PARAM_ID_META_I2S_CONFIG 0x000102C5
-#define AFE_API_VERSION_META_I2S_CONFIG 0x1
-#define MAX_NUM_I2S_META_PORT_MEMBER_PORTS 4
-
-/*  Payload of the #AFE_PARAM_ID_META_I2S_CONFIG
- * command's (I2S configuration
- * parameter).
- */
-struct afe_param_id_meta_i2s_cfg {
-	u32     minor_version;
-/* Minor version used for tracking the version of the I2S
- * configuration interface.
- * Supported values: #AFE_API_VERSION_META_I2S_CONFIG
- */
-
-	u16     bit_width;
-/* Bit width of the sample.
- * Supported values: 16, 24
- */
-
-	u16     ws_src;
-/* Word select source: internal or external.
- * Supported values:
- * - #AFE_PORT_CONFIG_I2S_WS_SRC_EXTERNAL
- * - #AFE_PORT_CONFIG_I2S_WS_SRC_INTERNAL
- */
-
-	u32     sample_rate;
-/* Sampling rate of the port.
- * Supported values:
- * - #AFE_PORT_SAMPLE_RATE_8K
- * - #AFE_PORT_SAMPLE_RATE_16K
- * - #AFE_PORT_SAMPLE_RATE_48K
- * - #AFE_PORT_SAMPLE_RATE_96K
- * - #AFE_PORT_SAMPLE_RATE_192K
- */
-
-	u16     member_port_id[MAX_NUM_I2S_META_PORT_MEMBER_PORTS];
-/* Array of member port IDs in this meta device.
- * Supported values:
- * - #AFE_PORT_ID_PRIMARY_MI2S_RX
- * - #AFE_PORT_ID_SECONDARY_MI2S_RX
- * - #AFE_PORT_ID_TERTIARY_MI2S_RX
- * - #AFE_PORT_ID_QUATERNY_MI2S_RX
- * - #AFE_PORT_ID_INVALID
- *
- * Fill these values from index 0. Set unused index to AFE_PORT_ID_INVALID.
- *
- * Note:
- * the first member port will act as WS master in case
- * meta port ws_src is configured as AFE_PORT_CONFIG_I2S_WS_SRC_INTERNAL.
- * In all other cases member ports will act as slave.
- * This must be considered when HLOS enables the interface clocks
- */
-
-	u16     member_port_channel_mode[MAX_NUM_I2S_META_PORT_MEMBER_PORTS];
-/* I2S lines and multichannel operation per member port.
- * The sequence matches the sequence in member_port_id,
- * value will be ignored if member port is set to AFE_PORT_ID_INVALID
- *
- * Supported values:
- * - #AFE_PORT_I2S_SD0
- * - #AFE_PORT_I2S_SD1
- * - #AFE_PORT_I2S_SD2
- * - #AFE_PORT_I2S_SD3
- * - #AFE_PORT_I2S_QUAD01
- * - #AFE_PORT_I2S_QUAD23
- * - #AFE_PORT_I2S_6CHS
- * - #AFE_PORT_I2S_8CHS
- * - #AFE_PORT_I2S_10CHS
- * - #AFE_PORT_I2S_12CHS
- * - #AFE_PORT_I2S_14CHS
- * - #AFE_PORT_I2S_16CHS
- * - #AFE_PORT_I2S_SD4
- * - #AFE_PORT_I2S_SD5
- * - #AFE_PORT_I2S_SD6
- * - #AFE_PORT_I2S_SD7
- * - #AFE_PORT_I2S_QUAD45
- * - #AFE_PORT_I2S_QUAD67
- * - #AFE_PORT_I2S_8CHS_2
- */
-
-	u16     data_format;
-/* data format
- * Supported values:
- * - #LINEAR_PCM_DATA
- */
-	u16     reserved;
 	/* This field must be set to zero. */
 } __packed;
 
@@ -3286,8 +3145,6 @@ struct afe_param_id_internal_bt_fm_cfg {
 
 #define AFE_PORT_MAX_AUDIO_CHAN_CNT	0x8
 
-#define AFE_PORT_MAX_AUDIO_CHAN_CNT_V2	0x20
-
 /* Payload of the #AFE_PORT_CMD_SLIMBUS_CONFIG command's SLIMbus
  * port configuration parameter.
  */
@@ -3746,10 +3603,6 @@ struct afe_param_id_tdm_cfg {
  */
 #define AFE_API_VERSION_SLOT_MAPPING_CONFIG	0x1
 
-/** Version information used to handle future additions to slot mapping
-*	configuration support 32 channels.
-*/
-#define AFE_API_VERSION_SLOT_MAPPING_CONFIG_V2	0x2
 /* Data align type  */
 #define AFE_SLOT_MAPPING_DATA_ALIGN_MSB		0
 #define AFE_SLOT_MAPPING_DATA_ALIGN_LSB		1
@@ -3799,52 +3652,9 @@ struct afe_param_id_slot_mapping_cfg {
 	 */
 } __packed;
 
-/* Payload of the AFE_PARAM_ID_PORT_SLOT_MAPPING_CONFIG_V2
-*  command's TDM configuration parameter.
-*/
-struct afe_param_id_slot_mapping_cfg_v2 {
-	u32	minor_version;
-	/**< Minor version used for tracking TDM slot configuration.
-	 * @values #AFE_API_VERSION_TDM_SLOT_CONFIG
-	 */
-
-	u16	num_channel;
-	/**< number of channel of the audio sample.
-	* @values 1, 2, 4, 6, 8, 16, 32 @tablebulletend
-	*/
-
-	u16	bitwidth;
-	/**< Slot bit width for each channel
-	* @values 16, 24, 32
-	*/
-
-	u32	data_align_type;
-	/**< indicate how data packed from slot_offset for 32 slot bit width
-	* in case of sample bit width is 24.
-	* @values
-	* #AFE_SLOT_MAPPING_DATA_ALIGN_MSB
-	* #AFE_SLOT_MAPPING_DATA_ALIGN_LSB
-	*/
-
-	u16	offset[AFE_PORT_MAX_AUDIO_CHAN_CNT_V2];
-	/**< Array of the slot mapping start offset in bytes for this frame.
-	* The bytes is counted from 0. The 0 is mapped to the 1st byte
-	* in or out of the digital serial data line this sub-frame belong to.
-	* slot_offset[] setting is per-channel based.
-	* The max num of channel supported is 8.
-	* The valid offset value must always be continuly placed in
-	* from index 0.
-	* Set offset as AFE_SLOT_MAPPING_OFFSET_INVALID for not used arrays.
-	* If "slot_bitwidth_per_channel" is 32 and "sample_bitwidth" is 24,
-	* "data_align_type" is used to indicate how 24 bit sample data in
-	* aligning with 32 bit slot width per-channel.
-	* @values, in byte
-	*/
-} __packed;
-
-/** ID of the parameter used by #AFE_MODULE_TDM to configure
-    the customer TDM header. #AFE_PORT_CMD_SET_PARAM can use this parameter ID.
-*/
+/* ID of the parameter used by #AFE_MODULE_TDM to configure
+ * the customer TDM header. #AFE_PORT_CMD_SET_PARAM can use this parameter ID.
+ */
 #define AFE_PARAM_ID_CUSTOM_TDM_HEADER_CONFIG		0x00010298
 
 /* Version information used to handle future additions to custom TDM header
@@ -3912,7 +3722,6 @@ struct afe_param_id_custom_tdm_header_cfg {
 struct afe_tdm_port_config {
 	struct afe_param_id_tdm_cfg				tdm;
 	struct afe_param_id_slot_mapping_cfg		slot_mapping;
-	struct afe_param_id_slot_mapping_cfg_v2		slot_mapping_v2;
 	struct afe_param_id_custom_tdm_header_cfg	custom_tdm_header;
 } __packed;
 
@@ -3993,7 +3802,6 @@ struct afe_imc_dec_enc_info {
 
 struct afe_abr_dec_cfg_t {
 	struct afe_imc_dec_enc_info imc_info;
-	bool is_abr_enabled;
 } __packed;
 
 struct afe_abr_enc_cfg_t {
@@ -4036,9 +3844,6 @@ struct afe_id_aptx_adaptive_enc_init
 	uint32_t  min_sink_modeC;
 	uint32_t  max_sink_modeC;
 	uint32_t  mode;
-	uint32_t  input_mode;
-	uint32_t  fade_duration;
-	uint8_t   sink_cap[11];
 } __attribute__ ((packed));
 
 /*
@@ -4100,14 +3905,6 @@ struct afe_id_aptx_adaptive_enc_init
 #define AFE_ENCDEC_PARAM_ID_DEC_TO_ENC_COMMUNICATION        0x0001323D
 
 /*
- * This is needed to be used only for SWB voice call use case.
- * This is needed to be issued for each direction (RX AFE and TX AFE)
- * along with AFE_PARAM_ID_PORT_MEDIA_TYPE
- * (Issuing AF_PARAM_ID_RATE_MATCHED_PORT param alone is not useful).
- */
-#define AFE_PARAM_ID_RATE_MATCHED_PORT        0x000102BE
-
-/*
  * Purpose of IMC set up between encoder and decoder.
  * Communication instance and purpose together form the
  * actual key used for IMC registration.
@@ -4129,8 +3926,6 @@ struct afe_id_aptx_adaptive_enc_init
 #define AFE_DECODER_PARAM_ID_DEPACKETIZER_ID        0x00013235
 
 #define CAPI_V2_PARAM_ID_APTX_ENC_SWITCH_TO_MONO    0x0001332A
-
-#define CAPI_V2_PARAM_ID_APTX_AD_ENC_SWITCH_TO_MONO    0x00013354
 
 struct aptx_channel_mode_param_t {
 	u32 channel_mode;
@@ -4349,9 +4144,6 @@ struct asm_aac_enc_cfg_t {
 /* FMT ID for apt-X Adaptive */
 #define ASM_MEDIA_FMT_APTX_ADAPTIVE 0x00013204
 
-/* FMT ID for apt-X Adaptive speech */
-#define ASM_MEDIA_FMT_APTX_AD_SPEECH 0x00013208
-
 #define PCM_CHANNEL_L         1
 #define PCM_CHANNEL_R         2
 #define PCM_CHANNEL_C         3
@@ -4366,22 +4158,6 @@ struct asm_custom_enc_cfg_t {
 	 */
 	uint8_t     channel_mapping[8];
 	uint32_t    custom_size;
-} __packed;
-
-struct asm_aptx_ad_speech_mode_cfg_t
-{
-	uint32_t speech_mode;
-	/*
-	 * speech mode of codec.
-	 *
-	 * @values 0x0(swb), 0x4(sswb)
-	 */
-	 uint32_t swapping;
-	/*
-	 * byte swapping of codec.
-	 *
-	 * @values 0x1, enable swapping
-	 */
 } __packed;
 
 struct asm_aptx_v2_enc_cfg_ext_t {
@@ -4403,19 +4179,6 @@ struct asm_aptx_ad_enc_cfg_t
 	struct asm_custom_enc_cfg_t  custom_cfg;
 	struct afe_id_aptx_adaptive_enc_init aptx_ad_cfg;
 	struct afe_abr_enc_cfg_t abr_cfg;
-} __attribute__ ((packed));
-
-struct asm_aptx_ad_speech_enc_cfg_t
-{
-	struct asm_custom_enc_cfg_t  custom_cfg;
-	struct afe_imc_dec_enc_info imc_info;
-	struct asm_aptx_ad_speech_mode_cfg_t speech_mode;
-} __attribute__ ((packed));
-
-struct afe_matched_port_t
-{
-	uint32_t  minor_version;
-	uint32_t  enable;
 } __attribute__ ((packed));
 
 #define ASM_MEDIA_FMT_CELT 0x00013221
@@ -4580,23 +4343,9 @@ struct afe_port_media_type_t {
  * #ASM_MEDIA_FMT_SBC media format.
  */
 struct asm_sbc_dec_cfg_t {
-	uint16_t          channels;
-	/*
-	 * Number of channels present in the SBC stream.
-	 *
-	 * @values
-	 * - 1 -- Mono
-	 * - 2 -- Stereo
-	 */
-
-	uint32_t          sample_rate;
-	/*
-	 * Number of samples per second.
-	 *
-	 * @values 8000, 11025, 12000, 16000, 22050, 24000, 32000,
-	 *         44100, 48000, 64000, 88200, 96000 Hz
-	 */
+	/* All configuration is extracted from the stream */
 } __packed;
+
 /*
  * Payload of the MP3 decoder configuration parameters in the
  * #ASM_MEDIA_FMT_MP3 media format.
@@ -4681,23 +4430,6 @@ struct asm_aac_dec_cfg_v2_t {
 	 */
 } __packed;
 
-/*
- * Payload of the APTX AD decoder configuration parameters in the
- * #ASM_MEDIA_FMT_APTX_ADAPTIVE media format.
- */
-struct asm_aptx_ad_dec_cfg_t {
-	uint32_t          sample_rate;
-	/*
-	 * Number of samples per second.
-	 *
-	 * @values 0x0(48000Hz), 0x1(44100Hz)
-	 */
-} __packed;
-
-struct asm_aptx_ad_speech_dec_cfg_t {
-	struct asm_aptx_ad_speech_mode_cfg_t speech_mode;
-};
-
 union afe_enc_config_data {
 	struct asm_sbc_enc_cfg_t sbc_config;
 	struct asm_aac_enc_cfg_t aac_config;
@@ -4706,7 +4438,6 @@ union afe_enc_config_data {
 	struct asm_aptx_enc_cfg_t  aptx_config;
 	struct asm_ldac_enc_cfg_t  ldac_config;
 	struct asm_aptx_ad_enc_cfg_t  aptx_ad_config;
-	struct asm_aptx_ad_speech_enc_cfg_t aptx_ad_speech_config;
 };
 
 struct afe_enc_config {
@@ -4720,8 +4451,6 @@ union afe_dec_config_data {
 	struct asm_sbc_dec_cfg_t sbc_config;
 	struct asm_aac_dec_cfg_v2_t aac_config;
 	struct asm_mp3_dec_cfg_t mp3_config;
-	struct asm_aptx_ad_dec_cfg_t aptx_ad_config;
-	struct asm_aptx_ad_speech_dec_cfg_t aptx_ad_speech_config;
 };
 
 struct afe_dec_config {
@@ -4736,14 +4465,6 @@ struct afe_enc_cfg_blk_param_t {
 	 *Size of the encoder configuration block that follows this member
 	 */
 	union afe_enc_config_data enc_blk_config;
-};
-
-struct afe_enc_aptx_ad_speech_cfg_blk_param_t {
-	uint32_t enc_cfg_blk_size;
-	/*
-	 * Size of the encoder configuration block that follows this member
-	 */
-	struct asm_custom_enc_cfg_t custom_cfg;
 };
 
 /*
@@ -4832,18 +4553,6 @@ struct avs_dec_congestion_buffer_param_t {
  * This parameter cannot be set at runtime.
  */
 #define AVS_DECODER_PARAM_ID_DEC_MEDIA_FMT 0x00013232
-
-/*
- * ID of the parameter used by #AVS_MODULE_ID_DECODER to configure
- * the decoder mode of adaptive speech and byte swap mode
- */
-#define AVS_DECODER_PARAM_ID_APTX_AD_SPEECH_DEC_INIT 0x0001334D
-
-/*
- * ID of the parameter used by #AVS_MODULE_ID_ENCODER to configure
- * the encoder mode of adaptive speech and byte swap mode
- */
-#define AVS_DECODER_PARAM_ID_APTX_AD_SPEECH_ENC_INIT 0x0001332B
 
 /* ID of the parameter used by #AFE_MODULE_AUDIO_DEV_INTERFACE to configure
  * the island mode for a given AFE port.
@@ -4941,7 +4650,6 @@ struct afe_param_id_cdc_dma_cfg_t {
 union afe_port_config {
 	struct afe_param_id_pcm_cfg               pcm;
 	struct afe_param_id_i2s_cfg               i2s;
-	struct afe_param_id_meta_i2s_cfg          meta_i2s;
 	struct afe_param_id_hdmi_multi_chan_audio_cfg hdmi_multi_ch;
 	struct afe_param_id_slimbus_cfg           slim_sch;
 	struct afe_param_id_rt_proxy_port_cfg     rtproxy;
@@ -5368,7 +5076,7 @@ struct afe_param_id_lpass_core_shared_clk_cfg {
 #define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_DTS_HPX		0x10015002
 #define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_AUDIOSPHERE	0x10028000
 #define VPM_TX_DM_FLUENCE_EF_COPP_TOPOLOGY		0x10000005
-#define ADM_TOPOLOGY_ID_AUDIO_RX_FVSAM			0x1000FFF0
+#define ADM_TOPOLOGY_ID_AUDIO_RX_FVSAM          0x1000FFF0
 
 /* Memory map regions command payload used by the
  * #ASM_CMD_SHARED_MEM_MAP_REGIONS ,#ADM_CMD_SHARED_MEM_MAP_REGIONS
@@ -5683,7 +5391,7 @@ struct asm_softvolume_params {
 #define PCM_CHANNEL_RB   9
 
 /* Top surround channel. */
-#define PCM_CHANNEL_TS   10
+#define PCM_CHANNELS   10
 
 /* Center vertical height channel.*/
 #define PCM_CHANNEL_CVH  11
@@ -5760,32 +5468,13 @@ struct asm_softvolume_params {
 /* Left side direct channel. */
 #define PCM_CHANNEL_LSD  33
 
-/* Right side direct channel. */
+/* Right side direct channel. Update PCM_MAX_CHMAP_ID when
+ * this list is extended.
+ */
 #define PCM_CHANNEL_RSD  34
 
-/* Mark unused channel. */
-#define PCM_CHANNEL_UNUSED  47
-
-#define PCM_CUSTOM_CHANNEL_MAP_1   48
-#define PCM_CUSTOM_CHANNEL_MAP_2   49
-#define PCM_CUSTOM_CHANNEL_MAP_3   50
-#define PCM_CUSTOM_CHANNEL_MAP_4   51
-#define PCM_CUSTOM_CHANNEL_MAP_5   52
-#define PCM_CUSTOM_CHANNEL_MAP_6   53
-#define PCM_CUSTOM_CHANNEL_MAP_7   54
-#define PCM_CUSTOM_CHANNEL_MAP_8   55
-#define PCM_CUSTOM_CHANNEL_MAP_9   56
-#define PCM_CUSTOM_CHANNEL_MAP_10  57
-#define PCM_CUSTOM_CHANNEL_MAP_11  58
-#define PCM_CUSTOM_CHANNEL_MAP_12  59
-#define PCM_CUSTOM_CHANNEL_MAP_13  60
-#define PCM_CUSTOM_CHANNEL_MAP_14  61
-#define PCM_CUSTOM_CHANNEL_MAP_15  62
-#define PCM_CUSTOM_CHANNEL_MAP_16  63
-#define PCM_MAX_CHANNEL_MAP   63
-
 /* Max valid channel map index */
-#define PCM_MAX_CHMAP_ID PCM_MAX_CHANNEL_MAP
+#define PCM_MAX_CHMAP_ID PCM_CHANNEL_RSD
 
 #define PCM_FORMAT_MAX_NUM_CHANNEL  8
 #define PCM_FORMAT_MAX_CHANNELS_9   9
@@ -5916,7 +5605,7 @@ struct asm_multi_channel_pcm_fmt_blk_v2 {
  * - #PCM_CHANNEL_CS
  * - #PCM_CHANNEL_LB
  * - #PCM_CHANNEL_RB
- * - #PCM_CHANNEL_TS
+ * - #PCM_CHANNELS
  * - #PCM_CHANNEL_CVH
  * - #PCM_CHANNEL_MS
  * - #PCM_CHANNEL_FLC
@@ -9850,7 +9539,7 @@ struct asm_volume_ctrl_channeltype_gain_pair {
 	 * - #PCM_CHANNEL_CS
 	 * - #PCM_CHANNEL_LB
 	 * - #PCM_CHANNEL_RB
-	 * - #PCM_CHANNEL_TS
+	 * - #PCM_CHANNELS
 	 * - #PCM_CHANNEL_CVH
 	 * - #PCM_CHANNEL_MS
 	 * - #PCM_CHANNEL_FLC
@@ -9922,7 +9611,7 @@ struct asm_volume_ctrl_channelype_mute_pair {
  * - #PCM_CHANNEL_CS
  * - #PCM_CHANNEL_LB
  * - #PCM_CHANNEL_RB
- * - #PCM_CHANNEL_TS
+ * - #PCM_CHANNELS
  * - #PCM_CHANNEL_CVH
  * - #PCM_CHANNEL_MS
  * - #PCM_CHANNEL_FLC
@@ -11585,10 +11274,6 @@ enum afe_lpass_clk_mode {
 #define Q6AFE_LPASS_CLK_ID_QUIN_TDM_EBIT                          0x209
 /** Clock ID for Quinary TDM OSR */
 #define Q6AFE_LPASS_CLK_ID_QUIN_TDM_OSR                           0x20A
-/** Clock ID for Senary TDM IBIT */
-#define Q6AFE_LPASS_CLK_ID_SEN_TDM_IBIT                           0x20B
-/** Clock ID for Senary TDM EBIT */
-#define Q6AFE_LPASS_CLK_ID_SEN_TDM_EBIT                           0x20C
 
 /* Clock ID for MCLK1 */
 #define Q6AFE_LPASS_CLK_ID_MCLK_1                                 0x300
@@ -11688,7 +11373,7 @@ struct afe_clk_set {
 	 * for enable and disable clock.
 	 *	"clk_freq_in_hz", "clk_attri", and "clk_root"
 	 *	are ignored in disable clock case.
-	 *	@values 
+	 *	@values?
 	 *	- 0 -- Disabled
 	 *	- 1 -- Enabled  @tablebulletend
 	 */
@@ -11981,10 +11666,6 @@ struct afe_group_device_group_cfg {
 	(AFE_PORT_ID_QUINARY_TDM_RX + 0x100)
 #define AFE_GROUP_DEVICE_ID_QUINARY_TDM_TX \
 	(AFE_PORT_ID_QUINARY_TDM_TX + 0x100)
-#define AFE_GROUP_DEVICE_ID_SENARY_TDM_RX \
-	(AFE_PORT_ID_SENARY_TDM_RX + 0x100)
-#define AFE_GROUP_DEVICE_ID_SENARY_TDM_TX \
-	(AFE_PORT_ID_SENARY_TDM_TX + 0x100)
 
 /* ID of the parameter used by #AFE_MODULE_GROUP_DEVICE to configure the
  * group device. #AFE_SVC_CMD_SET_PARAM can use this parameter ID.
@@ -12617,7 +12298,6 @@ struct adm_set_compressed_device_latency {
 #define MAX_SECTORS                                         8
 #define MAX_NOISE_SOURCE_INDICATORS                         3
 #define MAX_POLAR_ACTIVITY_INDICATORS                       360
-#define MAX_DOA_TRACKING_ANGLES                             2
 
 struct sound_focus_param {
 	uint16_t start_angle[MAX_SECTORS];
@@ -12629,12 +12309,6 @@ struct source_tracking_param {
 	uint8_t vad[MAX_SECTORS];
 	uint16_t doa_speech;
 	uint16_t doa_noise[MAX_NOISE_SOURCE_INDICATORS];
-	uint8_t polar_activity[MAX_POLAR_ACTIVITY_INDICATORS];
-} __packed;
-
-struct doa_tracking_mon_param {
-	uint16_t target_angle_L16[MAX_DOA_TRACKING_ANGLES];
-	uint16_t interf_angle_L16[MAX_DOA_TRACKING_ANGLES];
 	uint8_t polar_activity[MAX_POLAR_ACTIVITY_INDICATORS];
 } __packed;
 
@@ -12652,18 +12326,6 @@ struct adm_param_fluence_sourcetracking_t {
 	uint8_t polar_activity[MAX_POLAR_ACTIVITY_INDICATORS];
 } __packed;
 
-struct adm_param_doa_tracking_mon_t {
-	uint16_t target_angle_L16[MAX_DOA_TRACKING_ANGLES];
-	uint16_t interf_angle_L16[MAX_DOA_TRACKING_ANGLES];
-	uint8_t polar_activity[MAX_POLAR_ACTIVITY_INDICATORS];
-} __packed;
-
-struct afe_doa_tracking_mon_get_param_resp {
-	uint32_t status;
-	struct param_hdr_v3 pdata;
-	struct doa_tracking_mon_param doa;
-} __packed;
-
 #define AUDPROC_MODULE_ID_AUDIOSPHERE               0x00010916
 #define AUDPROC_PARAM_ID_AUDIOSPHERE_ENABLE         0x00010917
 #define AUDPROC_PARAM_ID_AUDIOSPHERE_STRENGTH       0x00010918
@@ -12678,11 +12340,6 @@ struct afe_doa_tracking_mon_get_param_resp {
 
 #define AUDPROC_MODULE_ID_VOICE_TX_SECNS   0x10027059
 #define AUDPROC_PARAM_IDX_SEC_PRIMARY_MIC_CH 0x10014444
-
-#define AUDPROC_MODULE_ID_FFECNS 0x00010952
-#define AUDPROC_MODULE_ID_FFNS 0x00010962
-#define AUDPROC_PARAM_ID_FFV_DOA_TRACKING_PARAM 0x0001097C
-#define AUDPROC_PARAM_ID_FFV_DOA_TRACKING_MONITOR 0x0001097D
 
 struct admx_sec_primary_mic_ch {
 	uint16_t version;
@@ -12726,36 +12383,5 @@ struct afe_param_id_vad_cfg_t {
 } __packed;
 
 #define AFE_PARAM_ID_VAD_CORE_CFG                              0x000102BB
-
-/**
- * This parameter is should be used to configure the AFE TDM
- * interface lane configuration.
- * Regular TDM interface ports:
- * This parameter ID must be used with module ID
- * AFE_MODULE_AUDIO_DEV_INTERFACE and set using the AFE_PORT_CMD_SET_PARAM_V3
- * command for the AFE TDM interface port IDs.
- * Group device TDM interface ports:
- * This parameter ID must be used with module ID AFE_MODULE_GROUP_DEVICE
- * and set using the AFE_SVC_CMD_SET_PARAM_V2 command for the AFE TDM group IDs.
- */
-#define AFE_PARAM_ID_TDM_LANE_CONFIG                           0x000102C1
-
-/* Payload of the AFE_PARAM_ID_TDM_LANE_CONFIG parameter used by
- * AFE_MODULE_AUDIO_DEV_INTERFACE.
- */
-struct afe_param_id_tdm_lane_cfg {
-	uint16_t port_id;
-	/** ID of the TDM interface.
-	 * For regular TDM interfaces value corresponds to valid port ID.
-	 * For group devices TDM interface value corresponds to valid group device ID.
-	 */
-
-	uint16_t lane_mask;
-	/** Position of the active lanes. Bits 0 to N correspond to lanes 0 to N.
-	 * 1 to 2^N-1 When a bit is set, the corresponding lane is active.
-	 * The number of active lanes can be inferred from the number of bits
-	 * set in the mask.
-	 */
-};
 
 #endif /*_APR_AUDIO_V2_H_ */

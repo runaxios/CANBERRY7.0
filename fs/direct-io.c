@@ -37,6 +37,7 @@
 #include <linux/uio.h>
 #include <linux/atomic.h>
 #include <linux/prefetch.h>
+#define __FS_HAS_ENCRYPTION IS_ENABLED(CONFIG_F2FS_FS_ENCRYPTION)
 #include <linux/fscrypt.h>
 
 /*
@@ -316,7 +317,8 @@ static ssize_t dio_complete(struct dio *dio, ssize_t ret, unsigned int flags)
 			dio_warn_stale_pagecache(dio->iocb->ki_filp);
 	}
 
-	inode_dio_end(dio->inode);
+	if (!(dio->flags & DIO_SKIP_DIO_COUNT))
+		inode_dio_end(dio->inode);
 
 	if (flags & DIO_COMPLETE_ASYNC) {
 		/*
@@ -433,8 +435,8 @@ dio_bio_alloc(struct dio *dio, struct dio_submit *sdio,
 	struct bio *bio;
 
 	/*
-	 * bio_alloc() is guaranteed to return a bio when allowed to sleep and
-	 * we request a valid number of vectors.
+	 * bio_alloc() is guaranteed to return a bio when called with
+	 * __GFP_RECLAIM and we request a valid number of vectors.
 	 */
 	bio = bio_alloc(GFP_KERNEL, nr_vecs);
 
@@ -495,7 +497,7 @@ static inline void dio_bio_submit(struct dio *dio, struct dio_submit *sdio)
 	bio->bi_dio_inode = dio->inode;
 
 /* iv sector for security/pfe/pfk_fscrypt.c and f2fs in fs/f2fs/f2fs.h */
-#define PG_DUN_NEW(i, p)                                            \
+#define PG_DUN_NEW(i,p)                                            \
 	(((((u64)(i)->i_ino) & 0xffffffff) << 32) | ((p) & 0xffffffff))
 
 	if (is_inode_filesystem_type(dio->inode, "f2fs"))
@@ -558,7 +560,7 @@ static struct bio *dio_await_one(struct dio *dio)
 		dio->waiter = current;
 		spin_unlock_irqrestore(&dio->bio_lock, flags);
 		if (!(dio->iocb->ki_flags & IOCB_HIPRI) ||
-		    !blk_poll(dio->bio_disk->queue, dio->bio_cookie))
+		    !blk_mq_poll(dio->bio_disk->queue, dio->bio_cookie))
 			io_schedule();
 		/* wake up sets us TASK_RUNNING */
 		spin_lock_irqsave(&dio->bio_lock, flags);
@@ -1214,13 +1216,13 @@ do_blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
 		      get_block_t get_block, dio_iodone_t end_io,
 		      dio_submit_t submit_io, int flags)
 {
-	unsigned i_blkbits = READ_ONCE(inode->i_blkbits);
+	unsigned i_blkbits = ACCESS_ONCE(inode->i_blkbits);
 	unsigned blkbits = i_blkbits;
 	unsigned blocksize_mask = (1 << blkbits) - 1;
 	ssize_t retval = -EINVAL;
-	const size_t count = iov_iter_count(iter);
+	size_t count = iov_iter_count(iter);
 	loff_t offset = iocb->ki_pos;
-	const loff_t end = offset + count;
+	loff_t end = offset + count;
 	struct dio *dio;
 	struct dio_submit sdio = { 0, };
 	struct buffer_head map_bh = { 0, };
@@ -1241,7 +1243,7 @@ do_blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
 	}
 
 	/* watch out for a 0 len io from a tricksy fs */
-	if (iov_iter_rw(iter) == READ && !count)
+	if (iov_iter_rw(iter) == READ && !iov_iter_count(iter))
 		return 0;
 
 	dio = kmem_cache_alloc(dio_cache, GFP_KERNEL);
@@ -1292,7 +1294,8 @@ do_blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
 	 */
 	if (is_sync_kiocb(iocb))
 		dio->is_async = false;
-	else if (iov_iter_rw(iter) == WRITE && end > i_size_read(inode))
+	else if (!(dio->flags & DIO_ASYNC_EXTEND) &&
+		 iov_iter_rw(iter) == WRITE && end > i_size_read(inode))
 		dio->is_async = false;
 	else
 		dio->is_async = true;
@@ -1336,7 +1339,8 @@ do_blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
 	/*
 	 * Will be decremented at I/O completion time.
 	 */
-	inode_dio_begin(inode);
+	if (!(dio->flags & DIO_SKIP_DIO_COUNT))
+		inode_dio_begin(inode);
 
 	retval = 0;
 	sdio.blkbits = blkbits;
@@ -1356,7 +1360,8 @@ do_blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
 
 	dio->should_dirty = (iter->type == ITER_IOVEC);
 	sdio.iter = iter;
-	sdio.final_block_in_request = end >> blkbits;
+	sdio.final_block_in_request =
+		(offset + iov_iter_count(iter)) >> blkbits;
 
 	/*
 	 * In case of non-aligned buffers, we may need 2 more

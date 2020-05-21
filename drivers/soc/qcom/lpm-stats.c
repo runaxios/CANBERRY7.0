@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
-/*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -45,19 +52,6 @@ struct level_stats {
 static struct level_stats suspend_time_stats;
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct lpm_stats, cpu_stats);
-
-bool str_is_reset(const char __user *in, size_t count)
-{
-	loff_t ppos = 0;
-	char buffer[64] = { 0 };
-	int ret = simple_write_to_buffer(buffer, sizeof(buffer) - 1,
-					 &ppos, in, count - 1);
-
-	if (ret > 0)
-		return strcmp(buffer, lpm_stats_reset) ? false : true;
-
-	return false;
-}
 
 static uint64_t get_total_sleep_time(unsigned int cpu_id)
 {
@@ -109,15 +103,25 @@ static void level_stats_print(struct seq_file *m, struct level_stats *stats)
 {
 	int i = 0;
 	int64_t bucket_time = 0;
+	char seqs[MAX_STR_LEN] = {0};
 	uint64_t s = stats->total_time;
 	uint32_t ns = do_div(s, NSEC_PER_SEC);
 
-	seq_printf(m, "[%s] %s:\n success count: %7d\n"
-		"total success time: %lld.%09u\n",
-		stats->owner->name, stats->name, stats->success_count, s, ns);
+	snprintf(seqs, MAX_STR_LEN,
+		"[%s] %s:\n"
+		"  success count: %7d\n"
+		"  total success time: %lld.%09u\n",
+		stats->owner->name,
+		stats->name,
+		stats->success_count,
+		s, ns);
+	seq_puts(m, seqs);
 
-	if (stats->failed_count)
-		seq_printf(m, "  failed count: %7d\n", stats->failed_count);
+	if (stats->failed_count) {
+		snprintf(seqs, MAX_STR_LEN, "  failed count: %7d\n",
+			stats->failed_count);
+		seq_puts(m, seqs);
+	}
 
 	bucket_time = stats->first_bucket_time;
 	for (i = 0;
@@ -125,21 +129,30 @@ static void level_stats_print(struct seq_file *m, struct level_stats *stats)
 		i++) {
 		s = bucket_time;
 		ns = do_div(s, NSEC_PER_SEC);
-		seq_printf(m, "\t<%6lld.%09u: %7d (%lld-%lld)\n",
+		snprintf(seqs, MAX_STR_LEN,
+			"\t<%6lld.%09u: %7d (%lld-%lld)\n",
 			s, ns, stats->bucket[i],
-			stats->min_time[i],
-			stats->max_time[i]);
+				stats->min_time[i],
+				stats->max_time[i]);
+		seq_puts(m, seqs);
 		bucket_time <<= CONFIG_MSM_IDLE_STATS_BUCKET_SHIFT;
 	}
-	seq_printf(m, "\t>=%5lld.%09u:%8d (%lld-%lld)\n",
+	snprintf(seqs, MAX_STR_LEN,
+		"\t>=%5lld.%09u:%8d (%lld-%lld)\n",
 		s, ns, stats->bucket[i],
 		stats->min_time[i],
 		stats->max_time[i]);
+	seq_puts(m, seqs);
 }
 
 static int level_stats_file_show(struct seq_file *m, void *v)
 {
-	struct level_stats *stats = (struct level_stats *) m->private;
+	struct level_stats *stats = NULL;
+
+	if (!m->private)
+		return -EINVAL;
+
+	stats = (struct level_stats *) m->private;
 
 	level_stats_print(m, stats);
 
@@ -201,6 +214,11 @@ static int lpm_stats_file_show(struct seq_file *m, void *v)
 {
 	struct lpm_stats *stats = (struct lpm_stats *)m->private;
 
+	if (!m->private) {
+		pr_err("%s: Invalid pdata, Cannot print stats\n", __func__);
+		return -EINVAL;
+	}
+
 	level_stats_print_all(m, stats);
 	level_stats_print(m, &suspend_time_stats);
 
@@ -215,13 +233,25 @@ static int lpm_stats_file_open(struct inode *inode, struct file *file)
 static ssize_t level_stats_file_write(struct file *file,
 	const char __user *buffer, size_t count, loff_t *off)
 {
+	char buf[MAX_STR_LEN] = {0};
 	struct inode *in = file->f_inode;
 	struct level_stats *stats = (struct level_stats *)in->i_private;
+	size_t len = strnlen(lpm_stats_reset, MAX_STR_LEN);
 
-	if (!str_is_reset(buffer, count))
+	if (!stats)
+		return -EINVAL;
+
+	if (count != len+1)
+		return -EINVAL;
+
+	if (copy_from_user(buf, buffer, len))
+		return -EFAULT;
+
+	if (strcmp(buf, lpm_stats_reset))
 		return -EINVAL;
 
 	level_stats_reset(stats);
+
 	return count;
 }
 
@@ -237,10 +267,21 @@ static void reset_cpu_stats(void *info)
 static ssize_t lpm_stats_file_write(struct file *file,
 	const char __user *buffer, size_t count, loff_t *off)
 {
+	char buf[MAX_STR_LEN] = {0};
 	struct inode *in = file->f_inode;
 	struct lpm_stats *stats = (struct lpm_stats *)in->i_private;
+	size_t len = strnlen(lpm_stats_reset, MAX_STR_LEN);
 
-	if (!str_is_reset(buffer, count))
+	if (!stats)
+		return -EINVAL;
+
+	if (count != len+1)
+		return -EINVAL;
+
+	if (copy_from_user(buf, buffer, len))
+		return -EFAULT;
+
+	if (strcmp(buf, lpm_stats_reset))
 		return -EINVAL;
 
 	level_stats_reset_all(stats);
@@ -256,22 +297,32 @@ static ssize_t lpm_stats_file_write(struct file *file,
 
 int lifo_stats_file_show(struct seq_file *m, void *v)
 {
-	struct lpm_stats *stats = (struct lpm_stats *)m->private;
+	struct lpm_stats *stats = NULL;
 	struct list_head *centry = NULL;
 	struct lpm_stats *pos = NULL;
+	char seqs[MAX_STR_LEN] = {0};
+
+	if (!m->private)
+		return -EINVAL;
+
+	stats = (struct lpm_stats *)m->private;
 
 	if (list_empty(&stats->child)) {
-		pr_err("%s: ERROR: Lifo level with no children\n",
+		pr_err("%s: ERROR: Lifo level with no children.\n",
 			__func__);
 		return -EINVAL;
 	}
 
 	centry = &stats->child;
 	list_for_each_entry(pos, centry, sibling) {
-		seq_printf(m, "%s:\n\tLast-In:%u\n\tFirst-Out:%u\n",
+		snprintf(seqs, MAX_STR_LEN,
+			"%s:\n"
+			"\tLast-In:%u\n"
+			"\tFirst-Out:%u\n",
 			pos->name,
 			pos->lifo.last_in,
 			pos->lifo.first_out);
+		seq_puts(m, seqs);
 	}
 	return 0;
 }
@@ -298,10 +349,21 @@ static void lifo_stats_reset_all(struct lpm_stats *stats)
 static ssize_t lifo_stats_file_write(struct file *file,
 	const char __user *buffer, size_t count, loff_t *off)
 {
+	char buf[MAX_STR_LEN] = {0};
 	struct inode *in = file->f_inode;
 	struct lpm_stats *stats = (struct lpm_stats *)in->i_private;
+	size_t len = strnlen(lpm_stats_reset, MAX_STR_LEN);
 
-	if (!str_is_reset(buffer, count))
+	if (!stats)
+		return -EINVAL;
+
+	if (count != len+1)
+		return -EINVAL;
+
+	if (copy_from_user(buf, buffer, len))
+		return -EFAULT;
+
+	if (strcmp(buf, lpm_stats_reset))
 		return -EINVAL;
 
 	lifo_stats_reset_all(stats);
@@ -351,6 +413,7 @@ static void update_last_in_stats(struct lpm_stats *stats)
 			return;
 		}
 	}
+	WARN(1, "Should not reach here\n");
 }
 
 static void update_first_out_stats(struct lpm_stats *stats)
@@ -368,6 +431,7 @@ static void update_first_out_stats(struct lpm_stats *stats)
 			return;
 		}
 	}
+	WARN(1, "Should not reach here\n");
 }
 
 static inline void update_exit_stats(struct lpm_stats *stats, uint32_t index,
@@ -398,7 +462,7 @@ static int config_level(const char *name, const char **levels,
 	INIT_LIST_HEAD(&stats->sibling);
 	INIT_LIST_HEAD(&stats->child);
 
-	stats->time_stats = kcalloc(num_levels, sizeof(*stats->time_stats),
+	stats->time_stats = kcalloc(num_levels, sizeof(struct level_stats),
 					GFP_KERNEL);
 	if (!stats->time_stats)
 		return -ENOMEM;
@@ -454,7 +518,7 @@ static ssize_t total_sleep_time_show(struct kobject *kobj,
 	unsigned int cpu = cpu_sleep_time->cpu;
 	uint64_t total_time = get_total_sleep_time(cpu);
 
-	return scnprintf(buf, MAX_TIME_LEN, "%llu.%09u\n", total_time,
+	return snprintf(buf, MAX_TIME_LEN, "%llu.%09u\n", total_time,
 			do_div(total_time, NSEC_PER_SEC));
 }
 
@@ -468,7 +532,7 @@ static struct kobject *local_module_kobject(void)
 		int err;
 		struct module_kobject *mk;
 
-		mk = kcalloc(1, sizeof(*mk), GFP_KERNEL);
+		mk = kzalloc(sizeof(*mk), GFP_KERNEL);
 		if (!mk)
 			return ERR_PTR(-ENOMEM);
 
@@ -498,7 +562,7 @@ static int create_sysfs_node(unsigned int cpu, struct lpm_stats *stats)
 	struct kobject *cpu_kobj = NULL;
 	struct lpm_sleep_time *ts = NULL;
 	struct kobject *stats_kobj;
-	char cpu_name[10] = { 0 };
+	char cpu_name[] = "cpuXX";
 	int ret = -ENOMEM;
 
 	stats_kobj = local_module_kobject();
@@ -511,7 +575,7 @@ static int create_sysfs_node(unsigned int cpu, struct lpm_stats *stats)
 	if (!cpu_kobj)
 		return -ENOMEM;
 
-	ts = kcalloc(1, sizeof(*ts), GFP_KERNEL);
+	ts = kzalloc(sizeof(*ts), GFP_KERNEL);
 	if (!ts)
 		goto failed;
 
@@ -547,10 +611,10 @@ static struct lpm_stats *config_cpu_level(const char *name,
 
 	for_each_cpu(cpu, mask) {
 		int ret = 0;
-		char cpu_name[16] = { 0 };
+		char cpu_name[MAX_STR_LEN] = {0};
 
 		stats = &per_cpu(cpu_stats, cpu);
-		snprintf(cpu_name, sizeof(cpu_name), "%s%d", name, cpu);
+		snprintf(cpu_name, MAX_STR_LEN, "%s%d", name, cpu);
 		cpumask_set_cpu(cpu, &stats->mask);
 
 		stats->is_cpu = true;
@@ -597,7 +661,7 @@ static struct lpm_stats *config_cluster_level(const char *name,
 	struct lpm_stats *stats = NULL;
 	int ret = 0;
 
-	stats = kcalloc(1, sizeof(*stats), GFP_KERNEL);
+	stats = kzalloc(sizeof(struct lpm_stats), GFP_KERNEL);
 	if (!stats)
 		return ERR_PTR(-ENOMEM);
 
@@ -684,7 +748,9 @@ struct lpm_stats *lpm_stats_config_level(const char *name,
 	struct lpm_stats *stats = NULL;
 
 	if (!levels || num_levels <= 0 || IS_ERR(parent)) {
-		pr_err("%s: Invalid input\n", __func__);
+		pr_err("%s: Invalid input\n\t\tlevels = %p\n\t\t"
+			"num_levels = %d\n\t\tparent = %ld\n",
+			__func__, levels, num_levels, PTR_ERR(parent));
 		return ERR_PTR(-EINVAL);
 	}
 

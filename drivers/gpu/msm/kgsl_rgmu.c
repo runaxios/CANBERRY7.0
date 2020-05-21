@@ -1,18 +1,25 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
-#include <linux/clk-provider.h>
-#include <linux/delay.h>
+#include <linux/device.h>
 #include <linux/io.h>
-#include <linux/of.h>
 #include <linux/of_platform.h>
-#include <linux/regulator/consumer.h>
+#include <linux/clk-provider.h>
 
-#include "adreno.h"
 #include "kgsl_device.h"
 #include "kgsl_rgmu.h"
+#include "kgsl_gmu_core.h"
+#include "kgsl_trace.h"
+#include "adreno.h"
 
 #define RGMU_CLK_FREQ 200000000
 
@@ -127,7 +134,7 @@ static void rgmu_disable_clks(struct kgsl_device *device)
 	int j = 0, ret;
 
 	/* Check GX GDSC is status */
-	if (gmu_dev_ops->gx_is_on(device)) {
+	if (gmu_dev_ops->gx_is_on(ADRENO_DEVICE(device))) {
 
 		if (IS_ERR_OR_NULL(rgmu->gx_gdsc))
 			return;
@@ -147,7 +154,7 @@ static void rgmu_disable_clks(struct kgsl_device *device)
 			dev_err(&rgmu->pdev->dev,
 					"Fail to disable gx gdsc:%d\n", ret);
 
-		if (gmu_dev_ops->gx_is_on(device))
+		if (gmu_dev_ops->gx_is_on(ADRENO_DEVICE(device)))
 			dev_err(&rgmu->pdev->dev, "gx is stuck on\n");
 	}
 
@@ -275,16 +282,17 @@ static void rgmu_snapshot(struct kgsl_device *device)
 /* Caller shall ensure GPU is ready for SLUMBER */
 static void rgmu_stop(struct kgsl_device *device)
 {
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct gmu_dev_ops *gmu_dev_ops = GMU_DEVICE_OPS(device);
 
 	if (!test_bit(GMU_CLK_ON, &device->gmu_core.flags))
 		return;
 
 	/* Wait for the lowest idle level we requested */
-	if (gmu_dev_ops->wait_for_lowest_idle(device))
+	if (gmu_dev_ops->wait_for_lowest_idle(adreno_dev))
 		goto error;
 
-	gmu_dev_ops->rpmh_gpu_pwrctrl(device,
+	gmu_dev_ops->rpmh_gpu_pwrctrl(adreno_dev,
 			GMU_NOTIFY_SLUMBER, 0, 0);
 
 	gmu_dev_ops->irq_disable(device);
@@ -396,7 +404,8 @@ static int rgmu_suspend(struct kgsl_device *device)
 
 	gmu_dev_ops->irq_disable(device);
 
-	if (gmu_dev_ops->rpmh_gpu_pwrctrl(device, GMU_SUSPEND, 0, 0))
+	if (gmu_dev_ops->rpmh_gpu_pwrctrl(ADRENO_DEVICE(device),
+				GMU_SUSPEND, 0, 0))
 		return -EINVAL;
 
 	rgmu_disable_clks(device);
@@ -422,7 +431,7 @@ static int rgmu_start(struct kgsl_device *device)
 		rgmu_enable_gdsc(rgmu);
 		rgmu_enable_clks(device);
 		gmu_dev_ops->irq_enable(device);
-		ret = gmu_dev_ops->rpmh_gpu_pwrctrl(device,
+		ret = gmu_dev_ops->rpmh_gpu_pwrctrl(ADRENO_DEVICE(device),
 				GMU_FW_START, GMU_COLD_BOOT, 0);
 		if (ret)
 			goto error_rgmu;

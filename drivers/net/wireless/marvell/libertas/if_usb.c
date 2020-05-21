@@ -49,8 +49,7 @@ static const struct lbs_fw_table fw_table[] = {
 	{ MODEL_8388, "libertas/usb8388_v5.bin", NULL },
 	{ MODEL_8388, "libertas/usb8388.bin", NULL },
 	{ MODEL_8388, "usb8388.bin", NULL },
-	{ MODEL_8682, "libertas/usb8682.bin", NULL },
-	{ 0, NULL, NULL }
+	{ MODEL_8682, "libertas/usb8682.bin", NULL }
 };
 
 static const struct usb_device_id if_usb_table[] = {
@@ -162,9 +161,9 @@ static void if_usb_setup_firmware(struct lbs_private *priv)
 	}
 }
 
-static void if_usb_fw_timeo(struct timer_list *t)
+static void if_usb_fw_timeo(unsigned long priv)
 {
-	struct if_usb_card *cardp = from_timer(cardp, t, fw_timeout);
+	struct if_usb_card *cardp = (void *)priv;
 
 	if (cardp->fwdnldover) {
 		lbs_deb_usb("Download complete, no event. Assuming success\n");
@@ -206,7 +205,7 @@ static int if_usb_probe(struct usb_interface *intf,
 	if (!cardp)
 		goto error;
 
-	timer_setup(&cardp->fw_timeout, if_usb_fw_timeo, 0);
+	setup_timer(&cardp->fw_timeout, if_usb_fw_timeo, (unsigned long)cardp);
 	init_waitqueue_head(&cardp->fw_wq);
 
 	cardp->udev = udev;
@@ -613,7 +612,6 @@ static inline void process_cmdrequest(int recvlength, uint8_t *recvbuff,
 				      struct if_usb_card *cardp,
 				      struct lbs_private *priv)
 {
-	unsigned long flags;
 	u8 i;
 
 	if (recvlength > LBS_CMD_BUFFER_SIZE) {
@@ -623,7 +621,9 @@ static inline void process_cmdrequest(int recvlength, uint8_t *recvbuff,
 		return;
 	}
 
-	spin_lock_irqsave(&priv->driver_lock, flags);
+	BUG_ON(!in_interrupt());
+
+	spin_lock(&priv->driver_lock);
 
 	i = (priv->resp_idx == 0) ? 1 : 0;
 	BUG_ON(priv->resp_len[i]);
@@ -633,7 +633,7 @@ static inline void process_cmdrequest(int recvlength, uint8_t *recvbuff,
 	kfree_skb(skb);
 	lbs_notify_command_response(priv, i);
 
-	spin_unlock_irqrestore(&priv->driver_lock, flags);
+	spin_unlock(&priv->driver_lock);
 
 	lbs_deb_usbd(&cardp->udev->dev,
 		    "Wake up main thread to handle cmd response\n");

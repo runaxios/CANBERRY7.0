@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #ifndef _ICNSS_WLAN_H_
 #define _ICNSS_WLAN_H_
@@ -131,7 +138,6 @@ extern int icnss_get_irq(struct device *dev, int ce_id);
 extern int icnss_power_on(struct device *dev);
 extern int icnss_power_off(struct device *dev);
 extern struct dma_iommu_mapping *icnss_smmu_get_mapping(struct device *dev);
-extern struct iommu_domain *icnss_smmu_get_domain(struct device *dev);
 extern int icnss_smmu_map(struct device *dev, phys_addr_t paddr,
 			  uint32_t *iova_addr, size_t size);
 extern unsigned int icnss_socinfo_get_serial_number(struct device *dev);

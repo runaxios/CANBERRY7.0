@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved. */
-/* Copyright (C) 2020 XiaoMi, Inc. */
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/debugfs.h>
 #include <linux/device.h>
@@ -14,14 +22,6 @@
 #include <linux/wait.h>
 #include <linux/mhi.h>
 #include "mhi_internal.h"
-
-const char * const mhi_log_level_str[MHI_MSG_LVL_MAX] = {
-	[MHI_MSG_LVL_VERBOSE] = "Verbose",
-	[MHI_MSG_LVL_INFO] = "Info",
-	[MHI_MSG_LVL_ERROR] = "Error",
-	[MHI_MSG_LVL_CRITICAL] = "Critical",
-	[MHI_MSG_LVL_MASK_ALL] = "Mask all",
-};
 
 const char * const mhi_ee_str[MHI_EE_MAX] = {
 	[MHI_EE_PBL] = "PBL",
@@ -40,7 +40,6 @@ const char * const mhi_state_tran_str[MHI_ST_TRANSITION_MAX] = {
 	[MHI_ST_TRANSITION_READY] = "READY",
 	[MHI_ST_TRANSITION_SBL] = "SBL",
 	[MHI_ST_TRANSITION_MISSION_MODE] = "MISSION MODE",
-	[MHI_ST_TRANSITION_DISABLE] = "DISABLE",
 };
 
 const char * const mhi_state_str[MHI_STATE_MAX] = {
@@ -64,12 +63,10 @@ static const char * const mhi_pm_state_str[] = {
 	[MHI_PM_BIT_M3] = "M3",
 	[MHI_PM_BIT_M3_EXIT] = "M3->M0",
 	[MHI_PM_BIT_FW_DL_ERR] = "FW DL Error",
-	[MHI_PM_BIT_DEVICE_ERR_DETECT] = "Device Error Detect",
 	[MHI_PM_BIT_SYS_ERR_DETECT] = "SYS_ERR Detect",
 	[MHI_PM_BIT_SYS_ERR_PROCESS] = "SYS_ERR Process",
 	[MHI_PM_BIT_SHUTDOWN_PROCESS] = "SHUTDOWN Process",
 	[MHI_PM_BIT_LD_ERR_FATAL_DETECT] = "LD or Error Fatal Detect",
-	[MHI_PM_BIT_SHUTDOWN_NO_ACCESS] = "SHUTDOWN No Access",
 };
 
 struct mhi_bus mhi_bus;
@@ -83,38 +80,6 @@ const char *to_mhi_pm_state_str(enum MHI_PM_STATE state)
 
 	return mhi_pm_state_str[index];
 }
-
-static ssize_t log_level_show(struct device *dev,
-			      struct device_attribute *attr,
-			      char *buf)
-{
-	struct mhi_device *mhi_dev = to_mhi_device(dev);
-	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
-
-	return snprintf(buf, PAGE_SIZE, "%s\n",
-			TO_MHI_LOG_LEVEL_STR(mhi_cntrl->log_lvl));
-}
-
-static ssize_t log_level_store(struct device *dev,
-			       struct device_attribute *attr,
-			       const char *buf,
-			       size_t count)
-{
-	struct mhi_device *mhi_dev = to_mhi_device(dev);
-	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
-	enum MHI_DEBUG_LEVEL log_level;
-
-	if (kstrtou32(buf, 0, &log_level) < 0)
-		return -EINVAL;
-
-	mhi_cntrl->log_lvl = log_level;
-
-	MHI_LOG("IPC log level changed to: %s\n",
-		TO_MHI_LOG_LEVEL_STR(log_level));
-
-	return count;
-}
-static DEVICE_ATTR_RW(log_level);
 
 static ssize_t bus_vote_show(struct device *dev,
 			     struct device_attribute *attr,
@@ -174,28 +139,27 @@ static ssize_t device_vote_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(device_vote);
 
-static struct attribute *mhi_sysfs_attrs[] = {
-	&dev_attr_log_level.attr,
+static struct attribute *mhi_vote_attrs[] = {
 	&dev_attr_bus_vote.attr,
 	&dev_attr_device_vote.attr,
 	NULL,
 };
 
-static const struct attribute_group mhi_sysfs_group = {
-	.attrs = mhi_sysfs_attrs,
+static const struct attribute_group mhi_vote_group = {
+	.attrs = mhi_vote_attrs,
 };
 
-int mhi_create_sysfs(struct mhi_controller *mhi_cntrl)
+int mhi_create_vote_sysfs(struct mhi_controller *mhi_cntrl)
 {
 	return sysfs_create_group(&mhi_cntrl->mhi_dev->dev.kobj,
-				  &mhi_sysfs_group);
+				  &mhi_vote_group);
 }
 
-void mhi_destroy_sysfs(struct mhi_controller *mhi_cntrl)
+void mhi_destroy_vote_sysfs(struct mhi_controller *mhi_cntrl)
 {
 	struct mhi_device *mhi_dev = mhi_cntrl->mhi_dev;
 
-	sysfs_remove_group(&mhi_dev->dev.kobj, &mhi_sysfs_group);
+	sysfs_remove_group(&mhi_dev->dev.kobj, &mhi_vote_group);
 
 	/* relinquish any pending votes for device */
 	while (atomic_read(&mhi_dev->dev_vote))
@@ -228,7 +192,7 @@ void mhi_deinit_free_irq(struct mhi_controller *mhi_cntrl)
 	struct mhi_event *mhi_event = mhi_cntrl->mhi_event;
 
 	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
-		if (!mhi_event->request_irq)
+		if (mhi_event->offload_ev)
 			continue;
 
 		free_irq(mhi_cntrl->irq[mhi_event->msi], mhi_event);
@@ -252,7 +216,7 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 		return ret;
 
 	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
-		if (!mhi_event->request_irq)
+		if (mhi_event->offload_ev)
 			continue;
 
 		ret = request_irq(mhi_cntrl->irq[mhi_event->msi],
@@ -269,7 +233,7 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 
 error_request:
 	for (--i, --mhi_event; i >= 0; i--, mhi_event--) {
-		if (!mhi_event->request_irq)
+		if (mhi_event->offload_ev)
 			continue;
 
 		free_irq(mhi_cntrl->irq[mhi_event->msi], mhi_event);
@@ -358,8 +322,8 @@ static const struct file_operations debugfs_chan_ops = {
 	.read = seq_read,
 };
 
-DEFINE_DEBUGFS_ATTRIBUTE(debugfs_trigger_reset_fops, NULL,
-			 mhi_debugfs_trigger_reset, "%llu\n");
+DEFINE_SIMPLE_ATTRIBUTE(debugfs_trigger_reset_fops, NULL,
+			mhi_debugfs_trigger_reset, "%llu\n");
 
 void mhi_init_debugfs(struct mhi_controller *mhi_cntrl)
 {
@@ -377,14 +341,13 @@ void mhi_init_debugfs(struct mhi_controller *mhi_cntrl)
 	if (IS_ERR_OR_NULL(dentry))
 		return;
 
-	debugfs_create_file_unsafe("states", 0444, dentry, mhi_cntrl,
-				   &debugfs_state_ops);
-	debugfs_create_file_unsafe("events", 0444, dentry, mhi_cntrl,
-				   &debugfs_ev_ops);
-	debugfs_create_file_unsafe("chan", 0444, dentry, mhi_cntrl,
-				   &debugfs_chan_ops);
-	debugfs_create_file_unsafe("reset", 0444, dentry, mhi_cntrl,
-				   &debugfs_trigger_reset_fops);
+	debugfs_create_file("states", 0444, dentry, mhi_cntrl,
+			    &debugfs_state_ops);
+	debugfs_create_file("events", 0444, dentry, mhi_cntrl,
+			    &debugfs_ev_ops);
+	debugfs_create_file("chan", 0444, dentry, mhi_cntrl, &debugfs_chan_ops);
+	debugfs_create_file("reset", 0444, dentry, mhi_cntrl,
+			    &debugfs_trigger_reset_fops);
 	mhi_cntrl->dentry = dentry;
 }
 
@@ -541,18 +504,15 @@ error_alloc_chan_ctxt:
 	return ret;
 }
 
-/* to be used only if a single event ring with the type is present */
-static int mhi_get_er_index(struct mhi_controller *mhi_cntrl,
-			    enum mhi_er_data_type type)
+static int mhi_get_tsync_er_cfg(struct mhi_controller *mhi_cntrl)
 {
 	int i;
 	struct mhi_event *mhi_event = mhi_cntrl->mhi_event;
 
-	/* find event ring for requested type */
-	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
-		if (mhi_event->data_type == type)
+	/* find event ring with timesync support */
+	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++)
+		if (mhi_event->data_type == MHI_ER_TSYNC_ELEMENT_TYPE)
 			return mhi_event->er_index;
-	}
 
 	return -ENOENT;
 }
@@ -582,8 +542,6 @@ int mhi_init_timesync(struct mhi_controller *mhi_cntrl)
 	if (!mhi_cntrl->time_get || !mhi_cntrl->lpm_disable ||
 	     !mhi_cntrl->lpm_enable)
 		return -EINVAL;
-
-	mhi_cntrl->local_timer_freq = arch_timer_get_cntfrq();
 
 	/* register method supported */
 	mhi_tsync = kzalloc(sizeof(*mhi_tsync), GFP_KERNEL);
@@ -629,7 +587,7 @@ int mhi_init_timesync(struct mhi_controller *mhi_cntrl)
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 
 	/* get time-sync event ring configuration */
-	ret = mhi_get_er_index(mhi_cntrl, MHI_ER_TSYNC_ELEMENT_TYPE);
+	ret = mhi_get_tsync_er_cfg(mhi_cntrl);
 	if (ret < 0) {
 		MHI_LOG("Could not find timesync event ring\n");
 		return ret;
@@ -657,36 +615,6 @@ exit_timesync:
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 
 	return ret;
-}
-
-static int mhi_init_bw_scale(struct mhi_controller *mhi_cntrl)
-{
-	int ret, er_index;
-	u32 bw_cfg_offset;
-
-	/* controller doesn't support dynamic bw switch */
-	if (!mhi_cntrl->bw_scale)
-		return -ENODEV;
-
-	ret = mhi_get_capability_offset(mhi_cntrl, BW_SCALE_CAP_ID,
-					&bw_cfg_offset);
-	if (ret)
-		return ret;
-
-	/* No ER configured to support BW scale */
-	er_index = mhi_get_er_index(mhi_cntrl, MHI_ER_BW_SCALE_ELEMENT_TYPE);
-	if (ret < 0)
-		return er_index;
-
-	bw_cfg_offset += BW_SCALE_CFG_OFFSET;
-
-	MHI_LOG("BW_CFG OFFSET:0x%x\n", bw_cfg_offset);
-
-	/* advertise host support */
-	mhi_write_reg(mhi_cntrl, mhi_cntrl->regs, bw_cfg_offset,
-		      MHI_BW_SCALE_SETUP(er_index));
-
-	return 0;
 }
 
 int mhi_init_mmio(struct mhi_controller *mhi_cntrl)
@@ -785,9 +713,6 @@ int mhi_init_mmio(struct mhi_controller *mhi_cntrl)
 	mhi_write_reg(mhi_cntrl, mhi_cntrl->wake_db, 0, 0);
 	mhi_cntrl->wake_set = false;
 
-	/* setup bw scale db */
-	mhi_cntrl->bw_scale_db = base + val + (8 * MHI_BW_SCALE_CHAN_DB);
-
 	/* setup channel db addresses */
 	mhi_chan = mhi_cntrl->mhi_chan;
 	for (i = 0; i < mhi_cntrl->max_chan; i++, val += 8, mhi_chan++)
@@ -817,9 +742,6 @@ int mhi_init_mmio(struct mhi_controller *mhi_cntrl)
 		mhi_write_reg_field(mhi_cntrl, base, reg_info[i].offset,
 				    reg_info[i].mask, reg_info[i].shift,
 				    reg_info[i].val);
-
-	/* setup bandwidth scaling features */
-	mhi_init_bw_scale(mhi_cntrl);
 
 	return 0;
 }
@@ -878,7 +800,7 @@ int mhi_init_chan_ctxt(struct mhi_controller *mhi_cntrl,
 
 	tre_ring->rp = tre_ring->wp = tre_ring->base;
 	buf_ring->rp = buf_ring->wp = buf_ring->base;
-	mhi_chan->db_cfg.db_mode = true;
+	mhi_chan->db_cfg.db_mode = 1;
 
 	/* update to all cores */
 	smp_wmb();
@@ -971,8 +893,6 @@ static int of_parse_ev_cfg(struct mhi_controller *mhi_cntrl,
 	if (!mhi_cntrl->mhi_event)
 		return -ENOMEM;
 
-	INIT_LIST_HEAD(&mhi_cntrl->lp_ev_rings);
-
 	/* populate ev ring */
 	mhi_event = mhi_cntrl->mhi_event;
 	i = 0;
@@ -1038,9 +958,6 @@ static int of_parse_ev_cfg(struct mhi_controller *mhi_cntrl,
 		case MHI_ER_TSYNC_ELEMENT_TYPE:
 			mhi_event->process_event = mhi_process_tsync_event_ring;
 			break;
-		case MHI_ER_BW_SCALE_ELEMENT_TYPE:
-			mhi_event->process_event = mhi_process_bw_scale_ev_ring;
-			break;
 		}
 
 		mhi_event->hw_ring = of_property_read_bool(child, "mhi,hw-ev");
@@ -1052,19 +969,6 @@ static int of_parse_ev_cfg(struct mhi_controller *mhi_cntrl,
 							"mhi,client-manage");
 		mhi_event->offload_ev = of_property_read_bool(child,
 							      "mhi,offload");
-
-		/*
-		 * low priority events are handled in a separate worker thread
-		 * to allow for sleeping functions to be called.
-		 */
-		if (!mhi_event->offload_ev) {
-			if (IS_MHI_ER_PRIORITY_LOW(mhi_event))
-				list_add_tail(&mhi_event->node,
-						&mhi_cntrl->lp_ev_rings);
-			else
-				mhi_event->request_irq = true;
-		}
-
 		mhi_event++;
 	}
 
@@ -1301,7 +1205,7 @@ static int of_parse_dt(struct mhi_controller *mhi_cntrl,
 	return 0;
 
 error_ev_cfg:
-	vfree(mhi_cntrl->mhi_chan);
+	kfree(mhi_cntrl->mhi_chan);
 
 	return ret;
 }
@@ -1343,7 +1247,7 @@ int of_register_mhi_controller(struct mhi_controller *mhi_cntrl)
 	spin_lock_init(&mhi_cntrl->wlock);
 	INIT_WORK(&mhi_cntrl->st_worker, mhi_pm_st_worker);
 	INIT_WORK(&mhi_cntrl->fw_worker, mhi_fw_load_worker);
-	INIT_WORK(&mhi_cntrl->low_priority_worker, mhi_low_priority_worker);
+	INIT_WORK(&mhi_cntrl->syserr_worker, mhi_pm_sys_err_worker);
 	init_waitqueue_head(&mhi_cntrl->state_event);
 
 	mhi_cmd = mhi_cntrl->mhi_cmd;
@@ -1357,10 +1261,6 @@ int of_register_mhi_controller(struct mhi_controller *mhi_cntrl)
 
 		mhi_event->mhi_cntrl = mhi_cntrl;
 		spin_lock_init(&mhi_event->lock);
-
-		if (IS_MHI_ER_PRIORITY_LOW(mhi_event))
-			continue;
-
 		if (mhi_event->data_type == MHI_ER_CTRL_ELEMENT_TYPE)
 			tasklet_init(&mhi_event->task, mhi_ctrl_ev_task,
 				     (ulong)mhi_event);
@@ -1374,9 +1274,6 @@ int of_register_mhi_controller(struct mhi_controller *mhi_cntrl)
 		mutex_init(&mhi_chan->mutex);
 		init_completion(&mhi_chan->completion);
 		rwlock_init(&mhi_chan->lock);
-
-		mhi_event = &mhi_cntrl->mhi_event[mhi_chan->er_index];
-		mhi_chan->bei = !!(mhi_event->intmod);
 	}
 
 	if (mhi_cntrl->bounce_buf) {
@@ -1446,7 +1343,7 @@ error_alloc_dev:
 	kfree(mhi_cntrl->mhi_cmd);
 
 error_alloc_cmd:
-	vfree(mhi_cntrl->mhi_chan);
+	kfree(mhi_cntrl->mhi_chan);
 	kfree(mhi_cntrl->mhi_event);
 
 	return ret;
@@ -1459,7 +1356,7 @@ void mhi_unregister_mhi_controller(struct mhi_controller *mhi_cntrl)
 
 	kfree(mhi_cntrl->mhi_cmd);
 	kfree(mhi_cntrl->mhi_event);
-	vfree(mhi_cntrl->mhi_chan);
+	kfree(mhi_cntrl->mhi_chan);
 	kfree(mhi_cntrl->mhi_tsync);
 
 	device_del(&mhi_dev->dev);
@@ -1469,6 +1366,7 @@ void mhi_unregister_mhi_controller(struct mhi_controller *mhi_cntrl)
 	list_del(&mhi_cntrl->node);
 	mutex_unlock(&mhi_bus.lock);
 }
+EXPORT_SYMBOL(mhi_unregister_mhi_controller);
 
 /* set ptr to control private data */
 static inline void mhi_controller_set_devdata(struct mhi_controller *mhi_cntrl,
@@ -1569,6 +1467,7 @@ void mhi_unprepare_after_power_down(struct mhi_controller *mhi_cntrl)
 	mhi_deinit_dev_ctxt(mhi_cntrl);
 	mhi_cntrl->pre_init = false;
 }
+EXPORT_SYMBOL(mhi_unprepare_after_power_down);
 
 /* match dev to drv */
 static int mhi_match(struct device *dev, struct device_driver *drv)
@@ -1618,6 +1517,7 @@ static int mhi_driver_probe(struct device *dev)
 	struct mhi_event *mhi_event;
 	struct mhi_chan *ul_chan = mhi_dev->ul_chan;
 	struct mhi_chan *dl_chan = mhi_dev->dl_chan;
+	bool auto_start = false;
 	int ret;
 
 	/* bring device out of lpm */
@@ -1636,11 +1536,7 @@ static int mhi_driver_probe(struct device *dev)
 
 		ul_chan->xfer_cb = mhi_drv->ul_xfer_cb;
 		mhi_dev->status_cb = mhi_drv->status_cb;
-		if (ul_chan->auto_start) {
-			ret = mhi_prepare_channel(mhi_cntrl, ul_chan);
-			if (ret)
-				goto exit_probe;
-		}
+		auto_start = ul_chan->auto_start;
 	}
 
 	if (dl_chan) {
@@ -1664,22 +1560,15 @@ static int mhi_driver_probe(struct device *dev)
 
 		/* ul & dl uses same status cb */
 		mhi_dev->status_cb = mhi_drv->status_cb;
+		auto_start = (auto_start || dl_chan->auto_start);
 	}
 
 	ret = mhi_drv->probe(mhi_dev, mhi_dev->id);
-	if (ret)
-		goto exit_probe;
 
-	if (dl_chan && dl_chan->auto_start)
-		mhi_prepare_channel(mhi_cntrl, dl_chan);
-
-	mhi_device_put(mhi_dev, MHI_VOTE_DEVICE);
-
-	return ret;
+	if (!ret && auto_start)
+		mhi_prepare_for_transfer(mhi_dev);
 
 exit_probe:
-	mhi_unprepare_from_transfer(mhi_dev);
-
 	mhi_device_put(mhi_dev, MHI_VOTE_DEVICE);
 
 	return ret;

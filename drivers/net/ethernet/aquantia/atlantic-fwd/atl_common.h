@@ -18,7 +18,7 @@
 #include <linux/netdevice.h>
 #include <linux/moduleparam.h>
 
-#define ATL_VERSION "1.0.15"
+#define ATL_VERSION "1.0.20"
 
 struct atl_nic;
 
@@ -92,6 +92,8 @@ enum {
 	ATL_RXF_ETYPE_MAX = ATL_ETYPE_FLT_NUM,
 	ATL_RXF_NTUPLE_BASE = ATL_RXF_ETYPE_BASE + ATL_RXF_ETYPE_MAX,
 	ATL_RXF_NTUPLE_MAX = ATL_NTUPLE_FLT_NUM,
+	ATL_RXF_FLEX_BASE = ATL_RXF_NTUPLE_BASE + ATL_RXF_NTUPLE_MAX,
+	ATL_RXF_FLEX_MAX = 1,
 };
 
 enum atl_rxf_common_cmd {
@@ -173,6 +175,19 @@ struct atl_rxf_etype {
 	int count;
 };
 
+enum atl_flex_cmd {
+	ATL_FLEX_EN = ATL_RXF_EN,
+	ATL_FLEX_RXQ = BIT(30),
+	ATL_FLEX_RXQ_SHIFT = 20,
+	ATL_FLEX_RXQ_MASK = ATL_RXF_RXQ_MSK << ATL_FLEX_RXQ_SHIFT,
+	ATL_FLEX_ACT_SHIFT = ATL_RXF_ACT_SHIFT,
+};
+
+struct atl_rxf_flex {
+	uint32_t cmd[ATL_RXF_FLEX_MAX];
+	int count;
+};
+
 struct atl_queue_vec;
 
 #define ATL_NUM_FWD_RINGS ATL_MAX_QUEUES
@@ -195,6 +210,7 @@ struct atl_fwd {
 	unsigned long ring_map[ATL_FWDIR_NUM];
 	struct atl_fwd_ring *rings[ATL_FWDIR_NUM][ATL_NUM_FWD_RINGS];
 	unsigned long msi_map;
+	void *private;
 };
 
 struct atl_nic {
@@ -204,9 +220,8 @@ struct atl_nic {
 	int nvecs;
 	struct atl_hw hw;
 	unsigned flags;
-	unsigned long state;
 	uint32_t priv_flags;
-	struct timer_list link_timer;
+	struct timer_list work_timer;
 	int max_mtu;
 	int requested_nvecs;
 	int requested_rx_size;
@@ -217,24 +232,20 @@ struct atl_nic {
 	spinlock_t stats_lock;
 	struct work_struct work;
 
+#ifdef CONFIG_ATLFWD_FWD
 	struct atl_fwd fwd;
+#endif
 
 	struct atl_rxf_ntuple rxf_ntuple;
 	struct atl_rxf_vlan rxf_vlan;
 	struct atl_rxf_etype rxf_etype;
+	struct atl_rxf_flex rxf_flex;
 };
 
 /* Flags only modified with RTNL lock held */
 enum atl_nic_flags {
 	ATL_FL_MULTIPLE_VECTORS = BIT(0),
 	ATL_FL_WOL = BIT(1),
-};
-
-enum atl_nic_state {
-	ATL_ST_UP,
-	ATL_ST_CONFIGURED,
-	ATL_ST_ENABLED,
-	ATL_ST_WORK_SCHED,
 };
 
 #define ATL_PF(_name) ATL_PF_ ## _name
@@ -289,6 +300,7 @@ extern const struct ethtool_ops atl_ethtool_ops;
 extern int atl_max_queues;
 extern unsigned atl_rx_linear;
 extern unsigned atl_min_intr_delay;
+extern int atl_enable_msi;
 
 /* Logging conviniency macros.
  *
@@ -315,8 +327,38 @@ extern unsigned atl_min_intr_delay;
 #define atl_nic_err(fmt, args...)		\
 	dev_err(&nic->hw.pdev->dev, fmt, ## args)
 
+#define atl_dev_init_warn(fmt, args...)					\
+do {									\
+	if (hw)								\
+		atl_dev_warn(fmt, ## args);				\
+	else								\
+		printk(KERN_WARNING "%s: " fmt, atl_driver_name, ##args); \
+} while(0)
+
+#define atl_dev_init_err(fmt, args...)					\
+do {									\
+	if (hw)								\
+		atl_dev_warn(fmt, ## args);				\
+	else								\
+		printk(KERN_ERR "%s: " fmt, atl_driver_name, ##args);	\
+} while(0)
+
 #define atl_module_param(_name, _type, _mode)			\
 	module_param_named(_name, atl_ ## _name, _type, _mode)
+
+static inline void atl_intr_enable_non_ring(struct atl_nic *nic)
+{
+	struct atl_hw *hw = &nic->hw;
+
+	atl_intr_enable(hw, hw->non_ring_intr_mask);
+}
+
+static inline void atl_intr_disable_non_ring(struct atl_nic *nic)
+{
+	struct atl_hw *hw = &nic->hw;
+
+	atl_intr_disable(hw, hw->non_ring_intr_mask);
+}
 
 netdev_tx_t atl_start_xmit(struct sk_buff *skb, struct net_device *ndev);
 int atl_vlan_rx_add_vid(struct net_device *ndev, __be16 proto, u16 vid);
@@ -329,6 +371,7 @@ int atl_setup_datapath(struct atl_nic *nic);
 void atl_clear_datapath(struct atl_nic *nic);
 int atl_start_rings(struct atl_nic *nic);
 void atl_stop_rings(struct atl_nic *nic);
+void atl_clear_rdm_cache(struct atl_nic *nic);
 int atl_alloc_rings(struct atl_nic *nic);
 void atl_free_rings(struct atl_nic *nic);
 irqreturn_t atl_ring_irq(int irq, void *priv);
@@ -353,6 +396,11 @@ int atl_update_eth_stats(struct atl_nic *nic);
 void atl_adjust_eth_stats(struct atl_ether_stats *stats,
 	struct atl_ether_stats *base, bool add);
 void atl_fwd_release_rings(struct atl_nic *nic);
+#ifdef CONFIG_ATLFWD_FWD
+int atl_fwd_resume_rings(struct atl_nic *nic);
+#else
+static inline int atl_fwd_resume_rings(struct atl_nic *nic) { return 0; }
+#endif
 int atl_get_lpi_timer(struct atl_nic *nic, uint32_t *lpi_delay);
 int atl_mdio_hwsem_get(struct atl_hw *hw);
 void atl_mdio_hwsem_put(struct atl_hw *hw);
@@ -367,5 +415,8 @@ int atl_mdio_write(struct atl_hw *hw, uint8_t prtad, uint8_t mmd,
 void atl_refresh_rxfs(struct atl_nic *nic);
 void atl_schedule_work(struct atl_nic *nic);
 int atl_hwmon_init(struct atl_nic *nic);
+int atl_update_thermal(struct atl_hw *hw);
+int atl_update_thermal_flag(struct atl_hw *hw, int bit, bool val);
+int atl_verify_thermal_limits(struct atl_hw *hw, struct atl_thermal *thermal);
 
 #endif

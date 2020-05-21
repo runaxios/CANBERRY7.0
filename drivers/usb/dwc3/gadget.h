@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * gadget.h - DesignWare USB3 DRD Gadget Header
  *
@@ -6,6 +5,15 @@
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2  of
+ * the License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __DRIVERS_USB_DWC3_GADGET_H
@@ -111,7 +119,6 @@ int dwc3_gadget_ep0_queue(struct usb_ep *ep, struct usb_request *request,
 		gfp_t gfp_flags);
 int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol);
 void dwc3_stop_active_transfer(struct dwc3 *dwc, u32 epnum, bool force);
-void dwc3_stop_active_transfer_noioc(struct dwc3 *dwc, u32 epnum, bool force);
 void dwc3_ep_inc_enq(struct dwc3_ep *dep);
 void dwc3_ep_inc_deq(struct dwc3_ep *dep);
 
@@ -130,12 +137,13 @@ static inline dma_addr_t dwc3_trb_dma_offset(struct dwc3_ep *dep,
  * Caller should take care of locking. Returns the transfer resource
  * index for a given endpoint.
  */
-static inline void dwc3_gadget_ep_get_transfer_index(struct dwc3_ep *dep)
+static inline u32 dwc3_gadget_ep_get_transfer_index(struct dwc3_ep *dep)
 {
 	u32			res_id;
 
 	res_id = dwc3_readl(dep->regs, DWC3_DEPCMD);
-	dep->resource_index = DWC3_DEPCMD_GET_RSC_IDX(res_id);
+
+	return DWC3_DEPCMD_GET_RSC_IDX(res_id);
 }
 
 #endif /* __DRIVERS_USB_DWC3_GADGET_H */

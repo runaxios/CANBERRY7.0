@@ -23,6 +23,7 @@
 #include <linux/posix_acl_xattr.h>
 
 #include <linux/uaccess.h>
+#include "internal.h"
 
 static const char *
 strcmp_prefix(const char *a, const char *a_prefix)
@@ -228,7 +229,7 @@ out:
 }
 EXPORT_SYMBOL_GPL(vfs_setxattr);
 
-static ssize_t
+ssize_t
 xattr_getsecurity(struct inode *inode, const char *name, void *value,
 			size_t size)
 {
@@ -253,6 +254,7 @@ out:
 out_noalloc:
 	return len;
 }
+EXPORT_SYMBOL_GPL(xattr_getsecurity);
 
 /*
  * vfs_getxattr_alloc - allocate memory, if necessary, before calling getxattr
@@ -305,9 +307,6 @@ __vfs_getxattr(struct dentry *dentry, struct inode *inode, const char *name,
 	handler = xattr_resolve_name(inode, &name);
 	if (IS_ERR(handler))
 		return PTR_ERR(handler);
-	if (unlikely(handler->__get))
-		return handler->__get(handler, dentry, inode, name, value,
-				      size);
 	if (!handler->get)
 		return -EOPNOTSUPP;
 	return handler->get(handler, dentry, inode, name, value, size);
@@ -319,7 +318,6 @@ vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
 {
 	struct inode *inode = dentry->d_inode;
 	int error;
-	const struct xattr_handler *handler;
 
 	error = xattr_permission(inode, name, MAY_READ);
 	if (error)
@@ -342,12 +340,7 @@ vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
 		return ret;
 	}
 nolsm:
-	handler = xattr_resolve_name(inode, &name);
-	if (IS_ERR(handler))
-		return PTR_ERR(handler);
-	if (!handler->get)
-		return -EOPNOTSUPP;
-	return handler->get(handler, dentry, inode, name, value, size);
+	return __vfs_getxattr(dentry, inode, name, value, size);
 }
 EXPORT_SYMBOL_GPL(vfs_getxattr);
 
@@ -361,6 +354,7 @@ vfs_listxattr(struct dentry *dentry, char *list, size_t size)
 	if (error)
 		return error;
 	if (inode->i_op->listxattr && (inode->i_opflags & IOP_XATTR)) {
+		error = -EOPNOTSUPP;
 		error = inode->i_op->listxattr(dentry, list, size);
 	} else {
 		error = security_inode_listsecurity(inode, list, size);
@@ -509,10 +503,10 @@ SYSCALL_DEFINE5(fsetxattr, int, fd, const char __user *, name,
 	if (!f.file)
 		return error;
 	audit_file(f.file);
-	error = mnt_want_write_file(f.file);
+	error = mnt_want_write_file_path(f.file);
 	if (!error) {
 		error = setxattr(f.file->f_path.dentry, name, value, size, flags);
-		mnt_drop_write_file(f.file);
+		mnt_drop_write_file_path(f.file);
 	}
 	fdput(f);
 	return error;
@@ -741,10 +735,10 @@ SYSCALL_DEFINE2(fremovexattr, int, fd, const char __user *, name)
 	if (!f.file)
 		return error;
 	audit_file(f.file);
-	error = mnt_want_write_file(f.file);
+	error = mnt_want_write_file_path(f.file);
 	if (!error) {
 		error = removexattr(f.file->f_path.dentry, name);
-		mnt_drop_write_file(f.file);
+		mnt_drop_write_file_path(f.file);
 	}
 	fdput(f);
 	return error;

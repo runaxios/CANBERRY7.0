@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * adutux - driver for ADU devices from Ontrak Control Systems
  * This is an experimental driver. Use at your own risk.
  * This driver is not supported by Ontrak Control Systems.
  *
  * Copyright (c) 2003 John Homppi (SCO, leave this notice here)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of
+ * the License, or (at your option) any later version.
  *
  * derived from the Lego USB Tower driver 0.56:
  * Copyright (c) 2003 David Glance <davidgsf@sourceforge.net>
@@ -54,7 +58,7 @@ MODULE_DEVICE_TABLE(usb, device_table);
 /* we can have up to this number of device plugged in at once */
 #define MAX_DEVICES	16
 
-#define COMMAND_TIMEOUT	(2*HZ)
+#define COMMAND_TIMEOUT	(2*HZ)	/* 60 second timeout for a command */
 
 /*
  * The locking scheme is a vanilla 3-lock:
@@ -75,7 +79,6 @@ struct adu_device {
 	char			serial_number[8];
 
 	int			open_count; /* number of times this port has been opened */
-	unsigned long		disconnected:1;
 
 	char		*read_buffer_primary;
 	int			read_buffer_length;
@@ -117,7 +120,7 @@ static void adu_abort_transfers(struct adu_device *dev)
 {
 	unsigned long flags;
 
-	if (dev->disconnected)
+	if (dev->udev == NULL)
 		return;
 
 	/* shutdown transfer */
@@ -133,8 +136,6 @@ static void adu_abort_transfers(struct adu_device *dev)
 	spin_lock_irqsave(&dev->buflock, flags);
 	if (!dev->out_urb_finished) {
 		spin_unlock_irqrestore(&dev->buflock, flags);
-		wait_event_timeout(dev->write_wait, dev->out_urb_finished,
-			COMMAND_TIMEOUT);
 		usb_kill_urb(dev->interrupt_out_urb);
 	} else
 		spin_unlock_irqrestore(&dev->buflock, flags);
@@ -149,7 +150,6 @@ static void adu_delete(struct adu_device *dev)
 	kfree(dev->read_buffer_secondary);
 	kfree(dev->interrupt_in_buffer);
 	kfree(dev->interrupt_out_buffer);
-	usb_put_dev(dev->udev);
 	kfree(dev);
 }
 
@@ -157,12 +157,11 @@ static void adu_interrupt_in_callback(struct urb *urb)
 {
 	struct adu_device *dev = urb->context;
 	int status = urb->status;
-	unsigned long flags;
 
 	adu_debug_data(&dev->udev->dev, __func__,
 		       urb->actual_length, urb->transfer_buffer);
 
-	spin_lock_irqsave(&dev->buflock, flags);
+	spin_lock(&dev->buflock);
 
 	if (status != 0) {
 		if ((status != -ENOENT) && (status != -ECONNRESET) &&
@@ -193,7 +192,7 @@ static void adu_interrupt_in_callback(struct urb *urb)
 
 exit:
 	dev->read_urb_finished = 1;
-	spin_unlock_irqrestore(&dev->buflock, flags);
+	spin_unlock(&dev->buflock);
 	/* always wake up so we recover from errors */
 	wake_up_interruptible(&dev->read_wait);
 }
@@ -202,7 +201,6 @@ static void adu_interrupt_out_callback(struct urb *urb)
 {
 	struct adu_device *dev = urb->context;
 	int status = urb->status;
-	unsigned long flags;
 
 	adu_debug_data(&dev->udev->dev, __func__,
 		       urb->actual_length, urb->transfer_buffer);
@@ -217,10 +215,10 @@ static void adu_interrupt_out_callback(struct urb *urb)
 		return;
 	}
 
-	spin_lock_irqsave(&dev->buflock, flags);
+	spin_lock(&dev->buflock);
 	dev->out_urb_finished = 1;
 	wake_up(&dev->write_wait);
-	spin_unlock_irqrestore(&dev->buflock, flags);
+	spin_unlock(&dev->buflock);
 }
 
 static int adu_open(struct inode *inode, struct file *file)
@@ -245,7 +243,7 @@ static int adu_open(struct inode *inode, struct file *file)
 	}
 
 	dev = usb_get_intfdata(interface);
-	if (!dev) {
+	if (!dev || !dev->udev) {
 		retval = -ENODEV;
 		goto exit_no_device;
 	}
@@ -328,7 +326,7 @@ static int adu_release(struct inode *inode, struct file *file)
 	}
 
 	adu_release_internal(dev);
-	if (dev->disconnected) {
+	if (dev->udev == NULL) {
 		/* the device was unplugged before the file was released */
 		if (!dev->open_count)	/* ... and we're the last user */
 			adu_delete(dev);
@@ -357,7 +355,7 @@ static ssize_t adu_read(struct file *file, __user char *buffer, size_t count,
 		return -ERESTARTSYS;
 
 	/* verify that the device wasn't unplugged */
-	if (dev->disconnected) {
+	if (dev->udev == NULL) {
 		retval = -ENODEV;
 		pr_err("No device or device unplugged %d\n", retval);
 		goto exit;
@@ -522,7 +520,7 @@ static ssize_t adu_write(struct file *file, const __user char *buffer,
 		goto exit_nolock;
 
 	/* verify that the device wasn't unplugged */
-	if (dev->disconnected) {
+	if (dev->udev == NULL) {
 		retval = -ENODEV;
 		pr_err("No device or device unplugged %d\n", retval);
 		goto exit;
@@ -667,7 +665,7 @@ static int adu_probe(struct usb_interface *interface,
 
 	mutex_init(&dev->mtx);
 	spin_lock_init(&dev->buflock);
-	dev->udev = usb_get_dev(udev);
+	dev->udev = udev;
 	init_waitqueue_head(&dev->read_wait);
 	init_waitqueue_head(&dev->write_wait);
 
@@ -763,20 +761,18 @@ error:
 static void adu_disconnect(struct usb_interface *interface)
 {
 	struct adu_device *dev;
+	int minor;
 
 	dev = usb_get_intfdata(interface);
 
+	mutex_lock(&dev->mtx);	/* not interruptible */
+	dev->udev = NULL;	/* poison */
+	minor = dev->minor;
 	usb_deregister_dev(interface, &adu_class);
-
-	usb_poison_urb(dev->interrupt_in_urb);
-	usb_poison_urb(dev->interrupt_out_urb);
+	mutex_unlock(&dev->mtx);
 
 	mutex_lock(&adutux_mutex);
 	usb_set_intfdata(interface, NULL);
-
-	mutex_lock(&dev->mtx);	/* not interruptible */
-	dev->disconnected = 1;
-	mutex_unlock(&dev->mtx);
 
 	/* if the device is not opened, then we clean up right now */
 	if (!dev->open_count)

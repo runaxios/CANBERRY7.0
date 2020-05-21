@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/err.h>
@@ -126,8 +134,8 @@ static int msm_ion_populate_heap(struct device_node *node,
 	for (i = 0; i < len; ++i) {
 		if (ion_heap_meta[i].id == heap->id) {
 			heap->name = ion_heap_meta[i].name;
-			ret = msm_ion_get_heap_type_from_dt_node(node,
-								 &heap_type);
+			ret = msm_ion_get_heap_type_from_dt_node(
+							node, &heap_type);
 			if (ret)
 				break;
 			heap->type = heap_type;
@@ -227,7 +235,7 @@ static struct ion_platform_data *msm_ion_parse_dt(struct platform_device *pdev)
 			pr_err("Failed to create device %s\n", node->name);
 			goto free_heaps;
 		}
-		of_dma_configure(&new_dev->dev, node, true);
+		of_dma_configure(&new_dev->dev, node);
 
 		pdata->heaps[idx].priv = &new_dev->dev;
 		val = of_get_address(node, 0, NULL, NULL);

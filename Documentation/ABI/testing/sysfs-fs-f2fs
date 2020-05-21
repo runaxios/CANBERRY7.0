@@ -180,7 +180,7 @@ Contact:	"Shuoran Liu" <liushuoran@huawei.com>
 Description:
 		 Shows total written kbytes issued to disk.
 
-What:		/sys/fs/f2fs/<disk>/features
+What:		/sys/fs/f2fs/<disk>/feature
 Date:		July 2017
 Contact:	"Jaegeuk Kim" <jaegeuk@kernel.org>
 Description:

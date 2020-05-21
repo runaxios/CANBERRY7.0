@@ -119,8 +119,6 @@ ip_vs_in_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 		struct ip_vs_cpu_stats *s;
 		struct ip_vs_service *svc;
 
-		local_bh_disable();
-
 		s = this_cpu_ptr(dest->stats.cpustats);
 		u64_stats_update_begin(&s->syncp);
 		s->cnt.inpkts++;
@@ -139,8 +137,6 @@ ip_vs_in_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 		s->cnt.inpkts++;
 		s->cnt.inbytes += skb->len;
 		u64_stats_update_end(&s->syncp);
-
-		local_bh_enable();
 	}
 }
 
@@ -155,8 +151,6 @@ ip_vs_out_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 		struct ip_vs_cpu_stats *s;
 		struct ip_vs_service *svc;
 
-		local_bh_disable();
-
 		s = this_cpu_ptr(dest->stats.cpustats);
 		u64_stats_update_begin(&s->syncp);
 		s->cnt.outpkts++;
@@ -175,8 +169,6 @@ ip_vs_out_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 		s->cnt.outpkts++;
 		s->cnt.outbytes += skb->len;
 		u64_stats_update_end(&s->syncp);
-
-		local_bh_enable();
 	}
 }
 
@@ -186,8 +178,6 @@ ip_vs_conn_stats(struct ip_vs_conn *cp, struct ip_vs_service *svc)
 {
 	struct netns_ipvs *ipvs = svc->ipvs;
 	struct ip_vs_cpu_stats *s;
-
-	local_bh_disable();
 
 	s = this_cpu_ptr(cp->dest->stats.cpustats);
 	u64_stats_update_begin(&s->syncp);
@@ -203,8 +193,6 @@ ip_vs_conn_stats(struct ip_vs_conn *cp, struct ip_vs_service *svc)
 	u64_stats_update_begin(&s->syncp);
 	s->cnt.conns++;
 	u64_stats_update_end(&s->syncp);
-
-	local_bh_enable();
 }
 
 
@@ -445,7 +433,7 @@ ip_vs_schedule(struct ip_vs_service *svc, struct sk_buff *skb,
 	/*
 	 * IPv6 frags, only the first hit here.
 	 */
-	pptr = frag_safe_skb_hp(skb, iph->len, sizeof(_ports), _ports);
+	pptr = frag_safe_skb_hp(skb, iph->len, sizeof(_ports), _ports, iph);
 	if (pptr == NULL)
 		return NULL;
 
@@ -578,7 +566,7 @@ int ip_vs_leave(struct ip_vs_service *svc, struct sk_buff *skb,
 	struct netns_ipvs *ipvs = svc->ipvs;
 	struct net *net = ipvs->net;
 
-	pptr = frag_safe_skb_hp(skb, iph->len, sizeof(_ports), _ports);
+	pptr = frag_safe_skb_hp(skb, iph->len, sizeof(_ports), _ports, iph);
 	if (!pptr)
 		return NF_DROP;
 	dport = likely(!ip_vs_iph_inverse(iph)) ? pptr[1] : pptr[0];
@@ -994,7 +982,7 @@ static int ip_vs_out_icmp_v6(struct netns_ipvs *ipvs, struct sk_buff *skb,
 	unsigned int offset;
 
 	*related = 1;
-	ic = frag_safe_skb_hp(skb, ipvsh->len, sizeof(_icmph), &_icmph);
+	ic = frag_safe_skb_hp(skb, ipvsh->len, sizeof(_icmph), &_icmph, ipvsh);
 	if (ic == NULL)
 		return NF_DROP;
 
@@ -1226,7 +1214,7 @@ static struct ip_vs_conn *__ip_vs_rs_conn_out(unsigned int hooknum,
 		return NULL;
 
 	pptr = frag_safe_skb_hp(skb, iph->len,
-				sizeof(_ports), _ports);
+				sizeof(_ports), _ports, iph);
 	if (!pptr)
 		return NULL;
 
@@ -1419,7 +1407,7 @@ ip_vs_out(struct netns_ipvs *ipvs, unsigned int hooknum, struct sk_buff *skb, in
 		__be16 _ports[2], *pptr;
 
 		pptr = frag_safe_skb_hp(skb, iph.len,
-					 sizeof(_ports), _ports);
+					 sizeof(_ports), _ports, &iph);
 		if (pptr == NULL)
 			return NF_ACCEPT;	/* Not for me */
 		if (ip_vs_has_real_service(ipvs, af, iph.protocol, &iph.saddr,
@@ -1647,7 +1635,7 @@ ip_vs_in_icmp(struct netns_ipvs *ipvs, struct sk_buff *skb, int *related,
 	if (!cp) {
 		int v;
 
-		if (ipip || !sysctl_schedule_icmp(ipvs))
+		if (!sysctl_schedule_icmp(ipvs))
 			return NF_ACCEPT;
 
 		if (!ip_vs_try_to_schedule(ipvs, AF_INET, skb, pd, &v, &cp, &ciph))
@@ -1751,7 +1739,7 @@ static int ip_vs_in_icmp_v6(struct netns_ipvs *ipvs, struct sk_buff *skb,
 
 	*related = 1;
 
-	ic = frag_safe_skb_hp(skb, iph->len, sizeof(_icmph), &_icmph);
+	ic = frag_safe_skb_hp(skb, iph->len, sizeof(_icmph), &_icmph, iph);
 	if (ic == NULL)
 		return NF_DROP;
 
@@ -2218,6 +2206,7 @@ static const struct nf_hook_ops ip_vs_ops[] = {
 static int __net_init __ip_vs_init(struct net *net)
 {
 	struct netns_ipvs *ipvs;
+	int ret;
 
 	ipvs = net_generic(net, ip_vs_net_id);
 	if (ipvs == NULL)
@@ -2249,11 +2238,17 @@ static int __net_init __ip_vs_init(struct net *net)
 	if (ip_vs_sync_net_init(ipvs) < 0)
 		goto sync_fail;
 
+	ret = nf_register_net_hooks(net, ip_vs_ops, ARRAY_SIZE(ip_vs_ops));
+	if (ret < 0)
+		goto hook_fail;
+
 	return 0;
 /*
  * Error handling
  */
 
+hook_fail:
+	ip_vs_sync_net_cleanup(ipvs);
 sync_fail:
 	ip_vs_conn_net_cleanup(ipvs);
 conn_fail:
@@ -2273,6 +2268,7 @@ static void __net_exit __ip_vs_cleanup(struct net *net)
 {
 	struct netns_ipvs *ipvs = net_ipvs(net);
 
+	nf_unregister_net_hooks(net, ip_vs_ops, ARRAY_SIZE(ip_vs_ops));
 	ip_vs_service_net_cleanup(ipvs);	/* ip_vs_flush() with locks */
 	ip_vs_conn_net_cleanup(ipvs);
 	ip_vs_app_net_cleanup(ipvs);
@@ -2283,24 +2279,10 @@ static void __net_exit __ip_vs_cleanup(struct net *net)
 	net->ipvs = NULL;
 }
 
-static int __net_init __ip_vs_dev_init(struct net *net)
-{
-	int ret;
-
-	ret = nf_register_net_hooks(net, ip_vs_ops, ARRAY_SIZE(ip_vs_ops));
-	if (ret < 0)
-		goto hook_fail;
-	return 0;
-
-hook_fail:
-	return ret;
-}
-
 static void __net_exit __ip_vs_dev_cleanup(struct net *net)
 {
 	struct netns_ipvs *ipvs = net_ipvs(net);
 	EnterFunction(2);
-	nf_unregister_net_hooks(net, ip_vs_ops, ARRAY_SIZE(ip_vs_ops));
 	ipvs->enable = 0;	/* Disable packet reception */
 	smp_wmb();
 	ip_vs_sync_net_cleanup(ipvs);
@@ -2315,7 +2297,6 @@ static struct pernet_operations ipvs_core_ops = {
 };
 
 static struct pernet_operations ipvs_core_dev_ops = {
-	.init = __ip_vs_dev_init,
 	.exit = __ip_vs_dev_cleanup,
 };
 

@@ -1,12 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#include <linux/slab.h>
+#include <linux/msm_kgsl.h>
+#include <linux/sched.h>
 #include <linux/debugfs.h>
 
+#include "kgsl.h"
+#include "kgsl_sharedmem.h"
 #include "adreno.h"
-#include "adreno_iommu.h"
 #include "adreno_trace.h"
 
 static void wait_callback(struct kgsl_device *device,
@@ -115,7 +127,7 @@ stats:
 		msecs = drawctxt->submit_retire_ticks[index] * 10;
 		usecs = do_div(msecs, 192);
 		usecs = do_div(msecs, 1000);
-		pos += scnprintf(buf + pos, sizeof(buf) - pos, "%u.%0u ",
+		pos += snprintf(buf + pos, sizeof(buf) - pos, "%u.%0u ",
 			(unsigned int)msecs, usecs);
 	}
 	dev_err(device->dev, "  context[%u]: submit times: %s\n",
@@ -359,7 +371,7 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 	/* We no longer support legacy context switching */
 	if ((local & KGSL_CONTEXT_PREAMBLE) == 0 ||
 		(local & KGSL_CONTEXT_NO_GMEM_ALLOC) == 0) {
-		dev_err_once(device->dev,
+		KGSL_DEV_ERR_ONCE(device,
 			"legacy context switch not supported\n");
 		return ERR_PTR(-EINVAL);
 	}
@@ -367,7 +379,7 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 	/* Make sure that our target can support secure contexts if requested */
 	if (!kgsl_mmu_is_secured(&dev_priv->device->mmu) &&
 			(local & KGSL_CONTEXT_SECURE)) {
-		dev_err_once(device->dev, "Secure context not supported\n");
+		KGSL_DEV_ERR_ONCE(device, "Secure context not supported\n");
 		return ERR_PTR(-EOPNOTSUPP);
 	}
 
@@ -521,7 +533,7 @@ void adreno_drawctxt_detach(struct kgsl_context *context)
 	 * -EAGAIN error.
 	 */
 	if (ret && ret != -EAGAIN) {
-		dev_err(device->dev,
+		KGSL_DRV_ERR(device,
 				"Wait for global ctx=%u ts=%u type=%d error=%d\n",
 				drawctxt->base.id, drawctxt->internal_timestamp,
 				drawctxt->type, ret);
@@ -585,13 +597,15 @@ static void _drawctxt_switch_wait_callback(struct kgsl_device *device,
  * @adreno_dev - The 3D device that owns the context
  * @rb: The ringubffer pointer on which the current context is being changed
  * @drawctxt - the 3D context to switch to
+ * @flags: Control flags for the switch
  *
  * Switch the current draw context in given RB
  */
 
 int adreno_drawctxt_switch(struct adreno_device *adreno_dev,
 				struct adreno_ringbuffer *rb,
-				struct adreno_context *drawctxt)
+				struct adreno_context *drawctxt,
+				unsigned int flags)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pagetable *new_pt;
@@ -626,8 +640,7 @@ int adreno_drawctxt_switch(struct adreno_device *adreno_dev,
 		 /* No context - set the default pagetable and thats it. */
 		new_pt = device->mmu.defaultpagetable;
 	}
-
-	ret = adreno_iommu_set_pt_ctx(rb, new_pt, drawctxt);
+	ret = adreno_ringbuffer_set_pt_ctx(rb, new_pt, drawctxt, flags);
 	if (ret)
 		return ret;
 
@@ -643,3 +656,21 @@ int adreno_drawctxt_switch(struct adreno_device *adreno_dev,
 	rb->drawctxt_active = drawctxt;
 	return 0;
 }
+
+bool adreno_drawctxt_has_secure(struct kgsl_device *device)
+{
+	struct kgsl_context *context;
+	int id;
+
+	read_lock(&device->context_lock);
+	idr_for_each_entry(&device->context_idr, context, id) {
+		if (context->flags & KGSL_CONTEXT_SECURE) {
+			read_unlock(&device->context_lock);
+			return true;
+		}
+	}
+	read_unlock(&device->context_lock);
+
+	return false;
+}
+

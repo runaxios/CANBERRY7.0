@@ -1,9 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * QTI Over the Air (OTA) Crypto driver
+/* Copyright (c) 2010-2014,2017-2018 The Linux Foundation. All rights reserved.
  *
- * Copyright (c) 2010-2014,2017-2019 The Linux Foundation. All rights reserved.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
+
+/* QTI Over the Air (OTA) Crypto driver */
 
 #include <linux/types.h>
 #include <linux/module.h>
@@ -255,7 +263,7 @@ static void req_done(unsigned long data)
 			pqce->active_command = NULL;
 			spin_unlock_irqrestore(&podev->lock, flags);
 			schedule = false;
-		}
+		};
 	}
 	if (areq)
 		complete(&areq->complete);
@@ -330,7 +338,7 @@ static int start_req(struct ota_qce_dev *pqce, struct ota_async_req *areq)
 	default:
 		ret = -ENOTSUPP;
 		break;
-	}
+	};
 	areq->err = ret;
 	pqce->total_req++;
 	if (ret)
@@ -415,7 +423,7 @@ static int submit_req(struct ota_async_req *areq, struct ota_dev_control *podev)
 		else
 			pstat->f8_v_mp_op_success++;
 		break;
-	}
+	};
 
 	return areq->err;
 }
@@ -465,11 +473,15 @@ static long qcota_ioctl(struct file *file,
 
 		if (areq.req.f9_req.msize == 0)
 			return 0;
+		k_buf = kmalloc(areq.req.f9_req.msize, GFP_KERNEL);
+		if (k_buf == NULL)
+			return -ENOMEM;
 
-		k_buf = memdup_user((const void __user *)user_src,
-					areq.req.f9_req.msize);
-		if (IS_ERR(k_buf))
+		if (copy_from_user(k_buf, (void __user *)user_src,
+				areq.req.f9_req.msize)) {
+			kfree(k_buf);
 			return -EFAULT;
+		}
 
 		areq.req.f9_req.message = k_buf;
 		areq.op = QCE_OTA_F9_OPER;
@@ -499,7 +511,7 @@ static long qcota_ioctl(struct file *file,
 					user_src, total))
 				return -EFAULT;
 
-		}
+		};
 
 		user_dst = areq.req.f8_req.data_out;
 		if (!access_ok(VERIFY_WRITE, (void __user *)
@@ -562,10 +574,15 @@ static long qcota_ioctl(struct file *file,
 
 		if (!total)
 			return 0;
-		/* k_buf should be cache line aligned */
-		k_buf = memdup_user((const void __user *)user_src, total);
-		if (IS_ERR(k_buf))
+		k_buf = kmalloc(total, GFP_KERNEL);
+		if (k_buf == NULL)
+			return -ENOMEM;
+		/* k_buf returned from kmalloc should be cache line aligned */
+		if (copy_from_user(k_buf, (void __user *)user_src, total)) {
+			kfree(k_buf);
+
 			return -EFAULT;
+		}
 
 		areq.req.f8_mp_req.qce_f8_req.data_out = k_buf;
 		areq.req.f8_mp_req.qce_f8_req.data_in = k_buf;
@@ -710,7 +727,7 @@ static int qcota_probe(struct platform_device *pdev)
 		goto exit_del_cdev;
 	}
 	if (qce_hw_support(handle, &ce_support) < 0 ||
-					!ce_support.ota) {
+					ce_support.ota == false) {
 		pr_err("%s: device %s, qce does not support ota capability\n",
 			__func__, pdev->name);
 		rc = -ENODEV;
@@ -724,12 +741,12 @@ static int qcota_probe(struct platform_device *pdev)
 
 	mutex_lock(&podev->register_lock);
 	rc = 0;
-	if (!podev->registered) {
+	if (podev->registered == false) {
 		if (rc == 0) {
 			pqce->unit = podev->total_units;
 			podev->total_units++;
 			podev->registered = true;
-		}
+		};
 	} else {
 		pqce->unit = podev->total_units;
 		podev->total_units++;
@@ -812,6 +829,7 @@ static struct platform_driver qcota_plat_driver = {
 	.remove = qcota_remove,
 	.driver = {
 		.name = "qcota",
+		.owner = THIS_MODULE,
 		.of_match_table = qcota_match,
 	},
 };
@@ -892,6 +910,12 @@ static int _disp_stats(void)
 	return len;
 }
 
+static int _debug_stats_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
 static ssize_t _debug_stats_read(struct file *file, char __user *buf,
 			size_t count, loff_t *ppos)
 {
@@ -928,7 +952,7 @@ static ssize_t _debug_stats_write(struct file *file, const char __user *buf,
 }
 
 static const struct file_operations _debug_stats_ops = {
-	.open =         simple_open,
+	.open =         _debug_stats_open,
 	.read =         _debug_stats_read,
 	.write =        _debug_stats_write,
 };

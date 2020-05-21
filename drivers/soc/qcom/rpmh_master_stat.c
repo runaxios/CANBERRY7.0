@@ -1,8 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) "%s: " fmt, KBUILD_MODNAME
@@ -101,7 +108,6 @@ static ssize_t msm_rpmh_master_stats_print_data(char *prvbuf, ssize_t length,
 				struct msm_rpmh_master_stats *record,
 				const char *name)
 {
-	int sleep_status;
 	uint64_t accumulated_duration = record->accumulated_duration;
 	/*
 	 * If a master is in sleep when reading the sleep stats from SMEM
@@ -109,22 +115,19 @@ static ssize_t msm_rpmh_master_stats_print_data(char *prvbuf, ssize_t length,
 	 * This ensures that the displayed stats are real when used for
 	 * the purpose of computing battery utilization.
 	 */
-	sleep_status = 0;
-	if (record->last_entered > record->last_exited) {
+	if (record->last_entered > record->last_exited)
 		accumulated_duration +=
 				(arch_counter_get_cntvct()
 				- record->last_entered);
-		sleep_status = 1;
-	}
+
 	return snprintf(prvbuf, length, "%s\n\tVersion:0x%x\n"
 			"\tSleep Count:0x%x\n"
 			"\tSleep Last Entered At:0x%llx\n"
 			"\tSleep Last Exited At:0x%llx\n"
-			"\tSleep Accumulated Duration:0x%llx\n"
-			"\tSleep Status:%d\n\n",
+			"\tSleep Accumulated Duration:0x%llx\n\n",
 			name, record->version_id, record->counts,
 			record->last_entered, record->last_exited,
-			accumulated_duration,sleep_status);
+			accumulated_duration);
 }
 
 static ssize_t msm_rpmh_master_stats_show(struct kobject *kobj,
@@ -164,26 +167,22 @@ void system_sleep_status_print_enabled(void)
 {
 	size_t size = 0;
 	int i = 0;
-	int sleep_status;
 	ssize_t length;
 	char *buf = NULL;
 	struct msm_rpmh_master_stats *record = NULL;
 	mutex_lock(&rpmh_stats_mutex);
 
-	sleep_status = (apss_master_stats.last_entered > apss_master_stats.last_exited) ? 1:0;
-	pr_info("APSS---SLEEP status:%d count:0x%x\n",sleep_status, apss_master_stats.counts);
+	pr_info("APSS---Sleep count 0x%x\n",apss_master_stats.counts);
 	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	length = msm_rpmh_master_stats_print_data(buf, PAGE_SIZE,
 						&apss_master_stats, "APSS");
 
-	for (i = 0; i < ARRAY_SIZE(rpmh_masters); i++) {
-		record = (struct msm_rpmh_master_stats *) qcom_smem_get(
-					rpmh_masters[i].pid, 
-					rpmh_masters[i].smem_id, &size);
-		if (!IS_ERR_OR_NULL(record) && (PAGE_SIZE - length > 0)) {
-			sleep_status = (record->last_entered > record->last_exited) ? 1:0;
-			pr_info("%s---SLEEP status:%d count:0x%x\n",rpmh_masters[i].master_name, sleep_status, record->counts);
-		}
+        for (i = 0; i < ARRAY_SIZE(rpmh_masters); i++) {
+                record = (struct msm_rpmh_master_stats *) qcom_smem_get(
+                                        rpmh_masters[i].pid,
+                                        rpmh_masters[i].smem_id, &size);
+                if (!IS_ERR_OR_NULL(record) && (PAGE_SIZE - length > 0))
+		pr_info("%s---Sleep count 0x%x\n",rpmh_masters[i].master_name,record->counts);
 	}
 
 	mutex_unlock(&rpmh_stats_mutex);
@@ -242,6 +241,9 @@ static int msm_rpmh_master_stats_probe(struct platform_device *pdev)
 	struct kobject *rpmh_master_stats_kobj = NULL;
 	int ret = -ENOMEM;
 
+	if (!pdev)
+		return -EINVAL;
+
 	prvdata = devm_kzalloc(&pdev->dev, sizeof(*prvdata), GFP_KERNEL);
 	if (!prvdata)
 		return ret;
@@ -287,6 +289,9 @@ fail_sysfs:
 static int msm_rpmh_master_stats_remove(struct platform_device *pdev)
 {
 	struct rpmh_master_stats_prv_data *prvdata;
+
+	if (!pdev)
+		return -EINVAL;
 
 	prvdata = (struct rpmh_master_stats_prv_data *)
 				platform_get_drvdata(pdev);

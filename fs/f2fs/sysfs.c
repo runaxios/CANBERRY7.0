@@ -441,7 +441,7 @@ F2FS_GENERAL_RO_ATTR(lifetime_write_kbytes);
 F2FS_GENERAL_RO_ATTR(features);
 F2FS_GENERAL_RO_ATTR(current_reserved_blocks);
 
-#ifdef CONFIG_FS_ENCRYPTION
+#ifdef CONFIG_F2FS_FS_ENCRYPTION
 F2FS_FEATURE_RO_ATTR(encryption, FEAT_CRYPTO);
 #endif
 #ifdef CONFIG_BLK_DEV_ZONED
@@ -503,7 +503,7 @@ static struct attribute *f2fs_attrs[] = {
 };
 
 static struct attribute *f2fs_feat_attrs[] = {
-#ifdef CONFIG_FS_ENCRYPTION
+#ifdef CONFIG_F2FS_FS_ENCRYPTION
 	ATTR_LIST(encryption),
 #endif
 #ifdef CONFIG_BLK_DEV_ZONED
@@ -667,6 +667,24 @@ static int __maybe_unused victim_bits_seq_show(struct seq_file *seq,
 	return 0;
 }
 
+#define F2FS_PROC_FILE_DEF(_name)					\
+static int _name##_open_fs(struct inode *inode, struct file *file)	\
+{									\
+	return single_open(file, _name##_seq_show, PDE_DATA(inode));	\
+}									\
+									\
+static const struct file_operations f2fs_seq_##_name##_fops = {		\
+	.open = _name##_open_fs,					\
+	.read = seq_read,						\
+	.llseek = seq_lseek,						\
+	.release = single_release,					\
+};
+
+F2FS_PROC_FILE_DEF(segment_info);
+F2FS_PROC_FILE_DEF(segment_bits);
+F2FS_PROC_FILE_DEF(iostat_info);
+F2FS_PROC_FILE_DEF(victim_bits);
+
 int __init f2fs_init_sysfs(void)
 {
 	int ret;
@@ -710,14 +728,14 @@ int f2fs_register_sysfs(struct f2fs_sb_info *sbi)
 		sbi->s_proc = proc_mkdir(sb->s_id, f2fs_proc_root);
 
 	if (sbi->s_proc) {
-		proc_create_single_data("segment_info", S_IRUGO, sbi->s_proc,
-				segment_info_seq_show, sb);
-		proc_create_single_data("segment_bits", S_IRUGO, sbi->s_proc,
-				segment_bits_seq_show, sb);
-		proc_create_single_data("iostat_info", S_IRUGO, sbi->s_proc,
-				iostat_info_seq_show, sb);
-		proc_create_single_data("victim_bits", S_IRUGO, sbi->s_proc,
-				victim_bits_seq_show, sb);
+		proc_create_data("segment_info", S_IRUGO, sbi->s_proc,
+				 &f2fs_seq_segment_info_fops, sb);
+		proc_create_data("segment_bits", S_IRUGO, sbi->s_proc,
+				 &f2fs_seq_segment_bits_fops, sb);
+		proc_create_data("iostat_info", S_IRUGO, sbi->s_proc,
+				&f2fs_seq_iostat_info_fops, sb);
+		proc_create_data("victim_bits", S_IRUGO, sbi->s_proc,
+				&f2fs_seq_victim_bits_fops, sb);
 	}
 	return 0;
 }

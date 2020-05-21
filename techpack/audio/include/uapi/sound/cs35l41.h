@@ -2,6 +2,7 @@
  * linux/sound/cs35l41.h -- Platform data for CS35L41
  *
  * Copyright (c) 2018 Cirrus Logic Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -63,22 +64,18 @@ struct cs35l41_private {
 	int extclk_freq;
 	int extclk_cfg;
 	int sclk;
-	bool reload_tuning;
+	unsigned int cspl_cmd;
 	bool dspa_mode;
 	bool i2s_mode;
 	bool swire_mode;
 	bool halo_booted;
 	bool bus_spi;
-	bool fast_switch_en;
 	/* GPIO for /RST */
-	struct gpio_desc *reset_gpio;
-	//int reset_gpio;
-	/* Run-time mixer */
-	unsigned int fast_switch_file_idx;
-	struct soc_enum fast_switch_enum;
-	const char **fast_switch_names;
-	struct mutex rate_lock;
-
+	//struct gpio_desc *reset_gpio;
+	int reset_gpio;
+	struct completion global_pup_done;
+	struct completion global_pdn_done;
+	struct completion mbox_cmd;
 };
 
 int cs35l41_probe(struct cs35l41_private *cs35l41,

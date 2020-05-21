@@ -144,7 +144,7 @@ static int sdcardfs_remount_fs2(struct vfsmount *mnt, struct super_block *sb,
 		pr_err("sdcardfs: remount flags 0x%x unsupported\n", *flags);
 		err = -EINVAL;
 	}
-	pr_info("Remount options were %s for vfsmnt %p.\n", options, mnt);
+	pr_info("Remount options were %s for vfsmnt %pK.\n", options, mnt);
 	err = parse_options_remount(sb, options, *flags & ~MS_SILENT, mnt->data);
 
 
@@ -219,7 +219,7 @@ static struct inode *sdcardfs_alloc_inode(struct super_block *sb)
 	spin_lock_init(&i->top_lock);
 	kref_get(&d->refcount);
 
-	inode_set_iversion(&i->vfs_inode, 1);
+	i->vfs_inode.i_version = 1;
 	return &i->vfs_inode;
 }
 
@@ -313,8 +313,6 @@ static int sdcardfs_show_options(struct vfsmount *mnt, struct seq_file *m,
 		seq_printf(m, ",reserved=%uMB", opts->reserved_mb);
 	if (opts->nocache)
 		seq_printf(m, ",nocache");
-	if (opts->unshared_obb)
-		seq_printf(m, ",unshared_obb");
 
 	return 0;
 };

@@ -1,5 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -98,8 +97,7 @@ enum {
 #define UFS_CNTLR_3_x_x_VEN_REGS_OFFSET(x)	(0x400 + x)
 
 /* bit definitions for REG_UFS_CFG1 register */
-#define QUNIPRO_SEL		0x1
-#define UTP_DBG_RAMS_EN		0x20000
+#define QUNIPRO_SEL	UFS_BIT(0)
 #define TEST_BUS_EN		BIT(18)
 #define TEST_BUS_SEL		0x780000
 #define UFS_REG_TEST_BUS_EN	BIT(30)
@@ -330,25 +328,24 @@ struct ufs_qcom_host {
 	 * Note: By default this capability will be kept enabled if host
 	 * controller supports the QUniPro mode.
 	 */
-	#define UFS_QCOM_CAP_QUNIPRO	0x1
+	#define UFS_QCOM_CAP_QUNIPRO	UFS_BIT(0)
 
 	/*
 	 * Set this capability if host controller can retain the secure
 	 * configuration even after UFS controller core power collapse.
 	 */
-	#define UFS_QCOM_CAP_RETAIN_SEC_CFG_AFTER_PWR_COLLAPSE	0x2
+	#define UFS_QCOM_CAP_RETAIN_SEC_CFG_AFTER_PWR_COLLAPSE	UFS_BIT(1)
 
 	/*
 	 * Set this capability if host controller supports Qunipro internal
 	 * clock gating.
 	 */
-	#define UFS_QCOM_CAP_QUNIPRO_CLK_GATING		0x4
+	#define UFS_QCOM_CAP_QUNIPRO_CLK_GATING		UFS_BIT(2)
 
 	/*
 	 * Set this capability if host controller supports SVS2 frequencies.
 	 */
-	#define UFS_QCOM_CAP_SVS2	0x8
-
+	#define UFS_QCOM_CAP_SVS2	UFS_BIT(3)
 	u32 caps;
 
 	struct phy *generic_phy;
@@ -383,10 +380,8 @@ struct ufs_qcom_host {
 
 	spinlock_t ice_work_lock;
 	struct work_struct ice_cfg_work;
-	bool is_ice_cfg_work_set;
 	struct request *req_pending;
 	struct ufs_vreg *vddp_ref_clk;
-	struct ufs_vreg *vccq_parent;
 	bool work_pending;
 	bool is_phy_pwr_on;
 };

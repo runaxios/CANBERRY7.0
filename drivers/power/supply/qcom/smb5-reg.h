@@ -1,7 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __SMB5_CHARGER_REG_H
@@ -113,8 +120,6 @@ enum {
 #define CHGR_JEITA_THRESHOLD_BASE_REG(i)	(CHGR_BASE + 0x94 + (i * 4))
 #define CHGR_JEITA_HOT_THRESHOLD_MSB_REG	CHGR_JEITA_THRESHOLD_BASE_REG(0)
 
-#define CHGR_SAFETY_TIMER_ENABLE_CFG		(CHGR_BASE + 0xA0)
-
 #define CHGR_FAST_CHARGE_SAFETY_TIMER_CFG_REG	(CHGR_BASE + 0xA2)
 #define FAST_CHARGE_SAFETY_TIMER_192_MIN	0x0
 #define FAST_CHARGE_SAFETY_TIMER_384_MIN	0x1
@@ -185,7 +190,6 @@ enum {
 #define SHIP_MODE_EN_BIT			BIT(0)
 
 #define BATIF_ADC_CHANNEL_EN_REG		(BATIF_BASE + 0x82)
-#define IBATT_CHANNEL_EN_BIT			BIT(6)
 #define CONN_THM_CHANNEL_EN_BIT			BIT(4)
 #define DIE_TEMP_CHANNEL_EN_BIT			BIT(2)
 #define MISC_THM_CHANNEL_EN_BIT			BIT(1)
@@ -255,13 +259,6 @@ enum {
 #define SINGLE_DECREMENT_BIT			BIT(1)
 #define SINGLE_INCREMENT_BIT			BIT(0)
 
-#define USBIN_ADAPTER_ALLOW_OVERRIDE_REG	(USBIN_BASE + 0x44)
-#define CONTINUOUS				BIT(3)
-#define FORCE_12V				BIT(2)
-#define FORCE_9V				BIT(1)
-#define FORCE_5V				BIT(0)
-#define FORCE_NULL				0
-
 #define USB_CMD_PULLDOWN_REG			(USBIN_BASE + 0x45)
 #define EN_PULLDOWN_USB_IN_BIT			BIT(0)
 
@@ -278,9 +275,17 @@ enum {
 };
 
 #define USBIN_ADAPTER_ALLOW_CFG_REG		(USBIN_BASE + 0x60)
-#define USBIN_ADAPTER_ALLOW_MASK		GENMASK(3, 0)
-#define USBIN_ADAPTER_ALLOW_5V_OR_9V_TO_12V	0x07
-#define USBIN_ADAPTER_ALLOW_5V_TO_12V		0x0c
+enum {
+	USBIN_ADAPTER_ALLOW_5V		= 0,
+	USBIN_ADAPTER_ALLOW_9V		= 2,
+	USBIN_ADAPTER_ALLOW_5V_OR_9V	= 3,
+	USBIN_ADAPTER_ALLOW_12V		= 4,
+	USBIN_ADAPTER_ALLOW_5V_OR_12V	= 5,
+	USBIN_ADAPTER_ALLOW_9V_TO_12V	= 6,
+	USBIN_ADAPTER_ALLOW_5V_OR_9V_TO_12V = 7,
+	USBIN_ADAPTER_ALLOW_5V_TO_9V	= 8,
+	USBIN_ADAPTER_ALLOW_5V_TO_12V	= 12,
+};
 
 #define USBIN_OPTIONS_1_CFG_REG			(USBIN_BASE + 0x62)
 #define HVDCP_AUTH_ALG_EN_CFG_BIT		BIT(6)
@@ -318,23 +323,27 @@ enum {
 
 #define USBIN_5V_AICL_THRESHOLD_REG		(USBIN_BASE + 0x81)
 #define USBIN_CONT_AICL_THRESHOLD_REG		(USBIN_BASE + 0x84)
+
+#define TYPE_C_CFG_REG                         (USBIN_BASE + 0x58)
+#define APSD_START_ON_CC_BIT                   BIT(7)
+
 /********************************
  *  DCIN Peripheral Registers   *
  ********************************/
 
 /* DCIN Interrupt Bits */
 #define DCIN_PLUGIN_RT_STS_BIT			BIT(4)
-#define DCIN_PON_RT_STS_BIT			BIT(6)
 
 #define DCIN_CMD_IL_REG				(DCIN_BASE + 0x40)
 #define DCIN_SUSPEND_BIT			BIT(0)
 #define DCIN_EN_OVERRIDE_BIT			BIT(1)
-#define DCIN_EN_BIT			BIT(2)
-#define DCIN_EN_MASK				GENMASK(2, 1)
+#define DCIN_EN_BIT					BIT(2)
 
-#define DCIN_CMD_PULLDOWN_REG           (DCIN_BASE + 0x45)
-#define DCIN_PULLDOWN_EN_BIT            BIT(0)
-#define DCIN_MID_PULLDOWN_BIT           BIT(1)
+#define DCIN_CMD_PULLDOWN_REG		(DCIN_BASE + 0x45)
+#define DCIN_PULLDOWN_EN_BIT		BIT(0)
+#define DCIN_MID_PULLDOWN_BIT		BIT(1)
+
+#define DCIN_EN_MASK				GENMASK(2, 1)
 
 #define DCIN_CMD_PON_REG			(DCIN_BASE + 0x45)
 #define DCIN_PON_BIT				BIT(0)
@@ -367,7 +376,6 @@ enum {
 
 #define TYPE_C_STATE_MACHINE_STATUS_REG		(TYPEC_BASE + 0x09)
 #define TYPEC_ATTACH_DETACH_STATE_BIT		BIT(5)
-#define TYPEC_ATTACHWAIT_SRC				0x05
 
 #define TYPE_C_MISC_STATUS_REG			(TYPEC_BASE + 0x0B)
 #define TYPEC_WATER_DETECTION_STATUS_BIT	BIT(7)
@@ -389,10 +397,6 @@ enum {
 #define U_USB_FMB2_BIT				BIT(1)
 #define U_USB_FLOAT2_BIT			BIT(0)
 
-#define TYPE_C_DEBUG_ACC_SNK_CFG		(TYPEC_BASE + 0x4A)
-#define TYPEC_DEBUG_ACC_SNK_SEL_ICL		BIT(2)
-#define TYPEC_DEBUG_ACC_SNK_DIS_AICL		BIT(3)
-
 #define TYPE_C_MODE_CFG_REG			(TYPEC_BASE + 0x44)
 #define TYPEC_TRY_MODE_MASK			GENMASK(4, 3)
 #define EN_TRY_SNK_BIT				BIT(4)
@@ -412,6 +416,10 @@ enum {
 #define TYPEC_CCOUT_VALUE_BIT			BIT(1)
 #define TYPEC_CCOUT_SRC_BIT			BIT(0)
 
+#define TYPE_C_DEBUG_ACC_SNK_CFG		(TYPEC_BASE + 0x4A)
+#define TYPEC_DEBUG_ACC_SNK_SEL_ICL		BIT(2)
+#define TYPEC_DEBUG_ACC_SNK_DIS_AICL		BIT(3)
+
 #define DEBUG_ACCESS_SRC_CFG_REG		(TYPEC_BASE + 0x4C)
 #define EN_UNORIENTED_DEBUG_ACCESS_SRC_BIT	BIT(0)
 
@@ -426,7 +434,6 @@ enum {
 
 #define TYPE_C_CURRSRC_CFG_REG			(TYPEC_BASE + 0x52)
 #define TYPEC_SRC_RP_SEL_MASK			GENMASK(1, 0)
-
 enum {
 	TYPEC_SRC_RP_STD,
 	TYPEC_SRC_RP_1P5A,
@@ -528,6 +535,7 @@ enum {
 #define WATCHDOG_TRIGGER_AFP_EN_BIT		BIT(7)
 #define BARK_WDOG_INT_EN_BIT			BIT(6)
 #define WDOG_TIMER_EN_ON_PLUGIN_BIT		BIT(1)
+#define WDOG_TIMER_EN_BIT			BIT(0)
 
 #define SNARL_BARK_BITE_WD_CFG_REG		(MISC_BASE + 0x53)
 #define BITE_WDOG_DISABLE_CHARGING_CFG_BIT	BIT(7)

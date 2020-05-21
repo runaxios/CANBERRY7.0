@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -68,7 +66,7 @@ static void ufs_qcom_ice_error_cb(void *host_ctrl, u32 error)
 {
 	struct ufs_qcom_host *qcom_host = (struct ufs_qcom_host *)host_ctrl;
 
-	dev_err(qcom_host->hba->dev, "%s: Error in ice operation 0x%x\n",
+	dev_err(qcom_host->hba->dev, "%s: Error in ice operation 0x%x",
 		__func__, error);
 
 	if (qcom_host->ice.state == UFS_QCOM_ICE_STATE_ACTIVE)
@@ -236,13 +234,7 @@ int ufs_qcom_ice_init(struct ufs_qcom_host *qcom_host)
 			err = -ENOMEM;
 			goto out;
 		}
-	}
-	if (ice_workqueue) {
-		if (!qcom_host->is_ice_cfg_work_set) {
-			INIT_WORK(&qcom_host->ice_cfg_work,
-					ufs_qcom_ice_cfg_work);
-			qcom_host->is_ice_cfg_work_set = true;
-		}
+		INIT_WORK(&qcom_host->ice_cfg_work, ufs_qcom_ice_cfg_work);
 	}
 
 out:
@@ -326,6 +318,7 @@ int ufs_qcom_ice_req_setup(struct ufs_qcom_host *qcom_host,
 					}
 					qcom_host->work_pending = true;
 				}
+
 			} else {
 				if (err != -EBUSY)
 					dev_err(qcom_host->hba->dev,
@@ -559,7 +552,7 @@ int ufs_qcom_ice_cfg_end(struct ufs_qcom_host *qcom_host, struct request *req)
 	struct device *dev = qcom_host->hba->dev;
 
 	if (qcom_host->ice.vops->config_end) {
-		err = qcom_host->ice.vops->config_end(qcom_host->ice.pdev, req);
+		err = qcom_host->ice.vops->config_end(req);
 		if (err) {
 			dev_err(dev, "%s: error in ice_vops->config_end %d\n",
 				__func__, err);

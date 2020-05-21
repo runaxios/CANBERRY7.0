@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
-
 #
 # Makefile for MSM Broadcast subsystem drivers.
 #

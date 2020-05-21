@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -58,11 +65,9 @@ static const char *const pmic_names[] = {
 	[PM8150B_SUBTYPE] = "PM8150B",
 	[PM8150L_SUBTYPE] = "PM8150L",
 	[PM6150_SUBTYPE] = "PM6150",
-	[PM7250B_SUBTYPE] = "PM7250B",
+	[PM8150A_SUBTYPE] = "PM8150A",
+	[PME9205_SUBTYPE] = "PME9205",
 	[PM6125_SUBTYPE] = "PM6125",
-	[PM8008_SUBTYPE] = "PM8008",
-	[SMB1355_SUBTYPE] = "SMB1355",
-	[SMB1390_SUBTYPE] = "SMB1390",
 };
 
 struct revid_chip {
@@ -257,6 +262,7 @@ static struct platform_driver qpnp_revid_driver = {
 	.probe	= qpnp_revid_probe,
 	.driver	= {
 		.name		= QPNP_REVID_DEV_NAME,
+		.owner		= THIS_MODULE,
 		.of_match_table	= qpnp_revid_match_table,
 	},
 };

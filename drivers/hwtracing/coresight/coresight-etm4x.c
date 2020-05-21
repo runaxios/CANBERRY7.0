@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
- * Copyright (c) 2014,2016,2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014, 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -176,12 +183,6 @@ static void etm4_enable_hw(void *info)
 	if (coresight_timeout(drvdata->base, TRCSTATR, TRCSTATR_IDLE_BIT, 0))
 		dev_err(drvdata->dev,
 			"timeout while waiting for Idle Trace Status\n");
-	/*
-	 * As recommended by section 4.3.7 ("Synchronization when using the
-	 * memory-mapped interface") of ARM IHI 0064D
-	 */
-	dsb(sy);
-	isb();
 
 	CS_LOCK(drvdata->base);
 
@@ -334,12 +335,8 @@ static void etm4_disable_hw(void *info)
 	/* EN, bit[0] Trace unit enable bit */
 	control &= ~0x1;
 
-	/*
-	 * Make sure everything completes before disabling, as recommended
-	 * by section 7.3.77 ("TRCVICTLR, ViewInst Main Control Register,
-	 * SSTATUS") of ARM IHI 0064D
-	 */
-	dsb(sy);
+	/* make sure everything completes before disabling */
+	mb();
 	isb();
 	writel_relaxed(control, drvdata->base + TRCPRGCTLR);
 
@@ -993,6 +990,7 @@ static int etm4_probe(struct amba_device *adev, const struct amba_id *id)
 	spin_lock_init(&drvdata->spinlock);
 
 	drvdata->cpu = pdata ? pdata->cpu : -ENODEV;
+
 	if (drvdata->cpu == -ENODEV) {
 		dev_info(dev, "CPU not available\n");
 		return -ENODEV;
@@ -1005,7 +1003,7 @@ static int etm4_probe(struct amba_device *adev, const struct amba_id *id)
 		dev_err(dev, "ETM arch init failed\n");
 		cpus_read_unlock();
 		return ret;
-	} else if (!etm4_arch_supported(drvdata->arch)) {
+	} else if (etm4_arch_supported(drvdata->arch) == false) {
 		cpus_read_unlock();
 		return -EINVAL;
 	}

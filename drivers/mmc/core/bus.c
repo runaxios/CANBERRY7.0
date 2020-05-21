@@ -219,6 +219,7 @@ static int mmc_runtime_resume(struct device *dev)
 
 	return host->bus_ops->runtime_resume(host);
 }
+
 #endif /* !CONFIG_PM */
 
 static const struct dev_pm_ops mmc_bus_pm_ops = {
@@ -281,7 +282,7 @@ static void mmc_release_card(struct device *dev)
 	kfree(card->info);
 
 	kfree(card);
-	if (host)
+	if (host && card == host->card)
 		host->card = NULL;
 }
 
@@ -304,6 +305,8 @@ struct mmc_card *mmc_alloc_card(struct mmc_host *host, struct device_type *type)
 	card->dev.bus = &mmc_bus_type;
 	card->dev.release = mmc_release_card;
 	card->dev.type = type;
+
+	spin_lock_init(&card->bkops.stats.lock);
 
 	return card;
 }
@@ -378,9 +381,16 @@ int mmc_add_card(struct mmc_card *card)
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_card_debugfs(card);
 #endif
+	mmc_init_context_info(card->host);
+
 	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
 
-	device_enable_async_suspend(&card->dev);
+	if (mmc_card_sdio(card)) {
+		ret = device_init_wakeup(&card->dev, true);
+		if (ret)
+			pr_err("%s: %s: failed to init wakeup: %d\n",
+			       mmc_hostname(card->host), __func__, ret);
+	}
 
 	ret = device_add(&card->dev);
 	if (ret)
@@ -398,16 +408,9 @@ int mmc_add_card(struct mmc_card *card)
  */
 void mmc_remove_card(struct mmc_card *card)
 {
-	struct mmc_host *host = card->host;
-
 #ifdef CONFIG_DEBUG_FS
 	mmc_remove_card_debugfs(card);
 #endif
-
-	if (host->cqe_enabled) {
-		host->cqe_ops->cqe_disable(host);
-		host->cqe_enabled = false;
-	}
 
 	if (mmc_card_present(card)) {
 		if (mmc_host_is_spi(card->host)) {

@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
-
 obj-$(CONFIG_IPA3) += ipahal/
 
 obj-$(CONFIG_IPA3) += ipat.o
@@ -14,10 +12,12 @@ obj-$(CONFIG_RMNET_IPA3) += rmnet_ipa.o ipa_qmi_service_v01.o ipa_qmi_service.o 
 
 obj-$(CONFIG_IPA3_MHI_PROXY) += ipa_mhi_proxy.o
 
-obj-$(CONFIG_IPA3_MHI_PRIME_MANAGER) += ipa_mpm.o
+obj-$(CONFIG_IPA_ETH) += ethernet/
 
 ipat-$(CONFIG_IPA3_REGDUMP) += dump/ipa_reg_dump.o
 
 ccflags-$(CONFIG_IPA3_REGDUMP) += -Idrivers/platform/msm/ipa/ipa_v3/dump
 
-ccflags-$(CONFIG_IPA3_REGDUMP_IPA_4_5) += -Idrivers/platform/msm/ipa/ipa_v3/dump/ipa4.5
+ccflags-$(CONFIG_IPA3_REGDUMP_SM8150) += -Idrivers/platform/msm/ipa/ipa_v3/dump/sm8150
+
+obj-$(CONFIG_IPA3_MHI_PRIME_MANAGER) += ipa_mpm.o

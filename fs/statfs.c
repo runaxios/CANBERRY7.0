@@ -35,11 +35,11 @@ static int flags_by_mnt(int mnt_flags)
 static int flags_by_sb(int s_flags)
 {
 	int flags = 0;
-	if (s_flags & SB_SYNCHRONOUS)
+	if (s_flags & MS_SYNCHRONOUS)
 		flags |= ST_SYNCHRONOUS;
-	if (s_flags & SB_MANDLOCK)
+	if (s_flags & MS_MANDLOCK)
 		flags |= ST_MANDLOCK;
-	if (s_flags & SB_RDONLY)
+	if (s_flags & MS_RDONLY)
 		flags |= ST_RDONLY;
 	return flags;
 }
@@ -217,7 +217,7 @@ SYSCALL_DEFINE3(fstatfs64, unsigned int, fd, size_t, sz, struct statfs64 __user 
 	return error;
 }
 
-static int vfs_ustat(dev_t dev, struct kstatfs *sbuf)
+int vfs_ustat(dev_t dev, struct kstatfs *sbuf)
 {
 	struct super_block *s = user_get_super(dev);
 	int err;
@@ -304,10 +304,19 @@ COMPAT_SYSCALL_DEFINE2(fstatfs, unsigned int, fd, struct compat_statfs __user *,
 static int put_compat_statfs64(struct compat_statfs64 __user *ubuf, struct kstatfs *kbuf)
 {
 	struct compat_statfs64 buf;
-
-	if ((kbuf->f_bsize | kbuf->f_frsize) & 0xffffffff00000000ULL)
-		return -EOVERFLOW;
-
+	if (sizeof(ubuf->f_bsize) == 4) {
+		if ((kbuf->f_type | kbuf->f_bsize | kbuf->f_namelen |
+		     kbuf->f_frsize | kbuf->f_flags) & 0xffffffff00000000ULL)
+			return -EOVERFLOW;
+		/* f_files and f_ffree may be -1; it's okay
+		 * to stuff that into 32 bits */
+		if (kbuf->f_files != 0xffffffffffffffffULL
+		 && (kbuf->f_files & 0xffffffff00000000ULL))
+			return -EOVERFLOW;
+		if (kbuf->f_ffree != 0xffffffffffffffffULL
+		 && (kbuf->f_ffree & 0xffffffff00000000ULL))
+			return -EOVERFLOW;
+	}
 	memset(&buf, 0, sizeof(struct compat_statfs64));
 	buf.f_type = kbuf->f_type;
 	buf.f_bsize = kbuf->f_bsize;
@@ -326,7 +335,7 @@ static int put_compat_statfs64(struct compat_statfs64 __user *ubuf, struct kstat
 	return 0;
 }
 
-int kcompat_sys_statfs64(const char __user * pathname, compat_size_t sz, struct compat_statfs64 __user * buf)
+COMPAT_SYSCALL_DEFINE3(statfs64, const char __user *, pathname, compat_size_t, sz, struct compat_statfs64 __user *, buf)
 {
 	struct kstatfs tmp;
 	int error;
@@ -340,12 +349,7 @@ int kcompat_sys_statfs64(const char __user * pathname, compat_size_t sz, struct 
 	return error;
 }
 
-COMPAT_SYSCALL_DEFINE3(statfs64, const char __user *, pathname, compat_size_t, sz, struct compat_statfs64 __user *, buf)
-{
-	return kcompat_sys_statfs64(pathname, sz, buf);
-}
-
-int kcompat_sys_fstatfs64(unsigned int fd, compat_size_t sz, struct compat_statfs64 __user * buf)
+COMPAT_SYSCALL_DEFINE3(fstatfs64, unsigned int, fd, compat_size_t, sz, struct compat_statfs64 __user *, buf)
 {
 	struct kstatfs tmp;
 	int error;
@@ -357,11 +361,6 @@ int kcompat_sys_fstatfs64(unsigned int fd, compat_size_t sz, struct compat_statf
 	if (!error)
 		error = put_compat_statfs64(buf, &tmp);
 	return error;
-}
-
-COMPAT_SYSCALL_DEFINE3(fstatfs64, unsigned int, fd, compat_size_t, sz, struct compat_statfs64 __user *, buf)
-{
-	return kcompat_sys_fstatfs64(fd, sz, buf);
 }
 
 /*

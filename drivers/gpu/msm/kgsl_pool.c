@@ -1,16 +1,25 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, 2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#include <linux/vmalloc.h>
 #include <asm/cacheflush.h>
+#include <linux/slab.h>
 #include <linux/highmem.h>
-#include <linux/of.h>
-#include <linux/scatterlist.h>
+#include <linux/version.h>
 
+#include "kgsl.h"
 #include "kgsl_device.h"
 #include "kgsl_pool.h"
-#include "kgsl_sharedmem.h"
 
 #define KGSL_MAX_POOLS 4
 #define KGSL_MAX_POOL_ORDER 8
@@ -253,19 +262,11 @@ void kgsl_pool_free_pages(struct page **pages, unsigned int pcount)
 	if (pages == NULL || pcount == 0)
 		return;
 
-	if (WARN(!kern_addr_valid((unsigned long)pages),
-		"Address of pages=%pK is not valid\n", pages))
-		return;
-
 	for (i = 0; i < pcount;) {
 		/*
 		 * Free each page or compound page group individually.
 		 */
 		struct page *p = pages[i];
-
-		if (WARN(!kern_addr_valid((unsigned long)p),
-			"Address of page=%pK is not valid\n", p))
-			return;
 
 		i += 1 << compound_order(p);
 		kgsl_pool_free_page(p);
@@ -291,22 +292,6 @@ static int kgsl_pool_get_retry_order(unsigned int order)
 			return kgsl_pools[i].pool_order;
 
 	return 0;
-}
-
-static unsigned int kgsl_gfp_mask(unsigned int page_order)
-{
-	unsigned int gfp_mask = __GFP_HIGHMEM;
-
-	if (page_order > 0) {
-		gfp_mask |= __GFP_COMP | __GFP_NORETRY | __GFP_NOWARN;
-		gfp_mask &= ~__GFP_RECLAIM;
-	} else
-		gfp_mask |= GFP_KERNEL;
-
-	if (kgsl_sharedmem_get_noretry())
-		gfp_mask |= __GFP_NORETRY | __GFP_NOWARN;
-
-	return gfp_mask;
 }
 
 /**
@@ -519,7 +504,7 @@ static void kgsl_pool_config(unsigned int order, unsigned int reserved_pages,
 {
 #ifdef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
 	if (order > 0) {
-		pr_err("kgsl: pool order:%d not supprted\n", order);
+		pr_info("%s: Pool order:%d not supprted.!!\n", __func__, order);
 		return;
 	}
 #endif

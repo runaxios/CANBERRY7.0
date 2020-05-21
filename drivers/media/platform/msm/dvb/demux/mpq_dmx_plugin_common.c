@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -50,15 +57,28 @@
 #define SDMX_SECTION_BUFFER_SIZE	(64*1024)
 #define SDMX_PCR_BUFFER_SIZE		(64*1024)
 
-/* TODO: Convert below parameters to sysfs tunables */
 /* Number of demux devices, has default of linux configuration */
 static int mpq_demux_device_num = CONFIG_DVB_MPQ_NUM_DMX_DEVICES;
+module_param(mpq_demux_device_num, int, 0444);
+
+/* ION heap IDs used for allocating video output buffer */
 static int video_secure_ion_heap = ION_CP_MM_HEAP_ID;
+module_param(video_secure_ion_heap, int, 0644);
+MODULE_PARM_DESC(video_secure_ion_heap,
+		"ION heap for secure video buffer allocation");
+
 static int video_nonsecure_ion_heap = ION_SYSTEM_HEAP_ID;
+module_param(video_nonsecure_ion_heap, int, 0644);
+MODULE_PARM_DESC(video_nonsecure_ion_heap,
+		"ION heap for non-secure video buffer allocation");
+
 /* Value of TS packet scramble bits field for even key */
 static int mpq_sdmx_scramble_even = 0x2;
+module_param(mpq_sdmx_scramble_even, int, 0644);
+
 /* Value of TS packet scramble bits field for odd key */
 static int mpq_sdmx_scramble_odd = 0x3;
+module_param(mpq_sdmx_scramble_odd, int, 0644);
 
 /*
  * Default action (discard or pass) taken when scramble bit is not one of the
@@ -66,12 +86,15 @@ static int mpq_sdmx_scramble_odd = 0x3;
  * When set packets will be discarded, otherwise passed through.
  */
 static int mpq_sdmx_scramble_default_discard = 1;
+module_param(mpq_sdmx_scramble_default_discard, int, 0644);
 
 /* Max number of TS packets allowed as input for a single sdmx process */
 static int mpq_sdmx_proc_limit = MAX_TS_PACKETS_FOR_SDMX_PROCESS;
+module_param(mpq_sdmx_proc_limit, int, 0644);
 
 /* Debug flag for secure demux process */
 static int mpq_sdmx_debug;
+module_param(mpq_sdmx_debug, int, 0644);
 
 /*
  * Indicates whether the demux should search for frame boundaries
@@ -79,12 +102,15 @@ static int mpq_sdmx_debug;
  * only video PES packet payloads as-is.
  */
 static int video_framing = 1;
+module_param(video_framing, int, 0644);
 
 /* TSIF operation mode: 1 = TSIF_MODE_1,  2 = TSIF_MODE_2, 3 = TSIF_LOOPBACK */
 static int tsif_mode = 2;
+module_param(tsif_mode, int, 0644);
 
 /* Inverse TSIF clock signal */
 static int clock_inv;
+module_param(clock_inv, int, 0644);
 
 /* Global data-structure for managing demux devices */
 static struct
@@ -465,6 +491,12 @@ static inline void mpq_dmx_update_sdmx_stat(struct mpq_demux *mpq_demux,
 		mpq_demux->sdmx_process_time_max = process_time;
 }
 
+static int mpq_sdmx_log_level_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
 static ssize_t mpq_sdmx_log_level_read(struct file *fp,
 	char __user *user_buffer, size_t count, loff_t *position)
 {
@@ -526,7 +558,7 @@ static ssize_t mpq_sdmx_log_level_write(struct file *fp,
 }
 
 static const struct file_operations sdmx_debug_fops = {
-	.open = simple_open,
+	.open = mpq_sdmx_log_level_open,
 	.read = mpq_sdmx_log_level_read,
 	.write = mpq_sdmx_log_level_write,
 	.owner = THIS_MODULE,
@@ -804,6 +836,7 @@ int mpq_dmx_plugin_init(mpq_dmx_init dmx_init_func,
 	if (!mpq_dmx_info.devices) {
 		result = -ENOMEM;
 		goto init_failed;
+		goto init_failed;
 	}
 
 	/* Initialize and register all demux devices to the system */
@@ -817,8 +850,6 @@ int mpq_dmx_plugin_init(mpq_dmx_init dmx_init_func,
 		mpq_demux->source = DMX_SOURCE_DVR0 + i;
 
 		mutex_init(&mpq_demux->mutex);
-
-		dma_set_mask(&mpq_demux->pdev->dev, DMA_BIT_MASK(48));
 
 		mpq_demux->num_secure_feeds = 0;
 		mpq_demux->num_active_feeds = 0;
@@ -937,7 +968,7 @@ void mpq_dmx_plugin_exit(void)
 
 int mpq_dmx_set_source(
 		struct dmx_demux *demux,
-		const enum dmx_source_t *src)
+		const dmx_source_t *src)
 {
 	int i;
 	int dvr_index;
@@ -1233,7 +1264,7 @@ static int mpq_dmx_init_external_buffers(
 	}
 
 	for (i = 0; i < feed_data->buffer_desc.decoder_buffers_num; i++) {
-		if (!is_secure_feed) {
+		if (is_secure_feed == false) {
 			mpq_dmx_vaddr_map(dec_buffs->handles[i], &buff.pa,
 				&buff.va, &buff.sgt, &buff.attach,
 				&buff.len, &buff.dmabuf);
@@ -1244,8 +1275,8 @@ static int mpq_dmx_init_external_buffers(
 				__func__, i);
 				goto init_failed;
 			}
-			memcpy(&feed_data->buffer_desc.buff_dma_info[i], &buff,
-					sizeof(struct ion_dma_buff_info));
+		memcpy(&feed_data->buffer_desc.buff_dma_info[i], &buff,
+			sizeof(struct ion_dma_buff_info));
 
 		} else {
 			mpq_dmx_paddr_map(dec_buffs->handles[i], &buff.pa,
@@ -4022,6 +4053,7 @@ static int mpq_sdmx_invalidate_buffer(struct mpq_feed *mpq_feed)
 {
 	struct dvb_demux_feed *feed = mpq_feed->dvb_demux_feed;
 	struct dvb_ringbuffer *buffer;
+	int ret = 0;
 
 	if (!dvb_dmx_is_video_feed(feed)) {
 		if (dvb_dmx_is_sec_feed(feed) ||
@@ -4033,7 +4065,7 @@ static int mpq_sdmx_invalidate_buffer(struct mpq_feed *mpq_feed)
 				feed->feed.ts.buffer.ringbuff;
 		}
 	}
-	return 0;
+	return ret;
 }
 
 static void mpq_sdmx_prepare_filter_status(struct mpq_demux *mpq_demux,
@@ -4173,7 +4205,7 @@ static int mpq_sdmx_section_filtering(struct mpq_feed *mpq_feed,
 		mpq_feed->sdmx_buf.size) {
 		feed->cb.sec(&mpq_feed->sdmx_buf.data[mpq_feed->sdmx_buf.pread],
 			header->payload_length,
-			NULL, 0, &f->filter, &feed->buffer_flags);
+			NULL, 0, &f->filter);
 	} else {
 		int split = mpq_feed->sdmx_buf.size - mpq_feed->sdmx_buf.pread;
 
@@ -4181,7 +4213,7 @@ static int mpq_sdmx_section_filtering(struct mpq_feed *mpq_feed,
 			split,
 			&mpq_feed->sdmx_buf.data[0],
 			header->payload_length - split,
-			&f->filter, &feed->buffer_flags);
+			&f->filter);
 	}
 
 	return 0;

@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2016-2017, Linaro Ltd
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/idr.h>
@@ -66,7 +74,7 @@ struct glink_msg {
  * struct glink_defer_cmd - deferred incoming control message
  * @node:	list node
  * @msg:	message header
- * @data:	payload of the message
+ * data:	payload of the message
  *
  * Copy of a received control message, to be added to @rx_queue and processed
  * by @rx_work of @qcom_glink.
@@ -82,13 +90,12 @@ struct glink_defer_cmd {
  * struct glink_core_rx_intent - RX intent
  * RX intent
  *
- * @data: pointer to the data (may be NULL for zero-copy)
- * @id: remote or local intent ID
- * @size: size of the original intent (do not modify)
- * @reuse: To mark if the intent can be reused after first use
- * @in_use: To mark if intent is already in use for the channel
- * @offset: next write offset (initially 0)
- * @node:	list node
+ * data: pointer to the data (may be NULL for zero-copy)
+ * id: remote or local intent ID
+ * size: size of the original intent (do not modify)
+ * reuse: To mark if the intent can be reused after first use
+ * in_use: To mark if intent is already in use for the channel
+ * offset: next write offset (initially 0)
  */
 struct glink_core_rx_intent {
 	void *data;
@@ -119,8 +126,6 @@ struct glink_core_rx_intent {
  * @lcids:	idr of all channels with a known local channel id
  * @rcids:	idr of all channels with a known remote channel id
  * @in_reset:	reset status of this edge
- * @features:	remote features
- * @intentless:	flag to indicate that there is no intent
  * @ilc:	ipc logging context reference
  */
 struct qcom_glink {
@@ -135,6 +140,7 @@ struct qcom_glink {
 	struct qcom_glink_pipe *tx_pipe;
 
 	int irq;
+	char irq_name[32];
 
 	struct kthread_worker kworker;
 	struct task_struct *task;
@@ -621,8 +627,8 @@ static void qcom_glink_rx_done(struct qcom_glink *glink,
  * qcom_glink_receive_version() - receive version/features from remote system
  *
  * @glink:	pointer to transport interface
- * @version:	remote version
- * @features:	remote features
+ * @r_version:	remote version
+ * @r_features:	remote features
  *
  * This function is called in response to a remote-initiated version/feature
  * negotiation sequence.
@@ -649,8 +655,8 @@ static void qcom_glink_receive_version(struct qcom_glink *glink,
  * qcom_glink_receive_version_ack() - receive negotiation ack from remote system
  *
  * @glink:	pointer to transport interface
- * @version:	remote version response
- * @features:	remote features response
+ * @r_version:	remote version response
+ * @r_features:	remote features response
  *
  * This function is called in response to a local-initiated version/feature
  * negotiation sequence and is the counter-offer from the remote side based
@@ -680,7 +686,7 @@ static void qcom_glink_receive_version_ack(struct qcom_glink *glink,
 
 /**
  * qcom_glink_send_intent_req_ack() - convert an rx intent request ack cmd to
- * 	wire format and transmit
+				      wire format and transmit
  * @glink:	The transport to transmit on.
  * @channel:	The glink channel
  * @granted:	The request response to encode.
@@ -708,7 +714,7 @@ static int qcom_glink_send_intent_req_ack(struct qcom_glink *glink,
  *			   transmit
  * @glink:	The transport to transmit on.
  * @channel:	The local channel
- * @intent:	The intent to pass on to remote.
+ * @size:	The intent to pass on to remote.
  *
  * Return: 0 on success or standard Linux error code.
  */
@@ -717,11 +723,11 @@ static int qcom_glink_advertise_intent(struct qcom_glink *glink,
 				       struct glink_core_rx_intent *intent)
 {
 	struct command {
-		__le16 id;
-		__le16 lcid;
-		__le32 count;
-		__le32 size;
-		__le32 liid;
+		u16 id;
+		u16 lcid;
+		u32 count;
+		u32 size;
+		u32 liid;
 	} __packed;
 	struct command cmd;
 
@@ -731,7 +737,7 @@ static int qcom_glink_advertise_intent(struct qcom_glink *glink,
 	cmd.size = cpu_to_le32(intent->size);
 	cmd.liid = cpu_to_le32(intent->id);
 
-	CH_INFO(channel, "count:%d size:%zd liid:%d\n", 1,
+	CH_INFO(channel, "count:%d size:%lu liid:%d\n", 1,
 		intent->size, intent->id);
 
 	qcom_glink_tx(glink, &cmd, sizeof(cmd), NULL, 0, true);
@@ -816,9 +822,9 @@ static void qcom_glink_handle_rx_done(struct qcom_glink *glink,
 /**
  * qcom_glink_handle_intent_req() - Receive a request for rx_intent
  *					    from remote side
- * @glink:      Pointer to the transport interface
- * @cid:	Remote channel ID
- * @size:	size of the intent
+ * if_ptr:      Pointer to the transport interface
+ * rcid:	Remote channel ID
+ * size:	size of the intent
  *
  * The function searches for the local channel to which the request for
  * rx_intent has arrived and allocates and notifies the remote back
@@ -837,7 +843,7 @@ static void qcom_glink_handle_intent_req(struct qcom_glink *glink,
 	spin_unlock_irqrestore(&glink->idr_lock, flags);
 
 	if (!channel) {
-		pr_err("%s channel not found for cid %d\n", __func__, cid);
+		pr_err("%s channel not found for cid %u\n", __func__, cid);
 		return;
 	}
 
@@ -1053,8 +1059,8 @@ static void qcom_glink_handle_intent(struct qcom_glink *glink,
 		intent->id = le32_to_cpu(msg->intents[i].iid);
 		intent->size = le32_to_cpu(msg->intents[i].size);
 
-		CH_INFO(channel, "riid:%d size:%zd\n",
-			intent->id, intent->size);
+		CH_INFO(channel, "riid:%d size:%lu\n", intent->id,
+				intent->size);
 
 		spin_lock_irqsave(&channel->intent_lock, flags);
 		ret = idr_alloc(&channel->riids, intent,
@@ -1413,7 +1419,7 @@ static int qcom_glink_request_intent(struct qcom_glink *glink,
 	cmd.cid = channel->lcid;
 	cmd.size = size;
 
-	CH_INFO(channel, "size:%zd\n", size);
+	CH_INFO(channel, "size:%lu\n", size);
 
 	ret = qcom_glink_tx(glink, &cmd, sizeof(cmd), NULL, 0, true);
 	if (ret)
@@ -1607,7 +1613,9 @@ static const struct rpmsg_endpoint_ops glink_endpoint_ops = {
 static void qcom_glink_rpdev_release(struct device *dev)
 {
 	struct rpmsg_device *rpdev = to_rpmsg_device(dev);
+	struct glink_channel *channel = to_glink_channel(rpdev->ept);
 
+	channel->rpdev = NULL;
 	kfree(rpdev);
 }
 
@@ -1953,6 +1961,7 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 	if (IS_ERR(glink->task)) {
 		dev_err(dev, "failed to spawn intent kthread %ld\n",
 			PTR_ERR(glink->task));
+		mbox_free_channel(glink->mbox_chan);
 		return ERR_CAST(glink->task);
 	}
 
@@ -1962,10 +1971,12 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 		dev_err(dev, "failed to register early notif %d\n", ret);
 
 	irq = of_irq_get(dev->of_node, 0);
+	snprintf(glink->irq_name, sizeof(glink->irq_name)-1, "glink-native_%s", glink->name);
+	dev_err(dev, "glink-native glink->irq_name=%s irq=%d\n", glink->irq_name, irq);
 	ret = devm_request_irq(dev, irq,
 			       qcom_glink_native_intr,
 			       IRQF_NO_SUSPEND | IRQF_SHARED,
-			       "glink-native", glink);
+			       glink->irq_name, glink);
 	if (ret) {
 		dev_err(dev, "failed to request IRQ\n");
 		goto unregister;
@@ -2003,6 +2014,8 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 
 unregister:
 	subsys_unregister_early_notifier(glink->name, XPORT_LAYER_NOTIF);
+	kthread_stop(glink->task);
+	mbox_free_channel(glink->mbox_chan);
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(qcom_glink_native_probe);

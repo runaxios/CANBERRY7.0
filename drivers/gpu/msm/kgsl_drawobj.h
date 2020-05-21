@@ -1,12 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __KGSL_DRAWOBJ_H
 #define __KGSL_DRAWOBJ_H
-
-#include <linux/kref.h>
 
 #define DRAWOBJ(obj) (&obj->base)
 #define SYNCOBJ(obj) \
@@ -173,9 +178,6 @@ enum kgsl_drawobj_cmd_priv {
 	CMDOBJ_WFI,
 	CMDOBJ_PROFILE,
 };
-
-struct kgsl_ibdesc;
-struct kgsl_cmd_syncpoint;
 
 struct kgsl_drawobj_cmd *kgsl_drawobj_cmd_create(struct kgsl_device *device,
 		struct kgsl_context *context, unsigned int flags,

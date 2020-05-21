@@ -1,5 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.*/
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #ifndef __MSM_PCIE_H
 #define __MSM_PCIE_H
@@ -15,7 +24,6 @@ enum msm_pcie_config {
 };
 
 enum msm_pcie_pm_opt {
-	MSM_PCIE_DRV_SUSPEND,
 	MSM_PCIE_SUSPEND,
 	MSM_PCIE_RESUME,
 	MSM_PCIE_DISABLE_PC,
@@ -28,8 +36,6 @@ enum msm_pcie_event {
 	MSM_PCIE_EVENT_LINKUP = 0x2,
 	MSM_PCIE_EVENT_WAKEUP = 0x4,
 	MSM_PCIE_EVENT_L1SS_TIMEOUT = BIT(3),
-	MSM_PCIE_EVENT_DRV_CONNECT = BIT(4),
-	MSM_PCIE_EVENT_DRV_DISCONNECT = BIT(5),
 };
 
 enum msm_pcie_trigger {
@@ -55,8 +61,18 @@ struct msm_pcie_register_event {
 };
 
 #ifdef CONFIG_PCI_MSM_MSI
+void msm_msi_config_access(struct irq_domain *domain, bool allow);
+void msm_msi_config(struct irq_domain *domain);
 int msm_msi_init(struct device *dev);
 #else
+static inline void msm_msi_config_access(struct irq_domain *domain, bool allow)
+{
+}
+
+static inline void msm_msi_config(struct irq_domain *domain)
+{
+}
+
 static inline int msm_msi_init(struct device *dev)
 {
 	return -EINVAL;

@@ -1,5 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2016, 2019, The Linux Foundation. All rights reserved. */
+/*
+ * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/clk.h>
 #include <linux/export.h>
@@ -9,7 +19,6 @@
 #include <linux/clk-provider.h>
 #include <linux/of.h>
 #include <linux/bitops.h>
-#include <linux/mfd/syscon.h>
 #include <linux/msm-bus.h>
 
 #include "clk-regmap.h"
@@ -83,9 +92,9 @@ static unsigned long clk_debug_mux_measure_rate(struct clk_hw *hw)
 	spin_lock_irqsave(&clk_reg_lock, flags);
 
 	/* Enable CXO/4 and RINGOSC branch. */
-	regmap_read(meas->regmap, data->xo_div4_cbcr, &gcc_xo4_reg);
+	regmap_read(meas->regmap[GCC], data->xo_div4_cbcr, &gcc_xo4_reg);
 	gcc_xo4_reg |= BIT(0);
-	regmap_write(meas->regmap, data->xo_div4_cbcr, gcc_xo4_reg);
+	regmap_write(meas->regmap[GCC], data->xo_div4_cbcr, gcc_xo4_reg);
 
 	/*
 	 * The ring oscillator counter will not reset if the measured clock
@@ -95,15 +104,15 @@ static unsigned long clk_debug_mux_measure_rate(struct clk_hw *hw)
 	 */
 
 	/* Run a short measurement. (~1 ms) */
-	raw_count_short = run_measurement(SAMPLE_TICKS_1_MS, meas->regmap,
+	raw_count_short = run_measurement(SAMPLE_TICKS_1_MS, meas->regmap[GCC],
 				data->ctl_reg, data->status_reg);
 
 	/* Run a full measurement. (~14 ms) */
-	raw_count_full = run_measurement(SAMPLE_TICKS_14_MS, meas->regmap,
+	raw_count_full = run_measurement(SAMPLE_TICKS_14_MS, meas->regmap[GCC],
 				data->ctl_reg, data->status_reg);
 
 	gcc_xo4_reg &= ~BIT(0);
-	regmap_write(meas->regmap, data->xo_div4_cbcr, gcc_xo4_reg);
+	regmap_write(meas->regmap[GCC], data->xo_div4_cbcr, gcc_xo4_reg);
 
 	/* Return 0 if the clock is off. */
 	if (raw_count_full == raw_count_short)
@@ -122,63 +131,73 @@ static unsigned long clk_debug_mux_measure_rate(struct clk_hw *hw)
 	return ret;
 }
 
-static int clk_find_and_set_parent(struct clk_hw *mux, struct clk_hw *clk)
-{
-	int i;
-
-	if (!clk || !mux || !(mux->init->flags & CLK_IS_MEASURE))
-		return -EINVAL;
-
-	if (!clk_set_parent(mux->clk, clk->clk))
-		return 0;
-
-	for (i = 0; i < clk_hw_get_num_parents(mux); i++) {
-		struct clk_hw *parent = clk_hw_get_parent_by_index(mux, i);
-
-		if (!clk_find_and_set_parent(parent, clk))
-			return clk_set_parent(mux->clk, parent->clk);
-	}
-
-	return -EINVAL;
-}
-
 static u8 clk_debug_mux_get_parent(struct clk_hw *hw)
 {
+	struct clk_debug_mux *meas = to_clk_measure(hw);
 	int i, num_parents = clk_hw_get_num_parents(hw);
 	struct clk_hw *hw_clk = clk_hw_get_parent(hw);
 
 	if (!hw_clk)
 		return 0;
+
 	for (i = 0; i < num_parents; i++) {
-		if (!strcmp(hw->init->parent_names[i],
+		if (!strcmp(meas->parent[i].parents,
 					clk_hw_get_name(hw_clk))) {
 			pr_debug("%s: clock parent - %s, index %d\n", __func__,
-					hw->init->parent_names[i], i);
+					meas->parent[i].parents, i);
 			return i;
 		}
 	}
+
 	return 0;
 }
 
 static int clk_debug_mux_set_parent(struct clk_hw *hw, u8 index)
 {
-	struct clk_debug_mux *mux = to_clk_measure(hw);
-	int ret;
+	struct clk_debug_mux *meas = to_clk_measure(hw);
+	u32 regval = 0;
+	int dbg_cc = 0;
 
-	if (!mux->mux_sels)
-		return 0;
+	dbg_cc = meas->parent[index].dbg_cc;
 
-	/* Update the debug sel for mux */
-	ret = regmap_update_bits(mux->regmap, mux->debug_offset,
-		mux->src_sel_mask,
-		mux->mux_sels[index] << mux->src_sel_shift);
-	if (ret)
-		return ret;
+	if (dbg_cc != GCC) {
+		/* Update the recursive debug mux */
+		regmap_read(meas->regmap[dbg_cc],
+				meas->parent[index].mux_offset, &regval);
+		regval &= ~(meas->parent[index].mux_sel_mask <<
+				meas->parent[index].mux_sel_shift);
+		regval |= (meas->parent[index].dbg_cc_mux_sel &
+				meas->parent[index].mux_sel_mask) <<
+				meas->parent[index].mux_sel_shift;
+		regmap_write(meas->regmap[dbg_cc],
+				meas->parent[index].mux_offset, regval);
 
-	/* Set the mux's post divider bits */
-	return regmap_update_bits(mux->regmap, mux->post_div_offset,
-		mux->post_div_mask,
-		(mux->post_div_val - 1) << mux->post_div_shift);
+		regmap_read(meas->regmap[dbg_cc],
+				meas->parent[index].post_div_offset, &regval);
+		regval &= ~(meas->parent[index].post_div_mask <<
+				meas->parent[index].post_div_shift);
+		regval |= ((meas->parent[index].post_div_val - 1) &
+				meas->parent[index].post_div_mask) <<
+				meas->parent[index].post_div_shift;
+		regmap_write(meas->regmap[dbg_cc],
+				meas->parent[index].post_div_offset, regval);
+	}
+
+	/* Update the debug sel for GCC */
+	regmap_read(meas->regmap[GCC], meas->debug_offset, &regval);
+	regval &= ~(meas->src_sel_mask << meas->src_sel_shift);
+	regval |= (meas->parent[index].prim_mux_sel & meas->src_sel_mask) <<
+			meas->src_sel_shift;
+	regmap_write(meas->regmap[GCC], meas->debug_offset, regval);
+
+	/* Set the GCC mux's post divider bits */
+	regmap_read(meas->regmap[GCC], meas->post_div_offset, &regval);
+	regval &= ~(meas->post_div_mask << meas->post_div_shift);
+	regval |= ((meas->parent[index].prim_mux_div_val - 1) &
+			meas->post_div_mask) << meas->post_div_shift;
+	regmap_write(meas->regmap[GCC], meas->post_div_offset, regval);
+
+	return 0;
 }
 
 const struct clk_ops clk_debug_mux_ops = {
@@ -187,69 +206,51 @@ const struct clk_ops clk_debug_mux_ops = {
 };
 EXPORT_SYMBOL(clk_debug_mux_ops);
 
-static void enable_debug_clks(struct clk_hw *mux)
+static void enable_debug_clks(struct clk_debug_mux *meas, u8 index)
 {
-	struct clk_debug_mux *meas = to_clk_measure(mux);
-	struct clk_hw *parent;
-
-	if (!mux || !(mux->init->flags & CLK_IS_MEASURE))
-		return;
-
-	parent = clk_hw_get_parent(mux);
-	enable_debug_clks(parent);
+	int dbg_cc = meas->parent[index].dbg_cc;
 
 	meas->en_mask = meas->en_mask ? meas->en_mask : CBCR_ENA;
 
-	/* Not all muxes have a DEBUG clock. */
-	if (meas->cbcr_offset != U32_MAX)
-		regmap_update_bits(meas->regmap, meas->cbcr_offset,
-				   meas->en_mask, meas->en_mask);
+	if (dbg_cc != GCC) {
+		/* Not all recursive muxes have a DEBUG clock. */
+		if (meas->parent[index].cbcr_offset != U32_MAX)
+			regmap_update_bits(meas->regmap[dbg_cc],
+					meas->parent[index].cbcr_offset,
+					meas->en_mask, meas->en_mask);
+	}
+
+	/* Turn on the GCC_DEBUG_CBCR */
+	regmap_update_bits(meas->regmap[GCC], meas->cbcr_offset,
+					meas->en_mask, meas->en_mask);
+
 }
 
-static void disable_debug_clks(struct clk_hw *mux)
+static void disable_debug_clks(struct clk_debug_mux *meas, u8 index)
 {
-	struct clk_debug_mux *meas = to_clk_measure(mux);
-	struct clk_hw *parent;
-
-	if (!mux || !(mux->init->flags & CLK_IS_MEASURE))
-		return;
+	int dbg_cc = meas->parent[index].dbg_cc;
 
 	meas->en_mask = meas->en_mask ? meas->en_mask : CBCR_ENA;
 
-	if (meas->cbcr_offset != U32_MAX)
-		regmap_update_bits(meas->regmap, meas->cbcr_offset,
+	/* Turn off the GCC_DEBUG_CBCR */
+	regmap_update_bits(meas->regmap[GCC], meas->cbcr_offset,
 					meas->en_mask, 0);
 
-	parent = clk_hw_get_parent(mux);
-	disable_debug_clks(parent);
-}
-
-static u32 get_mux_divs(struct clk_hw *mux)
-{
-	struct clk_debug_mux *meas = to_clk_measure(mux);
-	struct clk_hw *parent;
-	u32 div_val;
-
-	if (!mux || !(mux->init->flags & CLK_IS_MEASURE))
-		return 1;
-
-	WARN_ON(!meas->post_div_val);
-	div_val = meas->post_div_val;
-
-	if (meas->pre_div_vals) {
-		int i = clk_debug_mux_get_parent(mux);
-
-		div_val *= meas->pre_div_vals[i];
+	if (dbg_cc != GCC) {
+		if (meas->parent[index].cbcr_offset != U32_MAX)
+			regmap_update_bits(meas->regmap[dbg_cc],
+					meas->parent[index].cbcr_offset,
+					meas->en_mask, 0);
 	}
-	parent = clk_hw_get_parent(mux);
-	return div_val * get_mux_divs(parent);
 }
 
 static int clk_debug_measure_get(void *data, u64 *val)
 {
-	struct clk_hw *hw = data;
+	struct clk_hw *hw = data, *par;
 	struct clk_debug_mux *meas = to_clk_measure(measure);
+	int index;
 	int ret = 0;
+	unsigned long meas_rate, sw_rate;
 
 	mutex_lock(&clk_debug_lock);
 
@@ -260,18 +261,42 @@ static int clk_debug_measure_get(void *data, u64 *val)
 	if (meas->bus_cl_id)
 		msm_bus_scale_client_update_request(meas->bus_cl_id, 1);
 
-	ret = clk_find_and_set_parent(measure, hw);
-	if (ret) {
+	ret = clk_set_parent(measure->clk, hw->clk);
+	if (!ret) {
+		par = measure;
+		index =  clk_debug_mux_get_parent(measure);
+
+		enable_debug_clks(meas, index);
+		while (par && par != hw) {
+			if (par->init->ops->enable)
+				par->init->ops->enable(par);
+			par = clk_hw_get_parent(par);
+		}
+		*val = clk_debug_mux_measure_rate(measure);
+		if (meas->parent[index].dbg_cc != GCC)
+			*val *= meas->parent[index].post_div_val;
+		*val *= meas->parent[index].prim_mux_div_val;
+
+		/* Accommodate for any pre-set dividers */
+		if (meas->parent[index].misc_div_val)
+			*val *= meas->parent[index].misc_div_val;
+	} else {
 		pr_err("Failed to set the debug mux's parent.\n");
 		goto exit;
 	}
 
-	enable_debug_clks(measure);
-	*val = clk_debug_mux_measure_rate(measure);
+	meas_rate = clk_get_rate(hw->clk);
+	par = clk_hw_get_parent(measure);
+	if (!par) {
+		ret = -EINVAL;
+		goto exit1;
+	}
 
-	/* recursively calculate actual freq */
-	*val *= get_mux_divs(measure);
-	disable_debug_clks(measure);
+	sw_rate = clk_get_rate(par->clk);
+	if (sw_rate && meas_rate >= (sw_rate * 2))
+		*val *= DIV_ROUND_CLOSEST(meas_rate, sw_rate);
+exit1:
+	disable_debug_clks(meas, index);
 exit:
 	if (meas->bus_cl_id)
 		msm_bus_scale_client_update_request(meas->bus_cl_id, 0);
@@ -279,28 +304,26 @@ exit:
 	return ret;
 }
 
-DEFINE_DEBUGFS_ATTRIBUTE(clk_measure_fops, clk_debug_measure_get,
+DEFINE_SIMPLE_ATTRIBUTE(clk_measure_fops, clk_debug_measure_get,
 							NULL, "%lld\n");
 
 static int clk_debug_read_period(void *data, u64 *val)
 {
 	struct clk_hw *hw = data;
-	struct clk_hw *parent;
-	struct clk_debug_mux *mux;
+	struct clk_debug_mux *meas = to_clk_measure(measure);
+	int index;
+	int dbg_cc;
 	int ret = 0;
 	u32 regval;
 
 	mutex_lock(&clk_debug_lock);
 
-	ret = clk_find_and_set_parent(measure, hw);
+	ret = clk_set_parent(measure->clk, hw->clk);
 	if (!ret) {
-		parent = clk_hw_get_parent(measure);
-		if (!parent) {
-			mutex_unlock(&clk_debug_lock);
-			return -EINVAL;
-		}
-		mux = to_clk_measure(parent);
-		regmap_read(mux->regmap, mux->period_offset, &regval);
+		index = clk_debug_mux_get_parent(measure);
+		dbg_cc = meas->parent[index].dbg_cc;
+
+		regmap_read(meas->regmap[dbg_cc], meas->period_offset, &regval);
 		if (!regval) {
 			pr_err("Error reading mccc period register, ret = %d\n",
 			       ret);
@@ -320,43 +343,38 @@ static int clk_debug_read_period(void *data, u64 *val)
 DEFINE_SIMPLE_ATTRIBUTE(clk_read_period_fops, clk_debug_read_period,
 							NULL, "%lld\n");
 
-void clk_debug_measure_add(struct clk_hw *hw, struct dentry *dentry)
+int clk_debug_measure_add(struct clk_hw *hw, struct dentry *dentry)
 {
 	int ret;
-	struct clk_hw *parent;
+	int index;
 	struct clk_debug_mux *meas;
-	struct clk_debug_mux *meas_parent;
 
 	if (IS_ERR_OR_NULL(measure)) {
 		pr_err_once("Please check if `measure` clk is registered.\n");
-		return;
+		return 0;
 	}
 
 	meas = to_clk_measure(measure);
 	if (meas->bus_cl_id)
 		msm_bus_scale_client_update_request(meas->bus_cl_id, 1);
-	ret = clk_find_and_set_parent(measure, hw);
+	ret = clk_set_parent(measure->clk, hw->clk);
 	if (ret) {
 		pr_debug("Unable to set %s as %s's parent, ret=%d\n",
 			clk_hw_get_name(hw), clk_hw_get_name(measure), ret);
 		goto err;
 	}
 
-	parent = clk_hw_get_parent(measure);
-	if (!parent)
-		return;
-	meas_parent = to_clk_measure(parent);
-
-	if (parent->init->flags & CLK_IS_MEASURE && !meas_parent->mux_sels) {
+	index = clk_debug_mux_get_parent(measure);
+	if (meas->parent[index].dbg_cc == MC_CC)
 		debugfs_create_file("clk_measure", 0444, dentry, hw,
-				&clk_read_period_fops);
-	}
+					&clk_read_period_fops);
 	else
 		debugfs_create_file("clk_measure", 0444, dentry, hw,
-				&clk_measure_fops);
+					&clk_measure_fops);
 err:
 	if (meas->bus_cl_id)
 		msm_bus_scale_client_update_request(meas->bus_cl_id, 0);
+	return 0;
 }
 EXPORT_SYMBOL(clk_debug_measure_add);
 
@@ -380,32 +398,3 @@ void clk_debug_bus_vote(struct clk_hw *hw, bool enable)
 		msm_bus_scale_client_update_request(hw->init->bus_cl_id,
 								enable);
 }
-
-/**
- * map_debug_bases - maps each debug mux based on phandle
- * @pdev: the platform device used to find phandles
- * @base: regmap base name used to look up phandle
- * @mux: debug mux that requires a regmap
- *
- * This function attempts to look up and map a regmap for a debug mux
- * using syscon_regmap_lookup_by_phandle if the base name property exists
- * and assigns an appropriate regmap.
- *
- * Returns 0 on success, -EBADR when it can't find base name, -EERROR otherwise.
- */
-int map_debug_bases(struct platform_device *pdev, const char *base,
-		    struct clk_debug_mux *mux)
-{
-	if (!of_get_property(pdev->dev.of_node, base, NULL))
-		return -EBADR;
-
-	mux->regmap = syscon_regmap_lookup_by_phandle(pdev->dev.of_node,
-						     base);
-	if (IS_ERR(mux->regmap)) {
-		pr_err("Failed to map %s (ret=%ld)\n", base,
-				PTR_ERR(mux->regmap));
-		return PTR_ERR(mux->regmap);
-	}
-	return 0;
-}
-EXPORT_SYMBOL(map_debug_bases);

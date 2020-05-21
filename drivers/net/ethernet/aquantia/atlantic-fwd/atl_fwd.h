@@ -12,10 +12,17 @@
 
 #include "atl_common.h"
 
+/* Each incompatible API change bumps the API version */
+#define ATL_FWD_API_VERSION 1
+
 struct atl_fwd_event;
 
-struct atl_fwd_buf_page {
-	struct page *page;
+struct atl_fwd_buf_frag {
+	union {
+		void *buf;	/* Valid when custom allocator is
+				 * used */
+		struct page *page; /* Valid otherwise */
+	};
 	dma_addr_t daddr;
 };
 
@@ -29,33 +36,32 @@ struct atl_fwd_buf_page {
  *
  *	Descriptors are overwritten with the write-back descriptor
  *	format on Rx and optionally on Tx. To simplify Rx descriptor
- *	refill by the offload engine, vectors containing virtual addresses and
- *	DMA-addresses of each buffer are provided in @vaddr_vec and
- *	@daddr_vec respectively if @ATL_FWR_WANT_BUF_VECS flag is set
- *	on @atl_fwd_request_ring().
+ *	refill by the offload engine, vectors containing virtual
+ *	addresses and DMA-addresses of each buffer are provided in
+ *	@vaddr_vec and @daddr_vec respectively if
+ *	@ATL_FWR_WANT_VIRT_BUF_VEC or @ATL_FWR_WANT_DMA_BUF_VEC
+ *	flags are set on @atl_fwd_request_ring().
  *
- *	If @ATL_FWR_WANT_BUF_VECS is not set, @daddr_vec_base contains
- *	the DMA address of the first buffer page and @vaddr_vec
- *	contains its virtual address.
+ *	If the resepective buffer vector request flags are not set,
+ *	@daddr_vec_base contains the DMA address of the first buffer
+ *	page and @vaddr_vec contains its virtual address.
  *
  *	@daddr_vec_base:	DMA address of the base of the @daddr_vec
  *    	@daddr_vec:		A vector of buffers' DMA ddresses
  *    	@vaddr_vec:		A vector of buffers' virtual addresses
  *    				or first buffer's virtual address
  *    				depending on ring flags
- *    	@paddr:			Physical address of the first (or
- *    				only) buffer page
  */
 struct atl_fwd_bufs {
 	dma_addr_t daddr_vec_base;
 	dma_addr_t *daddr_vec;
 	void **vaddr_vec;
-	phys_addr_t paddr;
 
 	/* The following is not part of API and subject to change */
 	int num_pages;
 	int order;
-	struct atl_fwd_buf_page bpgs[0];
+	size_t frag_size;
+	struct atl_fwd_buf_frag frags[0];
 };
 
 union atl_desc;
@@ -72,6 +78,47 @@ union atl_desc;
 /* atl_hw_ring defined in "atl_hw.h" */
 
 /**
+ *
+ * 	atl_fwd_mem_ops - memory management handlers for the ring
+ *
+ * 	Custom memory allocators may be provided to
+ * 	@atl_fwd_request_ring() to allocate the memory for the
+ * 	descriptor ring and buffers.
+ *
+ * 	Unless @ATL_FWR_DONT_DMA_MAP is included in flags on
+ * 	@atl_fwd_request_ring() call, the buffer allocator must also
+ * 	DMA-map the memory they allocate. If @ATL_FWR_DONT_DMA_MAP is
+ * 	set, @daddr parameter may be ignored by the buffer allocator
+ * 	and should be ignored by the deallocator.
+ *
+ * 	The ring allocator must DMA-map the memory unconditionally
+ * 	because the mapping is required to program the hardware ring
+ * 	registers.
+ *
+ * 	A private data pointer @private is reserved for offload
+ * 	engine's use. A pointer to the ops struct is provided to each
+ * 	allocator / deallocator so they can get to the private
+ * 	data. The @ops argument can be ignored by allocator /
+ * 	deallocator functions if access to private data is not needed.
+ *
+ * 	Either both allocator and deallocator or none of them must be
+ * 	provided for each memory type.
+ *
+ * 	Deallocator functions may ignore the size parameter.
+ */
+struct atl_fwd_mem_ops {
+	void *(*alloc_descs)(struct device *dev, size_t size, dma_addr_t *daddr,
+		gfp_t gfp, struct atl_fwd_mem_ops *ops);
+	void *(*alloc_buf)(struct device *dev, size_t size, dma_addr_t *daddr,
+		gfp_t gfp, struct atl_fwd_mem_ops *ops);
+	void (*free_descs)(void *buf, struct device *dev, size_t size,
+		dma_addr_t daddr, struct atl_fwd_mem_ops *ops);
+	void (*free_buf)(void *buf, struct device *dev, size_t size,
+		dma_addr_t daddr, struct atl_fwd_mem_ops *ops);
+	void *private;
+};
+
+/**
  *	atl_fwd_ring - Offload engine-controlled ring
  *
  *	Buffer space is allocated by the driver on ring creation.
@@ -86,7 +133,7 @@ union atl_desc;
  *			request.
  *	@nic:		struct atl_nic backreference
  *	@idx:		Ring index
- *	@desc_paddr:	Physical address of the descriptor ring
+ *	@mem_ops:	Memory allocators provided at ring creation
  */
 struct atl_fwd_ring {
 	struct atl_hw_ring hw;
@@ -94,7 +141,7 @@ struct atl_fwd_ring {
 	struct atl_fwd_bufs *bufs;
 	struct atl_nic *nic;
 	int idx;
-	phys_addr_t desc_paddr;
+	struct atl_fwd_mem_ops *mem_ops;
 
 	/* The following is not part of API and subject to change */
 	unsigned int flags;
@@ -144,12 +191,28 @@ enum atl_fwd_ring_flags {
 				       * total buffer space required
 				       * is larger than a max-order
 				       * compound page. */
-	ATL_FWR_WANT_BUF_VECS = BIT(5), /* Alloc and fill per-buffer
-					 * DMA and virt address
+	ATL_FWR_WANT_VIRT_BUF_VEC = BIT(5), /* Alloc and fill
+					 * per-buffer virtual address
 					 * vectors. If unset, first
-					 * buffer's daddr and vaddr
-					 * are provided in ring's
-					 * @daddr_vec_base and @vaddr_vec */
+					 * buffer's vaddr is provided
+					 * in ring's @vaddr_vec */
+	ATL_FWR_WANT_DMA_BUF_VEC = BIT(6), /* Alloc and fill
+					 * per-buffer DMA address
+					 * vectors. If unset, first
+					 * buffer's daddr is provided
+					 * in ring's
+					 * @daddr_vec_base */
+	ATL_FWR_DONT_DMA_MAP = BIT(7),	/* Don't DMA-map buffers, the
+					 * caller will take care of
+					 * that. Mutually exclusive
+					 * with
+					 * @ATL_FWR_WANT_DMA_BUF_VECS
+					 * If an external buffer
+					 * allocator is provided to
+					 * @atl_fwd_request_ring()
+					 * along with this flag, the
+					 * allocator need not provide
+					 * the DMA address. */
 };
 
 /**
@@ -161,12 +224,13 @@ enum atl_fwd_ring_flags {
  * 	@buf_size:	individual buffer's size
  * 	@page_order:	page order to use when @ATL_FWR_CONTIG_BUFS is
  * 			not set
+ * 	@mem_ops:	optional custom memory allocators, may be NULL
  *
  * atl_fwd_request_ring() creates a ring for an offload engine,
  * allocates buffer memory if @ATL_FWR_ALLOC_BUFS flag is set,
- * initializes ring's registers and fills the address fields in
- * descriptors. Ring is inactive until explicitly enabled via
- * atl_fwd_enable_ring().
+ * initializes ring's registers, and, unless the @ATL_FWR_DONT_DMA_MAP
+ * flag is set, fills the address fields in descriptors. Ring is
+ * inactive until explicitly enabled via atl_fwd_enable_ring().
  *
  * Buffers can be allocated either as a single physically-contiguous
  * compound page, or as a sequence of compound pages of @page_order
@@ -177,7 +241,8 @@ enum atl_fwd_ring_flags {
  * Returns the ring pointer on success, ERR_PTR(error code) on failure
  */
 struct atl_fwd_ring *atl_fwd_request_ring(struct net_device *ndev,
-	int flags, int ring_size, int buf_size, int page_order);
+	int flags, int ring_size, int buf_size, int page_order,
+	struct atl_fwd_mem_ops *mem_ops);
 
 /**
  * atl_fwd_release_ring() - Free offload engine's ring
@@ -194,8 +259,8 @@ void atl_fwd_release_ring(struct atl_fwd_ring *ring);
  * delays
  *
  * 	@ring:	ring
- * 	@min:	min delay
- * 	@max:	max delay
+ * 	@min:	min delay (0 - 511 uS)
+ * 	@max:	max delay (0 - 1023 uS)
  *
  * Each ring has two configurable interrupt moderation timers. When an
  * interrupt condition occurs (write-back of the final descriptor of a
@@ -209,6 +274,9 @@ void atl_fwd_release_ring(struct atl_fwd_ring *ring);
  * min_delay between each other, the interrupt will be triggered
  * max_delay after the initial event.
  *
+ * Delays are internally represented in units of 2 microseconds, so
+ * the values supplied are rounded down to an even value.
+ *
  * When called with negative @min or @max, the corresponding setting
  * is left unchanged.
  *
@@ -216,7 +284,8 @@ void atl_fwd_release_ring(struct atl_fwd_ring *ring);
  * pointer writeback events.
  *
  * Returns 0 on success or -EINVAL on attempt to set moderation delays
- * for a ring with attached Tx WB event.
+ * for a ring with attached Tx WB event or when a requested delay is
+ * out of range.
  */
 int atl_fwd_set_ring_intr_mod(struct atl_fwd_ring *ring, int min, int max);
 
@@ -295,6 +364,7 @@ int atl_fwd_transmit_skb(struct net_device *ndev, struct sk_buff *skb);
 
 enum atl_fwd_ring_state {
 	ATL_FWR_ST_ENABLED = BIT(0),
+	ATL_FWR_ST_EVT_ENABLED = BIT(1),
 };
 
 #endif

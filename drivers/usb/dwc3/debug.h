@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /**
  * debug.h - DesignWare USB3 DRD Controller Debug Header
  *
@@ -6,6 +5,15 @@
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2  of
+ * the License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __DWC3_DEBUG_H
@@ -35,18 +43,6 @@
 
 #define dbg_setup(ep_num, req) \
 	dwc3_dbg_setup(dwc, ep_num, req)
-
-#define dbg_ep_queue(ep_num, req) \
-	dwc3_dbg_dma_queue(dwc, ep_num, req)
-
-#define dbg_ep_dequeue(ep_num, req) \
-	dwc3_dbg_dma_dequeue(dwc, ep_num, req)
-
-#define dbg_ep_unmap(ep_num, req) \
-	dwc3_dbg_dma_unmap(dwc, ep_num, req)
-
-#define dbg_ep_map(ep_num, req) \
-	dwc3_dbg_dma_map(dwc, ep_num, req)
 
 #define dbg_log_string(fmt, ...) \
 	ipc_log_string(dwc->dwc_ipc_log_ctxt,\
@@ -285,15 +281,6 @@ static inline void dwc3_decode_set_clear_feature(__u8 t, __u8 b, __u16 v,
 				case USB_DEVICE_TEST_MODE:
 					s = "Test Mode";
 					break;
-				case USB_DEVICE_U1_ENABLE:
-					s = "U1 Enable";
-					break;
-				case USB_DEVICE_U2_ENABLE:
-					s = "U2 Enable";
-					break;
-				case USB_DEVICE_LTM_ENABLE:
-					s = "LTM Enable";
-					break;
 				default:
 					s = "UNKNOWN";
 				} s; }),
@@ -513,37 +500,21 @@ dwc3_ep_event_string(char *str, const struct dwc3_event_depevt *event,
 	if (ret < 0)
 		return "UNKNOWN";
 
-	status = event->status;
-
 	switch (event->endpoint_event) {
 	case DWC3_DEPEVT_XFERCOMPLETE:
-		len = strlen(str);
-		sprintf(str + len, "Transfer Complete (%c%c%c)",
-				status & DEPEVT_STATUS_SHORT ? 'S' : 's',
-				status & DEPEVT_STATUS_IOC ? 'I' : 'i',
-				status & DEPEVT_STATUS_LST ? 'L' : 'l');
-
+		strcat(str, "Transfer Complete");
 		len = strlen(str);
 
 		if (epnum <= 1)
 			sprintf(str + len, " [%s]", dwc3_ep0_state_string(ep0state));
 		break;
 	case DWC3_DEPEVT_XFERINPROGRESS:
-		len = strlen(str);
-
-		sprintf(str + len, "Transfer In Progress [%d] (%c%c%c)",
-				event->parameters,
-				status & DEPEVT_STATUS_SHORT ? 'S' : 's',
-				status & DEPEVT_STATUS_IOC ? 'I' : 'i',
-				status & DEPEVT_STATUS_LST ? 'M' : 'm');
+		strcat(str, "Transfer In-Progress");
 		break;
 	case DWC3_DEPEVT_XFERNOTREADY:
-		len = strlen(str);
-
-		sprintf(str + len, "Transfer Not Ready [%d]%s",
-				event->parameters,
-				status & DEPEVT_STATUS_TRANSFER_ACTIVE ?
-				" (Active)" : " (Not Active)");
+		strcat(str, "Transfer Not Ready");
+		status = event->status & DEPEVT_STATUS_TRANSFER_ACTIVE;
+		strcat(str, status ? " (Active)" : " (Not Active)");
 
 		/* Control Endpoints */
 		if (epnum <= 1) {
@@ -672,14 +643,6 @@ void dwc3_dbg_setup(struct dwc3 *dwc, u8 ep_num,
 		const struct usb_ctrlrequest *req);
 void dwc3_dbg_print_reg(struct dwc3 *dwc,
 		const char *name, int reg);
-void dwc3_dbg_dma_queue(struct dwc3 *dwc, u8 ep_num,
-			struct dwc3_request *req);
-void dwc3_dbg_dma_dequeue(struct dwc3 *dwc, u8 ep_num,
-			struct dwc3_request *req);
-void dwc3_dbg_dma_map(struct dwc3 *dwc, u8 ep_num,
-			struct dwc3_request *req);
-void dwc3_dbg_dma_unmap(struct dwc3 *dwc, u8 ep_num,
-			struct dwc3_request *req);
 
 #ifdef CONFIG_DEBUG_FS
 extern void dwc3_debugfs_init(struct dwc3 *);

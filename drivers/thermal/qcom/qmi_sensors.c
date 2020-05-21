@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -242,7 +250,7 @@ void qmi_ts_ind_cb(struct qmi_handle *qmi, struct sockaddr_qrtr *sq,
 	if (ind_msg->temp_valid)
 		qmi_ts_update_temperature(ts, ind_msg, notify);
 	else
-		pr_err("Error invalid temperature field.\n");
+		pr_err("Error invalid temperature field.");
 }
 
 static int qmi_ts_request(struct qmi_sensor *qmi_sens,
@@ -376,7 +384,7 @@ static int qmi_register_sensor_device(struct qmi_sensor *qmi_sens)
 	if (IS_ERR(qmi_sens->tz_dev)) {
 		ret = PTR_ERR(qmi_sens->tz_dev);
 		if (ret != -ENODEV)
-			pr_err("sensor register failed for %s, ret:%d\n",
+			pr_err("sensor register failed for %s, ret:%ld\n",
 				qmi_sens->qmi_name, ret);
 		qmi_sens->tz_dev = NULL;
 		return ret;

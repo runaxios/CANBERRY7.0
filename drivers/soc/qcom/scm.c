@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -16,16 +23,17 @@
 #include <asm/compiler.h>
 
 #include <soc/qcom/scm.h>
-#include <soc/qcom/qtee_shmbridge.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/scm.h>
 
-#define SCM_ENOMEM		-9
+#define SCM_ENOMEM		-5
+#define SCM_EOPNOTSUPP		-4
 #define SCM_EINVAL_ADDR		-3
 #define SCM_EINVAL_ARG		-2
 #define SCM_ERROR		-1
 #define SCM_INTERRUPTED		1
+#define SCM_EBUSY		-55
 #define SCM_V2_EBUSY		-12
 
 static DEFINE_MUTEX(scm_lock);
@@ -80,12 +88,15 @@ static int scm_remap_error(int err)
 {
 	switch (err) {
 	case SCM_ERROR:
-		return -EOPNOTSUPP;
+		return -EIO;
 	case SCM_EINVAL_ADDR:
 	case SCM_EINVAL_ARG:
 		return -EINVAL;
+	case SCM_EOPNOTSUPP:
+		return -EOPNOTSUPP;
 	case SCM_ENOMEM:
 		return -ENOMEM;
+	case SCM_EBUSY:
 	case SCM_V2_EBUSY:
 		return -EBUSY;
 	}
@@ -315,23 +326,22 @@ bool is_scm_armv8(void)
 static int allocate_extra_arg_buffer(struct scm_desc *desc, gfp_t flags)
 {
 	int i, j;
-	int rc;
 	struct scm_extra_arg *argbuf;
 	int arglen = desc->arginfo & 0xf;
-	struct qtee_shm shm;
 	size_t argbuflen = PAGE_ALIGN(sizeof(struct scm_extra_arg));
 
 	desc->x5 = desc->args[FIRST_EXT_ARG_IDX];
 
-	if (likely(arglen <= N_REGISTER_ARGS))
+	if (likely(arglen <= N_REGISTER_ARGS)) {
+		desc->extra_arg_buf = NULL;
 		return 0;
+	}
 
-	rc = qtee_shmbridge_allocate_shm(argbuflen, &shm);
-	if (rc)
-		return rc;
+	argbuf = kzalloc(argbuflen, flags);
+	if (!argbuf)
+		return -ENOMEM;
 
-	desc->shm = shm;
-	argbuf = shm.vaddr;
+	desc->extra_arg_buf = argbuf;
 
 	j = FIRST_EXT_ARG_IDX;
 	if (scm_version == SCM_ARMV8_64)
@@ -340,10 +350,10 @@ static int allocate_extra_arg_buffer(struct scm_desc *desc, gfp_t flags)
 	else
 		for (i = 0; i < N_EXT_SCM_ARGS; i++)
 			argbuf->args32[i] = desc->args[j++];
-
-	desc->x5 = shm.paddr;
+	desc->x5 = virt_to_phys(argbuf);
 	__cpuc_flush_dcache_area(argbuf, argbuflen);
-	outer_flush_range(shm.paddr, shm.paddr + argbuflen);
+	outer_flush_range(virt_to_phys(argbuf),
+			  virt_to_phys(argbuf) + argbuflen);
 
 	return 0;
 }
@@ -404,7 +414,7 @@ out:
 			x0, ret, desc->ret[0], desc->ret[1], desc->ret[2]);
 
 	if (arglen > N_REGISTER_ARGS)
-		qtee_shmbridge_free_shm(&desc->shm);
+		kfree(desc->extra_arg_buf);
 	if (ret < 0)
 		return scm_remap_error(ret);
 	return 0;
@@ -490,7 +500,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 			desc->ret[1], desc->ret[2]);
 
 	if (arglen > N_REGISTER_ARGS)
-		qtee_shmbridge_free_shm(&desc->shm);
+		kfree(desc->extra_arg_buf);
 	if (ret < 0)
 		return scm_remap_error(ret);
 	return ret;

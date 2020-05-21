@@ -30,8 +30,7 @@ config EXTCON_ARIZONA
 
 config EXTCON_AXP288
 	tristate "X-Power AXP288 EXTCON support"
-	depends on MFD_AXP20X && USB_SUPPORT && X86
-	select USB_ROLE_SWITCH
+	depends on MFD_AXP20X && USB_PHY
 	help
 	  Say Y here to enable support for USB peripheral detection
 	  and USB MUX switching by X-Power AXP288 PMIC.
@@ -42,15 +41,6 @@ config EXTCON_GPIO
 	help
 	  Say Y here to enable GPIO based extcon support. Note that GPIO
 	  extcon supports single state per extcon instance.
-
-config EXTCON_STORAGE_CD_GPIO
-	tristate "Storage card detect GPIO extcon support"
-	depends on GPIOLIB || COMPILE_TEST
-	help
-	  Say Y here to enable removable storage card detect GPIO based
-	  extcon support. It helps when different kinds of storage cards
-	  share one detect GPIO. Note that storage card detect GPIO extcon
-	  supports single state per extcon instance.
 
 config EXTCON_INTEL_INT3496
 	tristate "Intel INT3496 ACPI device extcon driver"

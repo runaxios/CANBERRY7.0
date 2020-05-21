@@ -101,6 +101,18 @@ static const struct seq_operations lockdep_ops = {
 	.show	= l_show,
 };
 
+static int lockdep_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &lockdep_ops);
+}
+
+static const struct file_operations proc_lockdep_operations = {
+	.open		= lockdep_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+
 #ifdef CONFIG_PROVE_LOCKING
 static void *lc_start(struct seq_file *m, loff_t *pos)
 {
@@ -158,6 +170,18 @@ static const struct seq_operations lockdep_chains_ops = {
 	.stop	= lc_stop,
 	.show	= lc_show,
 };
+
+static int lockdep_chains_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &lockdep_chains_ops);
+}
+
+static const struct file_operations proc_lockdep_chains_operations = {
+	.open		= lockdep_chains_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
 #endif /* CONFIG_PROVE_LOCKING */
 
 static void lockdep_stats_debug_show(struct seq_file *m)
@@ -200,6 +224,7 @@ static void lockdep_stats_debug_show(struct seq_file *m)
 
 static int lockdep_stats_show(struct seq_file *m, void *v)
 {
+	struct lock_class *class;
 	unsigned long nr_unused = 0, nr_uncategorized = 0,
 		      nr_irq_safe = 0, nr_irq_unsafe = 0,
 		      nr_softirq_safe = 0, nr_softirq_unsafe = 0,
@@ -208,9 +233,6 @@ static int lockdep_stats_show(struct seq_file *m, void *v)
 		      nr_softirq_read_safe = 0, nr_softirq_read_unsafe = 0,
 		      nr_hardirq_read_safe = 0, nr_hardirq_read_unsafe = 0,
 		      sum_forward_deps = 0;
-
-#ifdef CONFIG_PROVE_LOCKING
-	struct lock_class *class;
 
 	list_for_each_entry(class, &all_lock_classes, lock_entry) {
 
@@ -243,12 +265,12 @@ static int lockdep_stats_show(struct seq_file *m, void *v)
 		if (class->usage_mask & LOCKF_ENABLED_HARDIRQ_READ)
 			nr_hardirq_read_unsafe++;
 
+#ifdef CONFIG_PROVE_LOCKING
 		sum_forward_deps += lockdep_count_forward_deps(class);
+#endif
 	}
 #ifdef CONFIG_DEBUG_LOCKDEP
 	DEBUG_LOCKS_WARN_ON(debug_atomic_read(nr_unused_locks) != nr_unused);
-#endif
-
 #endif
 	seq_printf(m, " lock-classes:                  %11lu [max: %lu]\n",
 			nr_lock_classes, MAX_LOCKDEP_KEYS);
@@ -332,6 +354,18 @@ static int lockdep_stats_show(struct seq_file *m, void *v)
 
 	return 0;
 }
+
+static int lockdep_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, lockdep_stats_show, NULL);
+}
+
+static const struct file_operations proc_lockdep_stats_operations = {
+	.open		= lockdep_stats_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 #ifdef CONFIG_LOCK_STAT
 
@@ -648,11 +682,14 @@ static const struct file_operations proc_lock_stat_operations = {
 
 static int __init lockdep_proc_init(void)
 {
-	proc_create_seq("lockdep", S_IRUSR, NULL, &lockdep_ops);
+	proc_create("lockdep", S_IRUSR, NULL, &proc_lockdep_operations);
 #ifdef CONFIG_PROVE_LOCKING
-	proc_create_seq("lockdep_chains", S_IRUSR, NULL, &lockdep_chains_ops);
+	proc_create("lockdep_chains", S_IRUSR, NULL,
+		    &proc_lockdep_chains_operations);
 #endif
-	proc_create_single("lockdep_stats", S_IRUSR, NULL, lockdep_stats_show);
+	proc_create("lockdep_stats", S_IRUSR, NULL,
+		    &proc_lockdep_stats_operations);
+
 #ifdef CONFIG_LOCK_STAT
 	proc_create("lock_stat", S_IRUSR | S_IWUSR, NULL,
 		    &proc_lock_stat_operations);

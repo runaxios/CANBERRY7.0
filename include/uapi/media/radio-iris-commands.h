@@ -1,7 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- */
 #ifndef __UAPI_RADIO_IRIS_COMMANDS_H
 #define __UAPI_RADIO_IRIS_COMMANDS_H
 

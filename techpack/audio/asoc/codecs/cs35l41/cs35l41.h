@@ -2,7 +2,7 @@
  * cs35l41.h -- CS35L41 ALSA SoC audio driver
  *
  * Copyright 2018 Cirrus Logic, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Author: Brian Austin <brian.austin@cirrus.com>
  *         David Rhodes <david.rhodes@cirrus.com>
@@ -50,7 +50,6 @@
 #define CS35L41_DSP_CLK_CTRL		0x00002C08
 #define CS35L41_GLOBAL_CLK_CTRL		0x00002C0C
 #define CS35L41_DATA_FS_SEL		0x00002C10
-#define CS35L41_TST_FS_MON0		0x00002D10
 #define CS35L41_MDSYNC_EN		0x00003400
 #define CS35L41_MDSYNC_TX_ID		0x00003408
 #define CS35L41_MDSYNC_PWR_CTRL		0x0000340C
@@ -540,7 +539,7 @@
 #define CS35L41_MAX_CACHE_REG		0x0000006B
 #define CS35L41_OTP_SIZE_WORDS		32
 #define CS35L41_NUM_OTP_ELEM		100
-#define CS35L41_NUM_OTP_MAPS		4
+#define CS35L41_NUM_OTP_MAPS		3
 
 #define CS35L41_VALID_PDATA		0x80000000
 
@@ -701,15 +700,10 @@
 #define CS35L41_MTLREVID_MASK		0x0F
 #define CS35L41_REVID_A0		0xA0
 #define CS35L41_REVID_B0		0xB0
-#define CS35L41_REVID_B2		0xB2
 
 #define CS35L41_DSP_N_RX_RATES		8
 #define CS35L41_DSP_N_TX_RATES		8
 #define CS35L41_HALO_CORE_RESET		0x00000200
-
-#define CS35L41_FS1_WINDOW_MASK		0x000007FF
-#define CS35L41_FS2_WINDOW_MASK		0x00FFF800
-#define CS35L41_FS2_WINDOW_SHIFT	12
 
 #define CS35L41_SPI_MAX_FREQ_OTP	4000000
 
@@ -741,7 +735,6 @@ extern const struct cs35l41_otp_map_element_t
 
 #define CS35L41_REGSTRIDE			4
 #define CS35L41_MBOXWAIT			100
-#define CS35L41_BUFSIZE				64
 
 #define CS35L41_DSP_VIRT1_MBOX_SHIFT		20
 #define CS35L41_DSP_VIRT2_MBOX_SHIFT		21
@@ -767,21 +760,6 @@ enum cs35l41_cspl_mboxcmd {
 	CSPL_MBOX_CMD_STOP_PRE_REINIT = 4,
 	CSPL_MBOX_CMD_UNKNOWN_CMD = -1,
 	CSPL_MBOX_CMD_INVALID_SEQUENCE = -2,
-};
-
-enum cs35l41_cspl_cmd {
-	CSPL_CMD_NONE			= 0,
-	CSPL_CMD_MUTE			= 1,
-	CSPL_CMD_UNMUTE			= 2,
-	CSPL_CMD_UPDATE_PARAM		= 8,
-};
-
-enum cs35l41_cspl_st {
-	CSPL_ST_RUNNING			= 0,
-	CSPL_ST_ERROR			= 1,
-	CSPL_ST_MUTED			= 2,
-	CSPL_ST_REINITING		= 3,
-	CSPL_ST_DIAGNOSING		= 6,
 };
 
 #endif /*__CS35L41_H__*/

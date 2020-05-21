@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2015, 2017, 2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015, 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef __SDHCI_MSM_ICE_H__
@@ -96,7 +105,7 @@ int sdhci_msm_ice_init(struct sdhci_host *host);
 void sdhci_msm_ice_cfg_reset(struct sdhci_host *host, u32 slot);
 int sdhci_msm_ice_cfg(struct sdhci_host *host, struct mmc_request *mrq,
 			u32 slot);
-int sdhci_msm_ice_cqe_cfg(struct sdhci_host *host,
+int sdhci_msm_ice_cmdq_cfg(struct sdhci_host *host,
 			struct mmc_request *mrq, u32 slot, u64 *ice_ctx);
 int sdhci_msm_ice_cfg_end(struct sdhci_host *host, struct mmc_request *mrq);
 int sdhci_msm_ice_reset(struct sdhci_host *host);
@@ -130,12 +139,12 @@ inline int sdhci_msm_ice_cfg(struct sdhci_host *host,
 {
 	return 0;
 }
-inline int sdhci_msm_ice_cqe_cfg(struct sdhci_host *host,
+static inline int sdhci_msm_ice_cmdq_cfg(struct sdhci_host *host,
 		struct mmc_request *mrq, u32 slot, u64 *ice_ctx)
 {
 	return 0;
 }
-inline int sdhci_msm_ice_cfg_end(struct sdhci_host *host,
+static inline int sdhci_msm_ice_cfg_end(struct sdhci_host *host,
 			struct mmc_request *mrq)
 {
 	return 0;

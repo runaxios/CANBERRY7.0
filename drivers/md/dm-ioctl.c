@@ -6,6 +6,7 @@
  */
 
 #include "dm-core.h"
+#include "dm-ioctrl.h"
 
 #include <linux/module.h>
 #include <linux/vmalloc.h>
@@ -1344,8 +1345,7 @@ static int table_load(struct file *filp, struct dm_ioctl *param, size_t param_si
 			goto err_unlock_md_type;
 		}
 	} else if (!is_valid_type(dm_get_md_type(md), dm_table_get_type(t))) {
-		DMWARN("can't change device type (old=%u vs new=%u) after initial table load.",
-		       dm_get_md_type(md), dm_table_get_type(t));
+		DMWARN("can't change device type after initial table load.");
 		r = -EINVAL;
 		goto err_unlock_md_type;
 	}
@@ -1596,7 +1596,7 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
 		DMWARN("Target message sector outside device.");
 		r = -EINVAL;
 	} else if (ti->type->message)
-		r = ti->type->message(ti, argc, argv, result, maxlen);
+		r = ti->type->message(ti, argc, argv);
 	else {
 		DMWARN("Target type does not support messages");
 		r = -EINVAL;
@@ -1924,15 +1924,15 @@ static int dm_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static __poll_t dm_poll(struct file *filp, poll_table *wait)
+static unsigned dm_poll(struct file *filp, poll_table *wait)
 {
 	struct dm_file *priv = filp->private_data;
-	__poll_t mask = 0;
+	unsigned mask = 0;
 
 	poll_wait(filp, &dm_global_eventq, wait);
 
 	if ((int)(atomic_read(&dm_global_event_nr) - priv->global_event_nr) > 0)
-		mask |= EPOLLIN;
+		mask |= POLLIN;
 
 	return mask;
 }
@@ -2057,3 +2057,37 @@ out:
 
 	return r;
 }
+
+int __init dm_ioctrl(uint cmd, struct dm_ioctl *param)
+{
+	int r = 0;
+	int ioctl_flags;
+	ioctl_fn fn = NULL;
+	size_t input_param_size;
+
+	/*
+	 * Nothing more to do for the version command.
+	 */
+	if (cmd == DM_VERSION_CMD)
+		return 0;
+
+	DMDEBUG("dm_ctl_ioctl: command 0x%x", cmd);
+
+	fn = lookup_ioctl(cmd, &ioctl_flags);
+	if (!fn) {
+		DMWARN("dm_ctl_ioctl: unknown command 0x%x", cmd);
+		return -ENOTTY;
+	}
+
+	input_param_size = param->data_size;
+	param->data_size = sizeof(*param);
+
+	r = fn(NULL, param, input_param_size);
+
+	if (unlikely(param->flags & DM_BUFFER_FULL_FLAG) &&
+		unlikely(ioctl_flags & IOCTL_FLAGS_NO_PARAMS))
+		DMERR("ioctl %d  but has IOCTL_FLAGS_NO_PARAMS set", cmd);
+
+	return r;
+}
+EXPORT_SYMBOL(dm_ioctrl);

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Generic cpu hotunplug interrupt migration code copied from the
  * arch/arm implementation
@@ -124,7 +123,7 @@ static bool migrate_one_irq(struct irq_desc *desc)
 		 */
 		if (irqd_affinity_is_managed(d)) {
 			irqd_set_managed_shutdown(d);
-			irq_shutdown_and_deactivate(desc);
+			irq_shutdown(desc);
 			return false;
 		}
 
@@ -195,6 +194,9 @@ void irq_migrate_all_off_this_cpu(void)
 		bool affinity_broken;
 
 		desc = irq_to_desc(irq);
+		if (!desc)
+			continue;
+
 		raw_spin_lock(&desc->lock);
 		affinity_broken = migrate_one_irq(desc);
 		raw_spin_unlock(&desc->lock);

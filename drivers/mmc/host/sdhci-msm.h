@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  */
 
@@ -143,13 +151,14 @@ struct sdhci_msm_pltfm_data {
 	u32 *sup_clk_table;
 	unsigned char sup_clk_cnt;
 	int sdiowakeup_irq;
-	struct sdhci_msm_pm_qos_data pm_qos_data;
-	u32 *bus_clk_table;
-	unsigned char bus_clk_cnt;
 	u32 *sup_ice_clk_table;
 	unsigned char sup_ice_clk_cnt;
+	struct sdhci_msm_pm_qos_data pm_qos_data;
+	bool sdr104_wa;
 	u32 ice_clk_max;
 	u32 ice_clk_min;
+	u32 *bus_clk_table;
+	unsigned char bus_clk_cnt;
 };
 
 struct sdhci_msm_bus_vote {
@@ -160,6 +169,12 @@ struct sdhci_msm_bus_vote {
 	bool is_max_bw_needed;
 	struct delayed_work vote_work;
 	struct device_attribute max_bus_bw;
+};
+
+struct sdhci_msm_ice_data {
+	struct qcom_ice_variant_ops *vops;
+	struct platform_device *pdev;
+	int state;
 };
 
 struct sdhci_msm_regs_restore {
@@ -187,7 +202,7 @@ struct sdhci_msm_regs_restore {
 /*
  * DLL registers which needs be programmed with HSR settings.
  * Add any new register only at the end and don't change the
- * sequence.
+ * seqeunce.
  */
 struct sdhci_msm_dll_hsr {
 	u32 dll_config;
@@ -201,12 +216,6 @@ struct sdhci_msm_debug_data {
 	struct mmc_host copy_mmc;
 	struct mmc_card copy_card;
 	struct sdhci_host copy_host;
-};
-
-struct sdhci_msm_ice_data {
-	struct qcom_ice_variant_ops *vops;
-	struct platform_device *pdev;
-	int state;
 };
 
 struct sdhci_msm_host {
@@ -225,7 +234,6 @@ struct sdhci_msm_host {
 	atomic_t clks_on; /* Set if clocks are enabled */
 	struct sdhci_msm_pltfm_data *pdata;
 	struct mmc_host  *mmc;
-	struct cqhci_host *cq_host;
 	struct sdhci_msm_debug_data cached_data;
 	struct sdhci_pltfm_data sdhci_msm_pdata;
 	u32 curr_pwr_state;
@@ -248,6 +256,8 @@ struct sdhci_msm_host {
 	bool enhanced_strobe;
 	bool rclk_delay_fix;
 	u32 caps_0;
+	struct sdhci_msm_ice_data ice;
+	u32 ice_clk_rate;
 	struct sdhci_msm_pm_qos_group *pm_qos;
 	int pm_qos_prev_cpu;
 	struct device_attribute pm_qos_group_enable_attr;
@@ -264,8 +274,6 @@ struct sdhci_msm_host {
 	int soc_min_rev;
 	struct workqueue_struct *pm_qos_wq;
 	struct sdhci_msm_dll_hsr *dll_hsr;
-	struct sdhci_msm_ice_data ice;
-	u32 ice_clk_rate;
 };
 
 extern char *saved_command_line;

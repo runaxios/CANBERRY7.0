@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 /* -------------------------------------------------------------------------
  * Includes
@@ -26,7 +34,8 @@
  */
 static int npu_debug_open(struct inode *inode, struct file *file);
 static int npu_debug_release(struct inode *inode, struct file *file);
-static int npu_debug_reg_release(struct inode *inode, struct file *file);
+static ssize_t npu_debug_reg_write(struct file *file,
+		const char __user *user_buf, size_t count, loff_t *ppos);
 static ssize_t npu_debug_reg_read(struct file *file,
 		char __user *user_buf, size_t count, loff_t *ppos);
 static ssize_t npu_debug_off_write(struct file *file,
@@ -42,12 +51,13 @@ static ssize_t npu_debug_ctrl_write(struct file *file,
  * Variables
  * -------------------------------------------------------------------------
  */
-static struct npu_device *g_npu_dev;
+struct npu_device *g_npu_dev;
 
 static const struct file_operations npu_reg_fops = {
 	.open = npu_debug_open,
-	.release = npu_debug_reg_release,
+	.release = npu_debug_release,
 	.read = npu_debug_reg_read,
+	.write = npu_debug_reg_write,
 };
 
 static const struct file_operations npu_off_fops = {
@@ -85,11 +95,6 @@ static int npu_debug_open(struct inode *inode, struct file *file)
 
 static int npu_debug_release(struct inode *inode, struct file *file)
 {
-	return 0;
-}
-
-static int npu_debug_reg_release(struct inode *inode, struct file *file)
-{
 	struct npu_device *npu_dev = file->private_data;
 	struct npu_debugfs_ctx *debugfs;
 
@@ -105,6 +110,41 @@ static int npu_debug_reg_release(struct inode *inode, struct file *file)
  * Function Implementations - Reg Read/Write
  * -------------------------------------------------------------------------
  */
+static ssize_t npu_debug_reg_write(struct file *file,
+		const char __user *user_buf, size_t count, loff_t *ppos)
+{
+	size_t off;
+	uint32_t data, cnt;
+	struct npu_device *npu_dev = file->private_data;
+	char buf[24];
+
+	if (count >= sizeof(buf))
+		return -EINVAL;
+
+	if (copy_from_user(buf, user_buf, count))
+		return -EFAULT;
+
+	buf[count] = 0;	/* end of string */
+
+	cnt = sscanf(buf, "%zx %x", &off, &data);
+	pr_debug("%s %s 0x%zx, 0x%08x\n", __func__, buf, off, data);
+
+	return count;
+	if (cnt < 2)
+		return -EINVAL;
+
+	if (npu_enable_core_power(npu_dev))
+		return -EPERM;
+
+	REGW(npu_dev, off, data);
+
+	npu_disable_core_power(npu_dev);
+
+	pr_debug("write: addr=%zx data=%x\n", off, data);
+
+	return count;
+}
+
 static ssize_t npu_debug_reg_read(struct file *file,
 			char __user *user_buf, size_t count, loff_t *ppos)
 {
@@ -160,9 +200,9 @@ static ssize_t npu_debug_reg_read(struct file *file,
 		return 0; /* done reading */
 
 	len = min(count, debugfs->buf_len - (size_t) *ppos);
-	NPU_DBG("read %zi %zi\n", count, debugfs->buf_len - (size_t) *ppos);
+	pr_debug("read %zi %zi\n", count, debugfs->buf_len - (size_t) *ppos);
 	if (copy_to_user(user_buf, debugfs->buf + *ppos, len)) {
-		NPU_ERR("failed to copy to user\n");
+		pr_err("failed to copy to user\n");
 		return -EFAULT;
 	}
 
@@ -183,7 +223,7 @@ static ssize_t npu_debug_off_write(struct file *file,
 	struct npu_device *npu_dev = file->private_data;
 	struct npu_debugfs_ctx *debugfs;
 
-	NPU_DBG("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
+	pr_debug("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
 	npu_dev = g_npu_dev;
 	debugfs = &npu_dev->debugfs_ctx;
 
@@ -198,7 +238,7 @@ static ssize_t npu_debug_off_write(struct file *file,
 	cnt = sscanf(buf, "%zx %x", &off, &reg_cnt);
 	if (cnt == 1)
 		reg_cnt = DEFAULT_REG_DUMP_NUM;
-	NPU_DBG("reg off = %zx, %d cnt=%d\n", off, reg_cnt, cnt);
+	pr_debug("reg off = %zx, %d cnt=%d\n", off, reg_cnt, cnt);
 	if (cnt >= 1) {
 		debugfs->reg_off = off;
 		debugfs->reg_cnt = reg_cnt;
@@ -215,7 +255,7 @@ static ssize_t npu_debug_off_read(struct file *file,
 	struct npu_device *npu_dev = file->private_data;
 	struct npu_debugfs_ctx *debugfs;
 
-	NPU_DBG("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
+	pr_debug("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
 	npu_dev = g_npu_dev;
 	debugfs = &npu_dev->debugfs_ctx;
 
@@ -224,10 +264,9 @@ static ssize_t npu_debug_off_read(struct file *file,
 
 	len = scnprintf(buf, sizeof(buf), "offset=0x%08x cnt=%d\n",
 		debugfs->reg_off, debugfs->reg_cnt);
-	len = min(len, count);
 
 	if (copy_to_user(user_buf, buf, len)) {
-		NPU_ERR("failed to copy to user\n");
+		pr_err("failed to copy to user\n");
 		return -EFAULT;
 	}
 
@@ -246,7 +285,7 @@ static ssize_t npu_debug_log_read(struct file *file,
 	struct npu_device *npu_dev = file->private_data;
 	struct npu_debugfs_ctx *debugfs;
 
-	NPU_DBG("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
+	pr_debug("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
 	npu_dev = g_npu_dev;
 	debugfs = &npu_dev->debugfs_ctx;
 
@@ -254,21 +293,49 @@ static ssize_t npu_debug_log_read(struct file *file,
 	mutex_lock(&debugfs->log_lock);
 
 	if (debugfs->log_num_bytes_buffered != 0) {
-		len = min(debugfs->log_num_bytes_buffered,
-			debugfs->log_buf_size - debugfs->log_read_index);
-		len = min(count, len);
-		if (copy_to_user(user_buf, (debugfs->log_buf +
-			debugfs->log_read_index), len)) {
-			NPU_ERR("failed to copy to user\n");
-			mutex_unlock(&debugfs->log_lock);
-			return -EFAULT;
-		}
-		debugfs->log_read_index += len;
-		if (debugfs->log_read_index == debugfs->log_buf_size)
-			debugfs->log_read_index = 0;
+		if ((debugfs->log_read_index +
+			debugfs->log_num_bytes_buffered) >
+			debugfs->log_buf_size) {
+			/* Wrap around case */
+			uint32_t remaining_to_end = debugfs->log_buf_size -
+				debugfs->log_read_index;
+			uint8_t *src_addr = debugfs->log_buf +
+				debugfs->log_read_index;
+			uint8_t *dst_addr = user_buf;
 
-		debugfs->log_num_bytes_buffered -= len;
-		*ppos += len;
+			if (copy_to_user(dst_addr, src_addr,
+				remaining_to_end)) {
+				pr_err("%s failed to copy to user\n", __func__);
+				mutex_unlock(&debugfs->log_lock);
+				return -EFAULT;
+			}
+			src_addr = debugfs->log_buf;
+			dst_addr = user_buf + remaining_to_end;
+			if (copy_to_user(dst_addr, src_addr,
+				debugfs->log_num_bytes_buffered -
+				remaining_to_end)) {
+				pr_err("%s failed to copy to user\n", __func__);
+				mutex_unlock(&debugfs->log_lock);
+				return -EFAULT;
+			}
+			debugfs->log_read_index =
+				debugfs->log_num_bytes_buffered -
+				remaining_to_end;
+		} else {
+			if (copy_to_user(user_buf, (debugfs->log_buf +
+				debugfs->log_read_index),
+				debugfs->log_num_bytes_buffered)) {
+				pr_err("%s failed to copy to user\n", __func__);
+				mutex_unlock(&debugfs->log_lock);
+				return -EFAULT;
+			}
+			debugfs->log_read_index +=
+				debugfs->log_num_bytes_buffered;
+			if (debugfs->log_read_index == debugfs->log_buf_size)
+				debugfs->log_read_index = 0;
+		}
+		len = debugfs->log_num_bytes_buffered;
+		debugfs->log_num_bytes_buffered = 0;
 	}
 
 	/* mutex log unlock */
@@ -290,7 +357,7 @@ static ssize_t npu_debug_ctrl_write(struct file *file,
 	int32_t rc = 0;
 	uint32_t val;
 
-	NPU_DBG("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
+	pr_debug("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
 	npu_dev = g_npu_dev;
 	debugfs = &npu_dev->debugfs_ctx;
 
@@ -306,24 +373,35 @@ static ssize_t npu_debug_ctrl_write(struct file *file,
 		buf[count-1] = 0;/* remove line feed */
 
 	if (strcmp(buf, "on") == 0) {
-		NPU_INFO("triggering fw_init\n");
-		if (enable_fw(npu_dev) != 0)
-			NPU_INFO("error in fw_init\n");
+		pr_info("triggering fw_init\n");
+		if (fw_init(npu_dev) != 0)
+			pr_info("error in fw_init\n");
 	} else if (strcmp(buf, "off") == 0) {
-		NPU_INFO("triggering fw_deinit\n");
-		disable_fw(npu_dev);
+		pr_info("triggering fw_deinit\n");
+		fw_deinit(npu_dev, false, true);
+	} else if (strcmp(buf, "ssr") == 0) {
+		pr_info("trigger error irq\n");
+		if (npu_enable_core_power(npu_dev))
+			return -EPERM;
+
+		REGW(npu_dev, NPU_MASTERn_ERROR_IRQ_SET(1), 2);
+		REGW(npu_dev, NPU_MASTERn_ERROR_IRQ_SET(0), 2);
+		npu_disable_core_power(npu_dev);
+	} else if (strcmp(buf, "ssr_wdt") == 0) {
+		pr_info("trigger wdt irq\n");
+		npu_disable_post_pil_clocks(npu_dev);
 	} else if (strcmp(buf, "loopback") == 0) {
-		NPU_DBG("loopback test\n");
+		pr_debug("loopback test\n");
 		rc = npu_host_loopback_test(npu_dev);
-		NPU_DBG("loopback test end: %d\n", rc);
+		pr_debug("loopback test end: %d\n", rc);
 	} else {
 		rc = kstrtou32(buf, 10, &val);
 		if (rc) {
-			NPU_ERR("Invalid input for power level settings\n");
+			pr_err("Invalid input for power level settings\n");
 		} else {
 			val = min(val, npu_dev->pwrctrl.max_pwrlevel);
 			npu_dev->pwrctrl.active_pwrlevel = val;
-			NPU_INFO("setting power state to %d\n", val);
+			pr_info("setting power state to %d\n", val);
 		}
 	}
 
@@ -343,68 +421,62 @@ int npu_debugfs_init(struct npu_device *npu_dev)
 
 	debugfs->root = debugfs_create_dir("npu", NULL);
 	if (IS_ERR_OR_NULL(debugfs->root)) {
-		NPU_ERR("debugfs_create_dir for npu failed, error %ld\n",
+		pr_err("debugfs_create_dir for npu failed, error %ld\n",
 			PTR_ERR(debugfs->root));
 		return -ENODEV;
 	}
 
 	if (!debugfs_create_file("reg", 0644, debugfs->root,
 		npu_dev, &npu_reg_fops)) {
-		NPU_ERR("debugfs_create_file reg fail\n");
+		pr_err("debugfs_create_file reg fail\n");
 		goto err;
 	}
 
 	if (!debugfs_create_file("off", 0644, debugfs->root,
 		npu_dev, &npu_off_fops)) {
-		NPU_ERR("debugfs_create_file off fail\n");
+		pr_err("debugfs_create_file off fail\n");
 		goto err;
 	}
 
 	if (!debugfs_create_file("log", 0644, debugfs->root,
 		npu_dev, &npu_log_fops)) {
-		NPU_ERR("debugfs_create_file log fail\n");
+		pr_err("debugfs_create_file log fail\n");
 		goto err;
 	}
 
 	if (!debugfs_create_file("ctrl", 0644, debugfs->root,
 		npu_dev, &npu_ctrl_fops)) {
-		NPU_ERR("debugfs_create_file ctrl fail\n");
+		pr_err("debugfs_create_file ctrl fail\n");
 		goto err;
 	}
 
 	if (!debugfs_create_bool("sys_cache_disable", 0644,
 		debugfs->root, &(host_ctx->sys_cache_disable))) {
-		NPU_ERR("debugfs_creat_bool fail for sys cache\n");
-		goto err;
-	}
-
-	if (!debugfs_create_bool("auto_pil_disable", 0644,
-		debugfs->root, &(host_ctx->auto_pil_disable))) {
-		NPU_ERR("debugfs_creat_bool fail for auto pil\n");
+		pr_err("debugfs_creat_bool fail for sys cache\n");
 		goto err;
 	}
 
 	if (!debugfs_create_u32("fw_dbg_mode", 0644,
 		debugfs->root, &(host_ctx->fw_dbg_mode))) {
-		NPU_ERR("debugfs_create_u32 fail for fw_dbg_mode\n");
+		pr_err("debugfs_create_u32 fail for fw_dbg_mode\n");
 		goto err;
 	}
 
 	if (!debugfs_create_u32("fw_state", 0444,
 		debugfs->root, &(host_ctx->fw_state))) {
-		NPU_ERR("debugfs_create_u32 fail for fw_state\n");
+		pr_err("debugfs_create_u32 fail for fw_state\n");
 		goto err;
 	}
 
 	if (!debugfs_create_u32("pwr_level", 0444,
 		debugfs->root, &(pwr->active_pwrlevel))) {
-		NPU_ERR("debugfs_create_u32 fail for pwr_level\n");
+		pr_err("debugfs_create_u32 fail for pwr_level\n");
 		goto err;
 	}
 
 	if (!debugfs_create_u32("exec_flags", 0644,
 		debugfs->root, &(host_ctx->exec_flags_override))) {
-		NPU_ERR("debugfs_create_u32 fail for exec_flags\n");
+		pr_err("debugfs_create_u32 fail for exec_flags\n");
 		goto err;
 	}
 

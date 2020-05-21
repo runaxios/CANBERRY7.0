@@ -111,6 +111,36 @@ config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
 	  have a look at the help section of that governor. The fallback
 	  governor will be 'performance'.
 
+config CPU_FREQ_DEFAULT_GOV_INTERACTIVE
+	bool "interactive"
+	select CPU_FREQ_GOV_INTERACTIVE
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the CPUFreq governor 'interactive' as default. This allows
+	  you to get a full dynamic cpu frequency capable system by simply
+	  loading your cpufreq low-level hardware driver, using the
+	  'interactive' governor for latency-sensitive workloads.
+
+config CPU_FREQ_DEFAULT_GOV_SMURFUTIL
+	bool "smurfutil"
+	depends on SMP
+	select CPU_FREQ_GOV_SMURFUTIL
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the 'smurfutil' CPUFreq governor by default. If unsure,
+	  have a look at the help section of that governor. The fallback
+	  governor will be 'performance'.
+
+config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL_PIXEL
+	bool "schedutil_pixel"
+	depends on SMP
+	select CPU_FREQ_GOV_SCHEDUTIL_PIXEL
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the 'schedutil_pixel' CPUFreq governor by default. If unsure,
+	  have a look at the help section of that governor. The fallback
+	  governor will be 'performance'.
+
 endchoice
 
 config CPU_FREQ_GOV_PERFORMANCE
@@ -192,6 +222,33 @@ config CPU_FREQ_GOV_CONSERVATIVE
 
 	  If in doubt, say N.
 
+config CPU_FREQ_GOV_SMURFUTIL
+	bool "'smurfutil' cpufreq policy governor"
+	depends on CPU_FREQ && SMP
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  This governor makes decisions based on the utilization data provided
+	  by the scheduler.  It sets the CPU frequency to be proportional to
+	  the utilization/capacity ratio coming from the scheduler.  If the
+	  utilization is frequency-invariant, the new frequency is also
+	  proportional to the maximum available frequency.  If that is not the
+	  case, it is proportional to the current frequency of the CPU.  The
+	  frequency tipping point is at utilization/capacity equal to 80% in
+	  both cases.
+
+	  If in doubt, say N.
+
+config CPU_FREQ_GOV_SCHEDUTIL_PIXEL
+	bool "'schedutil_pixel' cpufreq policy governor"
+	depends on CPU_FREQ && SMP
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  This governor is a schedutil with Google Pixel Patches
+
+	  If in doubt, say N.
+
 config CPU_BOOST
 	tristate "Event base short term CPU freq boost"
 	depends on CPU_FREQ
@@ -217,6 +274,26 @@ config CPU_FREQ_GOV_SCHEDUTIL
 	  case, it is proportional to the current frequency of the CPU.  The
 	  frequency tipping point is at utilization/capacity equal to 80% in
 	  both cases.
+
+	  If in doubt, say N.
+
+config CPU_FREQ_GOV_INTERACTIVE
+	tristate "'interactive' cpufreq policy governor"
+	depends on CPU_FREQ
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  'interactive' - This driver adds a dynamic cpufreq policy governor
+	  designed for latency-sensitive workloads.
+
+	  This governor attempts to reduce the latency of clock
+	  increases so that the system is more responsive to
+	  interactive workloads.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cpufreq_interactive.
+
+	  For details, take a look at linux/Documentation/cpu-freq.
 
 	  If in doubt, say N.
 
@@ -255,6 +332,16 @@ endif
 
 if PPC32 || PPC64
 source "drivers/cpufreq/Kconfig.powerpc"
+endif
+
+if AVR32
+config AVR32_AT32AP_CPUFREQ
+	bool "CPU frequency driver for AT32AP"
+	depends on PLATFORM_AT32AP
+	default n
+	help
+	  This enables the CPU frequency driver for AT32AP processors.
+	  If in doubt, say N.
 endif
 
 if IA64
@@ -352,4 +439,217 @@ config QORIQ_CPUFREQ
 	  which are capable of changing the CPU's frequency dynamically.
 
 endif
+
+config CPU_INPUT_BOOST
+	bool "CPU Input Boost"
+	help
+	  Boosts the CPU on touchscreen and touchpad input, and allows for
+	  boosting on other custom events, mainly which is intended to be for
+	  boosting when there is a new frame ready to be rendered to the
+	  display. The boost frequencies for this driver should be set so that
+	  frame drops are near-zero at the boosted frequencies and power
+	  consumption is minimized at said frequency combination.
+
+if CPU_INPUT_BOOST
+
+config INPUT_BOOST_DURATION_MS
+	int "Input boost duration"
+	default "100"
+	help
+	  Input boost duration in milliseconds.
+
+config WAKE_BOOST_DURATION_MS
+	int "Wake boost duration"
+	default "1000"
+	help
+	  Wake boost duration in milliseconds.
+
+config INPUT_BOOST_FREQ_LP
+	int "Low-power cluster input boost freq"
+	default "1382400"
+	help
+	  Input boost frequency for the low-power CPU cluster.
+
+config INPUT_BOOST_FREQ_PERF
+	int "Performance cluster input boost freq"
+	default "1171200"
+	help
+	  Input boost frequency for the performance CPU cluster.
+
+config INPUT_BOOST_FREQ_GOLD
+	int "Gold cluster input boost freq"
+	default "1171200"
+	help
+	  Input boost frequency for the gold CPU cluster.
+
+config INPUT_BOOST_STUNE_OFFSET
+	int "Foreground app schedtune input boost offset"
+	default "25"
+	help
+	  Input boost level for the EAS SchedTune boosting system. This
+	  artifically increases perceived load of certain processes in order
+	  to prioritize and increase their usage of big cores as well as
+	  influence system-wide CPU frequency selection. Negative values are
+	  accepted for testing purposes. A value of 0 disables SchedTune
+	  boosting for this level.
+
+config REMOVE_INPUT_BOOST_FREQ_LP
+	int "Low-power cluster return frequency"
+	default "300000"
+	help
+	  This is the frequency the low-power cluster will fallback to
+	  once the boost is over. The default 0 will make the policy
+	  use cpuinfo.min_freq. In case the device has some kind of quirk
+	  of using a higher than cpuinfo.min_freq (e.g. OnePlus 5/5T/6)
+	  this frequency will be used.
+
+config REMOVE_INPUT_BOOST_FREQ_PERF
+	int "Performance cluster return frequency"
+	default "710400"
+	help
+	  This is the frequency the performance cluster will fallback to
+	  once the boost is over. The default 0 will make the policy
+	  use cpuinfo.min_freq. In case the device has some kind of quirk
+	  of using a higher than cpuinfo.min_freq (e.g. OnePlus 5/5T/6)
+	  this frequency will be used.
+
+config REMOVE_INPUT_BOOST_FREQ_GOLD
+	int "Performance cluster return frequency"
+	default "825600"
+	help
+	  This is the frequency the performance cluster will fallback to
+	  once the boost is over. The default 0 will make the policy
+	  use cpuinfo.min_freq. In case the device has some kind of quirk
+	  of using a higher than cpuinfo.min_freq (e.g. OnePlus 5/5T/6)
+	  this frequency will be used.
+
+config FLEX_BOOST_FREQ_LP
+	int "Low-power cluster general boost freq"
+	default "1209600"
+	help
+	  Flex boost frequency for the low-power CPU cluster.
+
+config FLEX_BOOST_FREQ_PERF
+	int "Performance cluster general boost freq"
+	default "1171200"
+	help
+	  Flex boost frequency for the performance CPU cluster.
+
+config FLEX_BOOST_FREQ_GOLD
+	int "Gold cluster flex boost freq"
+	default "1171200"
+	help
+	  Flex boost frequency for the gold CPU cluster.
+
+config FLEX_BOOST_DURATION_MS
+	int "Flex boost duration"
+	default "11"
+	help
+	  Input boost duration in milliseconds.
+
+config FLEX_BOOST_STUNE_OFFSET
+	int "Foreground app schedtune max boost offset"
+	default "-20"
+	help
+	  Maximum boost level for the EAS SchedTune boosting system. This
+	  artifically increases perceived load of certain processes in order
+	  to prioritize and increase their usage of big cores as well as
+	  influence system-wide CPU frequency selection. Negative values are
+	  accepted for testing purposes. A value of 0 disables SchedTune
+	  boosting for this level.
+
+config MAX_BOOST_STUNE_OFFSET
+	int "Foreground app schedtune max boost offset"
+	default "50"
+	help
+	  Maximum boost level for the EAS SchedTune boosting system. This
+	  artifically increases perceived load of certain processes in order
+	  to prioritize and increase their usage of big cores as well as
+	  influence system-wide CPU frequency selection. Negative values are
+	  accepted for testing purposes. A value of 0 disables SchedTune
+	  boosting for this level.
+
+config  GPU_BOOST_FREQ
+	int "Boost GPU to given frequency"
+	default '345'
+	help
+	  Boosts GPU to given frequency
+
+config  GPU_MIN_FREQ
+	int "MIN GPU frequency"
+	default '257'
+	help
+	  MIN GPU frequency
+
+config INPUT_THREAD_PRIORITY
+	int "Input hread priority"
+	default "25"
+
+config MAX_BOOST_FREQ_LP
+	int "Low-power cluster max-boost freq"
+	default "1785600"
+	help
+	  Max-boost frequency for the low-power CPU cluster.
+
+ config MAX_BOOST_FREQ_PERF
+	int "Performance cluster max-boost freq"
+	default "2419200"
+	help
+	  Max-boost frequency for the performance CPU cluster.
+
+ config MAX_BOOST_FREQ_GOLD
+	int "Gold cluster max-boost freq"
+	default "2534400"
+	help
+	  Max-boost frequency for the Gold CPU cluster.
+
+config STUNE_BOOST_EXTENDER_MS
+	int "Foreground app schedtune max extend duration"
+	default '250'
+	help
+	  Extends the stune boost duration to a given timespan
+
+config MAX_STUNE_BOOST_EXTENDER_MS
+	int "Foreground app schedtune max extend duration"
+	default '500'
+	help
+	  Extends the stune boost duration to a given timespan
+
+config GPU_BOOST_EXTENDER_MS
+	int "Boost GPU for 3000 ms"
+	default '500'
+	help
+	  Boosts GPU to given frequency for 3000 ms
+
+endif
+
+config CPU_FREQ_DEFAULT_LITTLE_MIN
+	int "Default minimum frequency for the little cluster"
+	default 768000
+	help
+	  This sets the default minimum frequency (in kHz) for the little CPU
+	  cluster.
+
+	  If in doubt, say 0 to use the hardware's minimum frequency.
+
+config CPU_FREQ_DEFAULT_BIG_MIN
+	int "Default minimum frequency for the big cluster"
+	default 1056000
+	help
+	  This sets the default minimum frequency (in kHz) for the big CPU
+	  cluster.
+
+	  If in doubt, say 0 to use the hardware's minimum frequency.
+
+config CPU_FREQ_DEFAULT_PRIME_MIN
+	int "Default minimum frequency for the prime cluster"
+	default 1171200
+	help
+	  This sets the default minimum frequency (in kHz) for the prime CPU
+	  cluster.
+
+	  If in doubt, say 0 to use the hardware's minimum frequency.g
+
+comment "CPU frequency scaling drivers"
+
 endmenu

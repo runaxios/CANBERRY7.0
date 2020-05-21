@@ -121,7 +121,7 @@ struct inode *sdcardfs_iget(struct super_block *sb, struct inode *lower_inode, u
 	inode->i_ino = lower_inode->i_ino;
 	sdcardfs_set_lower_inode(inode, lower_inode);
 
-	inode_inc_iversion_raw(inode);
+	inode->i_version++;
 
 	/* use different set of inode ops for symlinks & directories */
 	if (S_ISDIR(lower_inode->i_mode))
@@ -369,18 +369,13 @@ put_name:
 	/* See if the low-level filesystem might want
 	 * to use its own hash
 	 */
-	lower_dentry = d_hash_and_lookup(lower_dir_dentry, &dname);
+	lower_dentry = lookup_one_len_unlocked(dname.name, lower_dir_dentry,
+					       dname.len);
 	if (IS_ERR(lower_dentry))
 		return lower_dentry;
 
-	if (!lower_dentry) {
-		/* We called vfs_path_lookup earlier, and did not get a negative
-		 * dentry then. Don't confuse the lower filesystem by forcing
-		 * one on it now...
-		 */
+	if (d_really_is_negative(lower_dentry))
 		err = -ENOENT;
-		goto out;
-	}
 
 	lower_path.dentry = lower_dentry;
 	lower_path.mnt = mntget(lower_dir_mnt);

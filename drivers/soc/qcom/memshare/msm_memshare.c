@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -310,14 +318,14 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 		break;
 
 	case SUBSYS_RAMDUMP_NOTIFICATION:
-		ramdump_event = true;
+		ramdump_event = 1;
 		break;
 
 	case SUBSYS_BEFORE_POWERUP:
 		if (_cmd) {
 			notifdata = (struct notif_data *) _cmd;
 		} else {
-			ramdump_event = false;
+			ramdump_event = 0;
 			break;
 		}
 
@@ -326,7 +334,7 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 			ret = mem_share_do_ramdump();
 			if (ret)
 				dev_err(memsh_child->dev, "memshare: Ramdump collection failed\n");
-			ramdump_event = false;
+			ramdump_event = 0;
 		}
 		break;
 
@@ -505,7 +513,7 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 		"memshare_alloc: client_id: %d, alloc_resp.num_bytes: %d, alloc_resp.resp.result: %lx\n",
 		alloc_req->client_id,
 		alloc_resp->dhms_mem_alloc_addr_info[0].num_bytes,
-		(unsigned long)alloc_resp->resp.result);
+		(unsigned long int)alloc_resp->resp.result);
 
 	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
 			  MEM_ALLOC_GENERIC_RESP_MSG_V01,
@@ -518,6 +526,7 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 
 	kfree(alloc_resp);
 	alloc_resp = NULL;
+	return;
 }
 
 static void handle_free_generic_req(struct qmi_handle *handle,
@@ -598,6 +607,7 @@ static void handle_free_generic_req(struct qmi_handle *handle,
 		dev_err(memsh_child->dev,
 		"memshare_free: error sending the free response: %d\n", rc);
 
+	return;
 }
 
 static void handle_query_size_req(struct qmi_handle *handle,
@@ -631,9 +641,9 @@ static void handle_query_size_req(struct qmi_handle *handle,
 		return;
 	}
 
-	if (memblock[client_id].init_size) {
+	if (memblock[client_id].size) {
 		query_resp->size_valid = 1;
-		query_resp->size = memblock[client_id].init_size;
+		query_resp->size = memblock[client_id].size;
 	} else {
 		query_resp->size_valid = 1;
 		query_resp->size = 0;
@@ -645,7 +655,7 @@ static void handle_query_size_req(struct qmi_handle *handle,
 	dev_info(memsh_child->dev,
 		"memshare_query: client_id : %d, query_resp.size :%d, query_resp.resp.result :%lx\n",
 		query_req->client_id, query_resp->size,
-		(unsigned long)query_resp->resp.result);
+		(unsigned long int)query_resp->resp.result);
 	rc = qmi_send_response(mem_share_svc_handle, sq, txn,
 			  MEM_QUERY_SIZE_RESP_MSG_V01,
 			  MEM_QUERY_MAX_MSG_LEN_V01,
@@ -656,11 +666,13 @@ static void handle_query_size_req(struct qmi_handle *handle,
 
 	kfree(query_resp);
 	query_resp = NULL;
+	return;
 }
 
 static void mem_share_svc_disconnect_cb(struct qmi_handle *qmi,
 				  unsigned int node, unsigned int port)
 {
+	return;
 }
 
 static struct qmi_ops server_ops = {
@@ -812,7 +824,7 @@ static int memshare_child_probe(struct platform_device *pdev)
 	else if (strcmp(name, "wcnss") == 0)
 		memblock[num_clients].peripheral = DHMS_MEM_PROC_WCNSS_V01;
 
-	memblock[num_clients].init_size = size;
+	memblock[num_clients].size = size;
 	memblock[num_clients].client_id = client_id;
 
   /*
@@ -830,7 +842,6 @@ static int memshare_child_probe(struct platform_device *pdev)
 				rc);
 			return rc;
 		}
-		memblock[num_clients].size = size;
 		memblock[num_clients].allotted = 1;
 		shared_hyp_mapping(num_clients);
 	}
@@ -933,6 +944,7 @@ static struct platform_driver memshare_pdriver = {
 	.remove         = memshare_remove,
 	.driver = {
 		.name   = MEMSHARE_DEV_NAME,
+		.owner  = THIS_MODULE,
 		.of_match_table = memshare_match_table,
 	},
 };
@@ -942,6 +954,7 @@ static struct platform_driver memshare_pchild = {
 	.remove         = memshare_child_remove,
 	.driver = {
 		.name   = MEMSHARE_CHILD_DEV_NAME,
+		.owner  = THIS_MODULE,
 		.of_match_table = memshare_match_table1,
 	},
 };

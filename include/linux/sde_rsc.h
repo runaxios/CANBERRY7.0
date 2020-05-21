@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _SDE_RSC_H_
@@ -151,6 +159,11 @@ struct sde_rsc_cmd_config {
  *               SDE_RSC_INDEX is valid rsc index.
  * @name:	 Caller needs to provide some valid string to identify
  *               the client. "primary", "dp", "hdmi" are suggested name.
+ * @is_primary:	 Caller needs to provide information if client is primary
+ *               or not. Primary client votes will be redirected to
+ *               display rsc.
+ * @config:	 fps, vtotal, porches, etc configuration for command mode
+ *               panel
  * @client_type: check client_type enum for information
  * @vsync_source: This parameter is only valid for primary display. It provides
  *               vsync source information
@@ -274,16 +287,23 @@ bool is_sde_rsc_available(int rsc_index);
 enum sde_rsc_state get_sde_rsc_current_state(int rsc_index);
 
 /**
+ * get_sde_rsc_primary_crtc - gets the primary crtc for the sde rsc.
+ * @rsc_index:   A client will be created on this RSC. As of now only
+ *               SDE_RSC_INDEX is valid rsc index.
+ * Returns: crtc id of primary crtc ; 0 for all other cases.
+ */
+int get_sde_rsc_primary_crtc(int rsc_index);
+
+/**
  * sde_rsc_client_trigger_vote() - triggers ab/ib vote for rsc client
  *
- * @client:	 Client pointer provided by sde_rsc_client_create().
+ * @client:	Client pointer provided by sde_rsc_client_create().
  * @delta_vote:  if bw vote is increased or decreased
  *
  * Return: error code.
  */
 int sde_rsc_client_trigger_vote(struct sde_rsc_client *caller_client,
 	bool delta_vote);
-
 #else
 
 static inline struct sde_rsc_client *sde_rsc_client_create(u32 rsc_index,
@@ -304,13 +324,13 @@ static inline int sde_rsc_client_state_update(struct sde_rsc_client *client,
 	return 0;
 }
 
-static inline int sde_rsc_client_get_vsync_refcount(
+int sde_rsc_client_get_vsync_refcount(
 		struct sde_rsc_client *caller_client)
 {
 	return 0;
 }
 
-static inline int sde_rsc_client_reset_vsync_refcount(
+int sde_rsc_client_reset_vsync_refcount(
 		struct sde_rsc_client *caller_client)
 {
 	return 0;
@@ -349,6 +369,10 @@ static inline enum sde_rsc_state get_sde_rsc_current_state(int rsc_index)
 	return SDE_RSC_IDLE_STATE;
 }
 
+static inline int get_sde_rsc_primary_crtc(int rsc_index)
+{
+	return 0;
+}
 static inline int sde_rsc_client_trigger_vote(
 	struct sde_rsc_client *caller_client, bool delta_vote)
 {

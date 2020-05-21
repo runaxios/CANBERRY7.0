@@ -2,7 +2,6 @@
  *  linux/arch/arm/mm/init.c
  *
  *  Copyright (C) 1995-2005 Russell King
- *  Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -37,7 +36,6 @@
 #include <asm/system_info.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
-#include <asm/ptdump.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -197,11 +195,6 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
 #ifdef CONFIG_HAVE_ARCH_PFN_VALID
 int pfn_valid(unsigned long pfn)
 {
-	phys_addr_t addr = __pfn_to_phys(pfn);
-
-	if (__phys_to_pfn(addr) != pfn)
-		return 0;
-
 	return memblock_is_map_memory(__pfn_to_phys(pfn));
 }
 EXPORT_SYMBOL(pfn_valid);
@@ -587,6 +580,16 @@ void __init mem_init(void)
 	BUILD_BUG_ON(PKMAP_BASE + LAST_PKMAP * PAGE_SIZE > PAGE_OFFSET);
 	BUG_ON(PKMAP_BASE + LAST_PKMAP * PAGE_SIZE	> PAGE_OFFSET);
 #endif
+
+	if (PAGE_SIZE >= 16384 && get_num_physpages() <= 128) {
+		extern int sysctl_overcommit_memory;
+		/*
+		 * On a machine this small we won't get
+		 * anywhere without overcommit, so turn
+		 * it on by default.
+		 */
+		sysctl_overcommit_memory = OVERCOMMIT_ALWAYS;
+	}
 }
 
 #ifdef CONFIG_STRICT_KERNEL_RWX
@@ -597,6 +600,9 @@ struct section_perm {
 	pmdval_t mask;
 	pmdval_t prot;
 	pmdval_t clear;
+	pteval_t ptemask;
+	pteval_t pteprot;
+	pteval_t pteclear;
 };
 
 /* First section-aligned location at or after __start_rodata. */
@@ -610,6 +616,8 @@ static struct section_perm nx_perms[] = {
 		.end	= (unsigned long)_stext,
 		.mask	= ~PMD_SECT_XN,
 		.prot	= PMD_SECT_XN,
+		.ptemask = ~L_PTE_XN,
+		.pteprot = L_PTE_XN,
 	},
 	/* Make init RW (set NX). */
 	{
@@ -618,6 +626,8 @@ static struct section_perm nx_perms[] = {
 		.end	= (unsigned long)_sdata,
 		.mask	= ~PMD_SECT_XN,
 		.prot	= PMD_SECT_XN,
+		.ptemask = ~L_PTE_XN,
+		.pteprot = L_PTE_XN,
 	},
 	/* Make rodata NX (set RO in ro_perms below). */
 	{
@@ -626,6 +636,8 @@ static struct section_perm nx_perms[] = {
 		.end    = (unsigned long)__init_begin,
 		.mask   = ~PMD_SECT_XN,
 		.prot   = PMD_SECT_XN,
+		.ptemask = ~L_PTE_XN,
+		.pteprot = L_PTE_XN,
 	},
 };
 
@@ -643,6 +655,8 @@ static struct section_perm ro_perms[] = {
 		.prot   = PMD_SECT_APX | PMD_SECT_AP_WRITE,
 		.clear  = PMD_SECT_AP_WRITE,
 #endif
+		.ptemask = ~L_PTE_RDONLY,
+		.pteprot = L_PTE_RDONLY,
 	},
 };
 
@@ -651,6 +665,38 @@ static struct section_perm ro_perms[] = {
  * copied into each mm). During startup, this is the init_mm. Is only
  * safe to be called with preemption disabled, as under stop_machine().
  */
+struct pte_data {
+	pteval_t mask;
+	pteval_t val;
+};
+
+static int __pte_update(pte_t *ptep, pgtable_t token, unsigned long addr,
+			void *d)
+{
+	struct pte_data *data = d;
+	pte_t pte = *ptep;
+
+	pte = __pte((pte_val(*ptep) & data->mask) | data->val);
+	set_pte_ext(ptep, pte, 0);
+
+	return 0;
+}
+
+static inline void pte_update(unsigned long addr, pteval_t mask,
+				  pteval_t prot, struct mm_struct *mm)
+{
+	struct pte_data data;
+	struct mm_struct *apply_mm = mm;
+
+	data.mask = mask;
+	data.val = prot;
+
+	if (addr >= PAGE_OFFSET)
+		apply_mm = &init_mm;
+	apply_to_page_range(apply_mm, addr, SECTION_SIZE, __pte_update, &data);
+	flush_tlb_kernel_range(addr, addr + SECTION_SIZE);
+}
+
 static inline void section_update(unsigned long addr, pmdval_t mask,
 				  pmdval_t prot, struct mm_struct *mm)
 {
@@ -699,11 +745,21 @@ void set_section_perms(struct section_perm *perms, int n, bool set,
 
 		for (addr = perms[i].start;
 		     addr < perms[i].end;
-		     addr += SECTION_SIZE)
-			section_update(addr, perms[i].mask,
-				set ? perms[i].prot : perms[i].clear, mm);
-	}
+		     addr += SECTION_SIZE) {
+			pmd_t *pmd;
 
+			pmd = pmd_offset(pud_offset(pgd_offset(mm, addr),
+						addr), addr);
+			if (pmd_bad(*pmd))
+				section_update(addr, perms[i].mask,
+					set ? perms[i].prot : perms[i].clear,
+					mm);
+			else
+				pte_update(addr, perms[i].ptemask,
+				     set ? perms[i].pteprot : perms[i].pteclear,
+				     mm);
+		}
+	}
 }
 
 /**
@@ -719,8 +775,7 @@ static void update_sections_early(struct section_perm perms[], int n)
 		if (t->flags & PF_KTHREAD)
 			continue;
 		for_each_thread(t, s)
-			if (s->mm)
-				set_section_perms(perms, n, true, s->mm);
+			set_section_perms(perms, n, true, s->mm);
 	}
 	set_section_perms(perms, n, true, current->active_mm);
 	set_section_perms(perms, n, true, &init_mm);
@@ -749,7 +804,6 @@ void mark_rodata_ro(void)
 {
 	kernel_set_to_readonly = 1;
 	stop_machine(__mark_rodata_ro, NULL, NULL);
-	debug_checkwx();
 }
 
 void set_kernel_text_rw(void)
@@ -774,9 +828,20 @@ void set_kernel_text_ro(void)
 static inline void fix_kernmem_perms(void) { }
 #endif /* CONFIG_STRICT_KERNEL_RWX */
 
+void free_tcmmem(void)
+{
+#ifdef CONFIG_HAVE_TCM
+	extern char __tcm_start, __tcm_end;
+
+	poison_init_mem(&__tcm_start, &__tcm_end - &__tcm_start);
+	free_reserved_area(&__tcm_start, &__tcm_end, -1, "TCM link");
+#endif
+}
+
 void free_initmem(void)
 {
 	fix_kernmem_perms();
+	free_tcmmem();
 
 	poison_init_mem(__init_begin, __init_end - __init_begin);
 	if (!machine_is_integrator() && !machine_is_cintegrator())

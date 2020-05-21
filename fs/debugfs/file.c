@@ -1,12 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  file.c - part of debugfs, a tiny little debug file system
  *
  *  Copyright (C) 2004 Greg Kroah-Hartman <greg@kroah.com>
  *  Copyright (C) 2004 IBM Inc.
  *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License version
+ *	2 as published by the Free Software Foundation.
+ *
  *  debugfs is for people to use instead of /proc or /sys.
  *  See Documentation/filesystems/ for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -18,7 +22,7 @@
 #include <linux/slab.h>
 #include <linux/atomic.h>
 #include <linux/device.h>
-#include <linux/poll.h>
+#include <asm/poll.h>
 
 #include "internal.h"
 
@@ -206,15 +210,15 @@ FULL_PROXY_FUNC(unlocked_ioctl, long, filp,
 		PROTO(struct file *filp, unsigned int cmd, unsigned long arg),
 		ARGS(filp, cmd, arg));
 
-static __poll_t full_proxy_poll(struct file *filp,
+static unsigned int full_proxy_poll(struct file *filp,
 				struct poll_table_struct *wait)
 {
 	struct dentry *dentry = F_DENTRY(filp);
-	__poll_t r = 0;
+	unsigned int r = 0;
 	const struct file_operations *real_fops;
 
 	if (debugfs_file_get(dentry))
-		return EPOLLHUP;
+		return POLLHUP;
 
 	real_fops = debugfs_real_fops(filp);
 	r = real_fops->poll(filp, wait);
@@ -796,13 +800,19 @@ EXPORT_SYMBOL_GPL(debugfs_read_file_bool);
 ssize_t debugfs_write_file_bool(struct file *file, const char __user *user_buf,
 				size_t count, loff_t *ppos)
 {
+	char buf[32];
+	size_t buf_size;
 	bool bv;
 	int r;
 	bool *val = file->private_data;
 	struct dentry *dentry = F_DENTRY(file);
 
-	r = kstrtobool_from_user(user_buf, count, &bv);
-	if (!r) {
+	buf_size = min(count, (sizeof(buf)-1));
+	if (copy_from_user(buf, user_buf, buf_size))
+		return -EFAULT;
+
+	buf[buf_size] = '\0';
+	if (strtobool(buf, &bv) == 0) {
 		r = debugfs_file_get(dentry);
 		if (unlikely(r))
 			return r;

@@ -50,10 +50,7 @@ struct crypto_ccm_req_priv_ctx {
 	u32 flags;
 	struct scatterlist src[3];
 	struct scatterlist dst[3];
-	union {
-		struct ahash_request ahreq;
-		struct skcipher_request skreq;
-	};
+	struct skcipher_request skreq;
 };
 
 struct cbcmac_tfm_ctx {
@@ -184,7 +181,7 @@ static int crypto_ccm_auth(struct aead_request *req, struct scatterlist *plain,
 	struct crypto_ccm_req_priv_ctx *pctx = crypto_ccm_reqctx(req);
 	struct crypto_aead *aead = crypto_aead_reqtfm(req);
 	struct crypto_ccm_ctx *ctx = crypto_aead_ctx(aead);
-	struct ahash_request *ahreq = &pctx->ahreq;
+	AHASH_REQUEST_ON_STACK(ahreq, ctx->mac);
 	unsigned int assoclen = req->assoclen;
 	struct scatterlist sg[3];
 	u8 *odata = pctx->odata;
@@ -430,7 +427,7 @@ static int crypto_ccm_init_tfm(struct crypto_aead *tfm)
 	crypto_aead_set_reqsize(
 		tfm,
 		align + sizeof(struct crypto_ccm_req_priv_ctx) +
-		max(crypto_ahash_reqsize(mac), crypto_skcipher_reqsize(ctr)));
+		crypto_skcipher_reqsize(ctr));
 
 	return 0;
 
@@ -458,6 +455,7 @@ static void crypto_ccm_free(struct aead_instance *inst)
 
 static int crypto_ccm_create_common(struct crypto_template *tmpl,
 				    struct rtattr **tb,
+				    const char *full_name,
 				    const char *ctr_name,
 				    const char *mac_name)
 {
@@ -485,8 +483,7 @@ static int crypto_ccm_create_common(struct crypto_template *tmpl,
 
 	mac = __crypto_hash_alg_common(mac_alg);
 	err = -EINVAL;
-	if (strncmp(mac->base.cra_name, "cbcmac(", 7) != 0 ||
-	    mac->digestsize != 16)
+	if (mac->digestsize != 16)
 		goto out_put_mac;
 
 	inst = kzalloc(sizeof(*inst) + sizeof(*ictx), GFP_KERNEL);
@@ -509,26 +506,22 @@ static int crypto_ccm_create_common(struct crypto_template *tmpl,
 
 	ctr = crypto_spawn_skcipher_alg(&ictx->ctr);
 
-	/* The skcipher algorithm must be CTR mode, using 16-byte blocks. */
+	/* Not a stream cipher? */
 	err = -EINVAL;
-	if (strncmp(ctr->base.cra_name, "ctr(", 4) != 0 ||
-	    crypto_skcipher_alg_ivsize(ctr) != 16 ||
-	    ctr->base.cra_blocksize != 1)
+	if (ctr->base.cra_blocksize != 1)
 		goto err_drop_ctr;
 
-	/* ctr and cbcmac must use the same underlying block cipher. */
-	if (strcmp(ctr->base.cra_name + 4, mac->base.cra_name + 7) != 0)
+	/* We want the real thing! */
+	if (crypto_skcipher_alg_ivsize(ctr) != 16)
 		goto err_drop_ctr;
 
 	err = -ENAMETOOLONG;
-	if (snprintf(inst->alg.base.cra_name, CRYPTO_MAX_ALG_NAME,
-		     "ccm(%s", ctr->base.cra_name + 4) >= CRYPTO_MAX_ALG_NAME)
-		goto err_drop_ctr;
-
 	if (snprintf(inst->alg.base.cra_driver_name, CRYPTO_MAX_ALG_NAME,
 		     "ccm_base(%s,%s)", ctr->base.cra_driver_name,
 		     mac->base.cra_driver_name) >= CRYPTO_MAX_ALG_NAME)
 		goto err_drop_ctr;
+
+	memcpy(inst->alg.base.cra_name, full_name, CRYPTO_MAX_ALG_NAME);
 
 	inst->alg.base.cra_flags = ctr->base.cra_flags & CRYPTO_ALG_ASYNC;
 	inst->alg.base.cra_priority = (mac->base.cra_priority +
@@ -571,6 +564,7 @@ static int crypto_ccm_create(struct crypto_template *tmpl, struct rtattr **tb)
 	const char *cipher_name;
 	char ctr_name[CRYPTO_MAX_ALG_NAME];
 	char mac_name[CRYPTO_MAX_ALG_NAME];
+	char full_name[CRYPTO_MAX_ALG_NAME];
 
 	cipher_name = crypto_attr_alg_name(tb[1]);
 	if (IS_ERR(cipher_name))
@@ -584,7 +578,12 @@ static int crypto_ccm_create(struct crypto_template *tmpl, struct rtattr **tb)
 		     cipher_name) >= CRYPTO_MAX_ALG_NAME)
 		return -ENAMETOOLONG;
 
-	return crypto_ccm_create_common(tmpl, tb, ctr_name, mac_name);
+	if (snprintf(full_name, CRYPTO_MAX_ALG_NAME, "ccm(%s)", cipher_name) >=
+	    CRYPTO_MAX_ALG_NAME)
+		return -ENAMETOOLONG;
+
+	return crypto_ccm_create_common(tmpl, tb, full_name, ctr_name,
+					mac_name);
 }
 
 static struct crypto_template crypto_ccm_tmpl = {
@@ -597,17 +596,23 @@ static int crypto_ccm_base_create(struct crypto_template *tmpl,
 				  struct rtattr **tb)
 {
 	const char *ctr_name;
-	const char *mac_name;
+	const char *cipher_name;
+	char full_name[CRYPTO_MAX_ALG_NAME];
 
 	ctr_name = crypto_attr_alg_name(tb[1]);
 	if (IS_ERR(ctr_name))
 		return PTR_ERR(ctr_name);
 
-	mac_name = crypto_attr_alg_name(tb[2]);
-	if (IS_ERR(mac_name))
-		return PTR_ERR(mac_name);
+	cipher_name = crypto_attr_alg_name(tb[2]);
+	if (IS_ERR(cipher_name))
+		return PTR_ERR(cipher_name);
 
-	return crypto_ccm_create_common(tmpl, tb, ctr_name, mac_name);
+	if (snprintf(full_name, CRYPTO_MAX_ALG_NAME, "ccm_base(%s,%s)",
+		     ctr_name, cipher_name) >= CRYPTO_MAX_ALG_NAME)
+		return -ENAMETOOLONG;
+
+	return crypto_ccm_create_common(tmpl, tb, full_name, ctr_name,
+					cipher_name);
 }
 
 static struct crypto_template crypto_ccm_base_tmpl = {

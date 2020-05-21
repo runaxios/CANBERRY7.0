@@ -200,6 +200,7 @@ struct mcam_vb_buffer {
 	struct list_head queue;
 	struct mcam_dma_desc *dma_desc;	/* Descriptor virtual address */
 	dma_addr_t dma_desc_pa;		/* Descriptor physical address */
+	int dma_desc_nent;		/* Number of mapped descriptors */
 };
 
 static inline struct mcam_vb_buffer *vb_to_mvb(struct vb2_v4l2_buffer *vb)
@@ -607,11 +608,9 @@ static void mcam_dma_contig_done(struct mcam_camera *cam, int frame)
 static void mcam_sg_next_buffer(struct mcam_camera *cam)
 {
 	struct mcam_vb_buffer *buf;
-	struct sg_table *sg_table;
 
 	buf = list_first_entry(&cam->buffers, struct mcam_vb_buffer, queue);
 	list_del_init(&buf->queue);
-	sg_table = vb2_dma_sg_plane_desc(&buf->vb_buf.vb2_buf, 0);
 	/*
 	 * Very Bad Not Good Things happen if you don't clear
 	 * C1_DESC_ENA before making any descriptor changes.
@@ -619,7 +618,7 @@ static void mcam_sg_next_buffer(struct mcam_camera *cam)
 	mcam_reg_clear_bit(cam, REG_CTRL1, C1_DESC_ENA);
 	mcam_reg_write(cam, REG_DMA_DESC_Y, buf->dma_desc_pa);
 	mcam_reg_write(cam, REG_DESC_LEN_Y,
-			sg_table->nents * sizeof(struct mcam_dma_desc));
+			buf->dma_desc_nent*sizeof(struct mcam_dma_desc));
 	mcam_reg_write(cam, REG_DESC_LEN_U, 0);
 	mcam_reg_write(cam, REG_DESC_LEN_V, 0);
 	mcam_reg_set_bit(cam, REG_CTRL1, C1_DESC_ENA);
@@ -1444,24 +1443,24 @@ static int mcam_vidioc_s_input(struct file *filp, void *priv, unsigned int i)
  * the level which controls the number of read buffers.
  */
 static int mcam_vidioc_g_parm(struct file *filp, void *priv,
-		struct v4l2_streamparm *a)
+		struct v4l2_streamparm *parms)
 {
 	struct mcam_camera *cam = video_drvdata(filp);
 	int ret;
 
-	ret = v4l2_g_parm_cap(video_devdata(filp), cam->sensor, a);
-	a->parm.capture.readbuffers = n_dma_bufs;
+	ret = sensor_call(cam, video, g_parm, parms);
+	parms->parm.capture.readbuffers = n_dma_bufs;
 	return ret;
 }
 
 static int mcam_vidioc_s_parm(struct file *filp, void *priv,
-		struct v4l2_streamparm *a)
+		struct v4l2_streamparm *parms)
 {
 	struct mcam_camera *cam = video_drvdata(filp);
 	int ret;
 
-	ret = v4l2_s_parm_cap(video_devdata(filp), cam->sensor, a);
-	a->parm.capture.readbuffers = n_dma_bufs;
+	ret = sensor_call(cam, video, s_parm, parms);
+	parms->parm.capture.readbuffers = n_dma_bufs;
 	return ret;
 }
 
@@ -1721,7 +1720,6 @@ int mccic_irq(struct mcam_camera *cam, unsigned int irqs)
 	}
 	return handled;
 }
-EXPORT_SYMBOL_GPL(mccic_irq);
 
 /* ---------------------------------------------------------------------- */
 /*
@@ -1832,7 +1830,7 @@ out_unregister:
 	v4l2_device_unregister(&cam->v4l2_dev);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(mccic_register);
+
 
 void mccic_shutdown(struct mcam_camera *cam)
 {
@@ -1852,7 +1850,6 @@ void mccic_shutdown(struct mcam_camera *cam)
 	v4l2_ctrl_handler_free(&cam->ctrl_handler);
 	v4l2_device_unregister(&cam->v4l2_dev);
 }
-EXPORT_SYMBOL_GPL(mccic_shutdown);
 
 /*
  * Power management
@@ -1871,7 +1868,6 @@ void mccic_suspend(struct mcam_camera *cam)
 	}
 	mutex_unlock(&cam->s_mutex);
 }
-EXPORT_SYMBOL_GPL(mccic_suspend);
 
 int mccic_resume(struct mcam_camera *cam)
 {
@@ -1902,8 +1898,4 @@ int mccic_resume(struct mcam_camera *cam)
 	}
 	return ret;
 }
-EXPORT_SYMBOL_GPL(mccic_resume);
 #endif /* CONFIG_PM */
-
-MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Jonathan Corbet <corbet@lwn.net>");

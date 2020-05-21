@@ -1,8 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
 #ifndef __QCOM_TSENS_H__
 #define __QCOM_TSENS_H__
 
@@ -31,7 +38,6 @@
 #define SLOPE_DEFAULT		3200
 
 #define IPC_LOGPAGES 10
-#define MIN_TEMP_DEF_OFFSET		0xFF
 
 enum tsens_dbg_type {
 	TSENS_DBG_POLL,
@@ -145,19 +151,18 @@ struct tsens_sensor {
  * @get_temp: Function which returns the temp in millidegC
  */
 struct tsens_ops {
-	int (*hw_init)(struct tsens_device *tmdev);
-	int (*get_temp)(struct tsens_sensor *tm_sensor, int *temp);
-	int (*set_trips)(struct tsens_sensor *tm_sensor, int low, int high);
-	int (*interrupts_reg)(struct tsens_device *tmdev);
-	int (*dbg)(struct tsens_device *tmdev, u32 id, u32 dbg_type,
-								int *temp);
-	int (*sensor_en)(struct tsens_device *tmdev, u32 sensor_id);
-	int (*calibrate)(struct tsens_device *tmdev);
+	int (*hw_init)(struct tsens_device *);
+	int (*get_temp)(struct tsens_sensor *, int *);
+	int (*set_trips)(struct tsens_sensor *, int, int);
+	int (*interrupts_reg)(struct tsens_device *);
+	int (*dbg)(struct tsens_device *, u32, u32, int *);
+	int (*sensor_en)(struct tsens_device *, u32);
+	int (*calibrate)(struct tsens_device *);
 };
 
 struct tsens_irqs {
 	const char			*name;
-	irqreturn_t (*handler)(int irq, void *data);
+	irqreturn_t (*handler)(int, void *);
 };
 
 /**
@@ -209,23 +214,14 @@ struct tsens_device {
 	const struct tsens_data		*ctrl_data;
 	struct tsens_mtc_sysfs  mtcsys;
 	int				trdy_fail_ctr;
-	struct tsens_sensor		min_temp;
-	u8				min_temp_sensor_id;
-	struct workqueue_struct		*tsens_reinit_work;
-	struct work_struct		therm_fwk_notify;
-	bool				tsens_reinit_wa;
-	struct tsens_sensor             sensor[0];
+	struct tsens_sensor		sensor[0];
 };
 
-extern const struct tsens_data data_tsens2xxx, data_tsens23xx, data_tsens24xx,
-		data_tsens26xx;
+extern const struct tsens_data data_tsens2xxx, data_tsens23xx, data_tsens24xx;
 extern const struct tsens_data data_tsens14xx, data_tsens14xx_405;
 extern struct list_head tsens_device_list;
 
 extern int calibrate_8937(struct tsens_device *tmdev);
 extern int calibrate_405(struct tsens_device *tmdev);
-
-extern int tsens_2xxx_get_min_temp(
-		struct tsens_sensor *sensor, int *temp);
 
 #endif /* __QCOM_TSENS_H__ */

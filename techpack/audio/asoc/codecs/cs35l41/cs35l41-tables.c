@@ -2,7 +2,7 @@
  * cs35l41-tables.c -- CS35L41 ALSA SoC audio driver
  *
  * Copyright 2018 Cirrus Logic, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Author: Brian Austin <brian.austin@cirrus.com>
  *         David Rhodes <david.rhodes@cirrus.com>
@@ -64,11 +64,11 @@ const struct reg_default cs35l41_reg[CS35L41_MAX_CACHE_REG] = {
 	{CS35L41_VPVBST_FS_SEL,			0x00000001},
 	{CS35L41_SP_ENABLES,			0x00000000},
 	{CS35L41_SP_RATE_CTRL,			0x00000028},
-	{CS35L41_SP_FORMAT,			0x18180200},
+	{CS35L41_SP_FORMAT,			0x10100200},
 	{CS35L41_SP_HIZ_CTRL,			0x00000002},
 	{CS35L41_SP_FRAME_TX_SLOT,		0x03020100},
 	{CS35L41_SP_FRAME_RX_SLOT,		0x00000100},
-	{CS35L41_SP_TX_WL,			0x00000018},
+	{CS35L41_SP_TX_WL,			0x00000010},
 	{CS35L41_SP_RX_WL,			0x00000018},
 	{CS35L41_DAC_PCM1_SRC,			0x00000008},
 	{CS35L41_ASP_TX1_SRC,			0x00000018},
@@ -939,13 +939,6 @@ const struct cs35l41_otp_map_element_t
 	{
 		.id = 0x06,
 		.map = otp_map_2,
-		.num_elements = CS35L41_NUM_OTP_ELEM,
-		.bit_offset = 16,
-		.word_offset = 2,
-	},
-	{
-		.id = 0x08,
-		.map = otp_map_1,
 		.num_elements = CS35L41_NUM_OTP_ELEM,
 		.bit_offset = 16,
 		.word_offset = 2,

@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * f_qdss.c -- QDSS function Driver
  *
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details
  */
 
 #include <linux/init.h>
@@ -237,6 +245,18 @@ static void qdss_write_complete(struct usb_ep *ep,
 		state = USB_QDSS_DATA_WRITE_DONE;
 	}
 
+	if (!req->status) {
+		/* send zlp */
+		if ((req->length >= ep->maxpacket) &&
+				((req->length % ep->maxpacket) == 0)) {
+			req->length = 0;
+			d_req->actual = req->actual;
+			d_req->status = req->status;
+			if (!usb_ep_queue(in, req, GFP_ATOMIC))
+				return;
+		}
+	}
+
 	spin_lock_irqsave(&qdss->lock, flags);
 	list_add_tail(&req->list, list_pool);
 	if (req->length != 0) {
@@ -403,13 +423,11 @@ static int qdss_bind(struct usb_configuration *c, struct usb_function *f)
 	qdss_data_intf_desc.bInterfaceNumber = iface;
 	qdss->data_iface_id = iface;
 
-	if (!qdss_string_defs[QDSS_DATA_IDX].id) {
-		id = usb_string_id(c->cdev);
-		if (id < 0)
-			return id;
-		qdss_string_defs[QDSS_DATA_IDX].id = id;
-		qdss_data_intf_desc.iInterface = id;
-	}
+	id = usb_string_id(c->cdev);
+	if (id < 0)
+		return id;
+	qdss_string_defs[QDSS_DATA_IDX].id = id;
+	qdss_data_intf_desc.iInterface = id;
 
 	if (qdss->debug_inface_enabled) {
 		/* Allocate ctrl I/F */
@@ -420,14 +438,11 @@ static int qdss_bind(struct usb_configuration *c, struct usb_function *f)
 		}
 		qdss_ctrl_intf_desc.bInterfaceNumber = iface;
 		qdss->ctrl_iface_id = iface;
-
-		if (!qdss_string_defs[QDSS_CTRL_IDX].id) {
-			id = usb_string_id(c->cdev);
-			if (id < 0)
-				return id;
-			qdss_string_defs[QDSS_CTRL_IDX].id = id;
-			qdss_ctrl_intf_desc.iInterface = id;
-		}
+		id = usb_string_id(c->cdev);
+		if (id < 0)
+			return id;
+		qdss_string_defs[QDSS_CTRL_IDX].id = id;
+		qdss_ctrl_intf_desc.iInterface = id;
 	}
 
 	/* for non-accelerated path keep tx fifo size 1k */
@@ -511,10 +526,6 @@ static void qdss_unbind(struct usb_configuration *c, struct usb_function *f)
 
 	flush_workqueue(qdss->wq);
 
-	/* Reset string ids */
-	qdss_string_defs[QDSS_DATA_IDX].id = 0;
-	qdss_string_defs[QDSS_CTRL_IDX].id = 0;
-
 	qdss->debug_inface_enabled = 0;
 
 	clear_eps(f);
@@ -569,7 +580,7 @@ static void usb_qdss_disconnect_work(struct work_struct *work)
 
 		status = set_qdss_data_connection(qdss, 0);
 		if (status)
-			pr_err("qdss_disconnect error\n");
+			pr_err("qdss_disconnect error");
 
 		spin_lock_irqsave(&qdss->lock, flags);
 		if (qdss->endless_req) {
@@ -629,7 +640,7 @@ static void usb_qdss_connect_work(struct work_struct *work)
 
 	status = set_qdss_data_connection(qdss, 1);
 	if (status) {
-		pr_err("set_qdss_data_connection error(%d)\n", status);
+		pr_err("set_qdss_data_connection error(%d)", status);
 		return;
 	}
 
@@ -668,7 +679,6 @@ static int qdss_set_alt(struct usb_function *f, unsigned int intf,
 	if (gadget->speed < USB_SPEED_HIGH) {
 		pr_err("%s: qdss doesn't support USB full or low speed\n",
 								__func__);
-		ret = -EINVAL;
 		goto fail1;
 	}
 
@@ -919,9 +929,6 @@ int usb_qdss_write(struct usb_qdss_ch *ch, struct qdss_request *d_req)
 	req->buf = d_req->buf;
 	req->length = d_req->length;
 	req->context = d_req;
-	req->sg = d_req->sg;
-	req->num_sgs = d_req->num_sgs;
-	req->num_mapped_sgs = d_req->num_mapped_sgs;
 	if (usb_ep_queue(qdss->port.data, req, GFP_ATOMIC)) {
 		spin_lock_irqsave(&qdss->lock, flags);
 		list_add_tail(&req->list, &qdss->data_write_pool);
@@ -1071,7 +1078,7 @@ static ssize_t qdss_enable_debug_inface_show(struct config_item *item,
 			char *page)
 {
 	return snprintf(page, PAGE_SIZE, "%s\n",
-		(to_f_qdss_opts(item)->usb_qdss->debug_inface_enabled) ?
+		(to_f_qdss_opts(item)->usb_qdss->debug_inface_enabled == 1) ?
 		"Enabled" : "Disabled");
 }
 
@@ -1083,7 +1090,7 @@ static ssize_t qdss_enable_debug_inface_store(struct config_item *item,
 	u8 stats;
 
 	if (page == NULL) {
-		pr_err("Invalid buffer\n");
+		pr_err("Invalid buffer");
 		return len;
 	}
 

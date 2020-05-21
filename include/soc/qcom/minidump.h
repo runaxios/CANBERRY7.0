@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __MINIDUMP_H
@@ -30,17 +37,12 @@ struct md_region {
  */
 #ifdef CONFIG_QCOM_MINIDUMP
 extern int msm_minidump_add_region(const struct md_region *entry);
-extern int msm_minidump_remove_region(const struct md_region *entry);
 extern bool msm_minidump_enabled(void);
 extern void dump_stack_minidump(u64 sp);
 #else
 static inline int msm_minidump_add_region(const struct md_region *entry)
 {
 	/* Return quietly, if minidump is not supported */
-	return 0;
-}
-static inline int msm_minidump_remove_region(const struct md_region *entry)
-{
 	return 0;
 }
 static inline bool msm_minidump_enabled(void) { return false; }

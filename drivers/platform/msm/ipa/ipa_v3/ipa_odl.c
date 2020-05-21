@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "ipa_i.h"
@@ -112,9 +119,9 @@ static ssize_t ipa_odl_ctl_fops_read(struct file *filp, char __user *buf,
 	if (old_state != new_state) {
 		old_state = new_state;
 
-		if (new_state)
+		if (new_state == true)
 			data = 1;
-		else if (!new_state)
+		else if (new_state == false)
 			data = 0;
 
 		if (copy_to_user(buf, &data,
@@ -144,7 +151,7 @@ static unsigned int ipa_odl_ctl_fops_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &odl_ctl_msg_wq, wait);
 
-	if (ipa3_odl_ctx->odl_ctl_msg_wq_flag) {
+	if (ipa3_odl_ctx->odl_ctl_msg_wq_flag == true) {
 		IPADBG("Sending read mask to odl control pipe\n");
 		mask |= POLLIN | POLLRDNORM;
 	}
@@ -235,7 +242,7 @@ int ipa3_send_adpl_msg(unsigned long skb_data)
 		return -ENOMEM;
 	}
 
-	data = kmemdup(skb->data, skb->len, GFP_KERNEL);
+	data = kmalloc(skb->len, GFP_KERNEL);
 	if (data == NULL) {
 		kfree(msg);
 		return -ENOMEM;
@@ -287,6 +294,10 @@ int ipa_setup_odl_pipe(void)
 
 	ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr_en = IPA_ENABLE_AGGR;
 	ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr_hard_byte_limit_en = 1;
+	if (ipa3_is_mhip_offload_enabled()) {
+		IPADBG("MHIP is enabled, disable aggregation for ODL pipe");
+		ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr_en = IPA_BYPASS_AGGR;
+	}
 	ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr = IPA_GENERIC;
 	ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr_byte_limit =
 						IPA_ODL_AGGR_BYTE_LIMIT;
@@ -312,19 +323,6 @@ int ipa_setup_odl_pipe(void)
 	ipa_odl_ep_cfg->desc_fifo_sz = IPA_ODL_RX_RING_SIZE *
 						IPA_FIFO_ELEMENT_SIZE;
 	ipa3_odl_ctx->odl_client_hdl = -1;
-
-	/* For MHIP, ODL functionality is DMA. So bypass aggregation, checksum
-	 * offload, hdr_len.
-	 */
-	if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ &&
-		ipa3_is_mhip_offload_enabled()) {
-		IPADBG("MHIP enabled: bypass aggr + csum offload for ODL");
-		ipa_odl_ep_cfg->ipa_ep_cfg.aggr.aggr_en = IPA_BYPASS_AGGR;
-		ipa_odl_ep_cfg->ipa_ep_cfg.cfg.cs_offload_en =
-			IPA_DISABLE_CS_OFFLOAD;
-		ipa_odl_ep_cfg->ipa_ep_cfg.hdr.hdr_len = 0;
-	}
-
 	ret = ipa3_setup_sys_pipe(ipa_odl_ep_cfg,
 			&ipa3_odl_ctx->odl_client_hdl);
 	return ret;
@@ -745,6 +743,7 @@ int ipa_odl_init(void)
 	if (result) {
 		IPAWANERR("ipa3_odl_register_pm failed, ret: %d\n",
 				result);
+		goto cdev1_add_fail;
 	}
 	return 0;
 cdev1_add_fail:

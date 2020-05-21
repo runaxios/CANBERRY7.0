@@ -10,18 +10,17 @@
 #
 # Copyright (C) 1995-2001 by Russell King
 
-ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-export DTC_FLAGS := -@
-endif
+# Ensure linker flags are correct
+LDFLAGS		:=
 
 LDFLAGS_vmlinux	:=-p --no-undefined -X --pic-veneer
 ifeq ($(CONFIG_CPU_ENDIAN_BE8),y)
 LDFLAGS_vmlinux	+= --be8
-KBUILD_LDFLAGS_MODULE	+= --be8
+LDFLAGS_MODULE	+= --be8
 endif
 
 ifeq ($(CONFIG_ARM_MODULE_PLTS),y)
-KBUILD_LDFLAGS_MODULE	+= -T $(srctree)/arch/arm/kernel/module.lds
+LDFLAGS_MODULE	+= -T $(srctree)/arch/arm/kernel/module.lds
 endif
 
 GZFLAGS		:=-9
@@ -32,6 +31,9 @@ KBUILD_CFLAGS	+= $(call cc-option,-fno-dwarf2-cfi-asm)
 
 # This should work on most of the modern platforms
 KBUILD_DEFCONFIG := multi_v7_defconfig
+ifeq ($(COMPILER),clang)
+KBUILD_CFLAGS += -Wa,-mno-warn-deprecated
+endif
 
 # defines filename extension depending memory management type.
 ifeq ($(CONFIG_MMU),)
@@ -40,19 +42,19 @@ KBUILD_CFLAGS	+= $(call cc-option,-mno-unaligned-access)
 endif
 
 ifeq ($(CONFIG_FRAME_POINTER),y)
-KBUILD_CFLAGS  +=-fno-omit-frame-pointer $(call cc-option,-mapcs,) $(call cc-option,-mno-sched-prolog,)
+KBUILD_CFLAGS	+=-fno-omit-frame-pointer $(call cc-option,-mapcs,) $(call cc-option,-mno-sched-prolog,)
 endif
 
 ifeq ($(CONFIG_CPU_BIG_ENDIAN),y)
-KBUILD_CPPFLAGS	+= -mbig-endian
+KBUILD_CPPFLAGS	+= $(call cc-option,-mbig-endian)
 CHECKFLAGS	+= -D__ARMEB__
 AS		+= -EB
-KBUILD_LDFLAGS	+= -EB
+LD		+= -EB
 else
-KBUILD_CPPFLAGS	+= -mlittle-endian
+KBUILD_CPPFLAGS	+= $(call cc-option,-mlittle-endian)
 CHECKFLAGS	+= -D__ARMEL__
 AS		+= -EL
-KBUILD_LDFLAGS	+= -EL
+LD		+= -EL
 endif
 
 #
@@ -116,27 +118,25 @@ ifeq ($(CONFIG_ARM_UNWIND),y)
 CFLAGS_ABI	+=-funwind-tables
 endif
 
-# Accept old syntax despite ".syntax unified"
-AFLAGS_NOWARN	:=$(call as-option,-Wa$(comma)-mno-warn-deprecated,-Wa$(comma)-W)
-
 ifeq ($(CONFIG_THUMB2_KERNEL),y)
 AFLAGS_AUTOIT	:=$(call as-option,-Wa$(comma)-mimplicit-it=always,-Wa$(comma)-mauto-it)
+AFLAGS_NOWARN	:=$(call as-option,-Wa$(comma)-mno-warn-deprecated,-Wa$(comma)-W)
 CFLAGS_ISA	:=-mthumb $(AFLAGS_AUTOIT) $(AFLAGS_NOWARN)
 AFLAGS_ISA	:=$(CFLAGS_ISA) -Wa$(comma)-mthumb
 # Work around buggy relocation from gas if requested:
 ifeq ($(CONFIG_THUMB2_AVOID_R_ARM_THM_JUMP11),y)
-KBUILD_CFLAGS_MODULE	+=-fno-optimize-sibling-calls
+CFLAGS_MODULE	+=-fno-optimize-sibling-calls
 endif
 else
-CFLAGS_ISA	:=$(call cc-option,-marm,) $(AFLAGS_NOWARN)
+CFLAGS_ISA	:=$(call cc-option,-marm,)
 AFLAGS_ISA	:=$(CFLAGS_ISA)
 endif
 
 # Need -Uarm for gcc < 3.x
-KBUILD_CFLAGS	+=$(CFLAGS_ABI) $(CFLAGS_ISA) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
+KBUILD_CFLAGS	+=$(CFLAGS_ABI) $(CFLAGS_ISA) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float $(call cc-option, -Uarm,)
 KBUILD_AFLAGS	+=$(CFLAGS_ABI) $(AFLAGS_ISA) $(arch-y) $(tune-y) -include asm/unified.h -msoft-float
 
-CHECKFLAGS	+= -D__arm__
+CHECKFLAGS	+= -D__arm__ -m32
 
 #Default value
 head-y		:= arch/arm/kernel/head$(MMUEXT).o
@@ -152,7 +152,6 @@ textofs-$(CONFIG_SA1111) := 0x00208000
 endif
 textofs-$(CONFIG_ARCH_MSM8X60) := 0x00208000
 textofs-$(CONFIG_ARCH_MSM8960) := 0x00208000
-textofs-$(CONFIG_ARCH_MESON) := 0x00208000
 textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000
 
 # Machine directory name.  This list is sorted alphanumerically
@@ -197,7 +196,6 @@ machine-$(CONFIG_ARCH_MEDIATEK)		+= mediatek
 machine-$(CONFIG_ARCH_MXS)		+= mxs
 machine-$(CONFIG_ARCH_NETX)		+= netx
 machine-$(CONFIG_ARCH_NOMADIK)		+= nomadik
-machine-$(CONFIG_ARCH_NPCM)		+= npcm
 machine-$(CONFIG_ARCH_NSPIRE)		+= nspire
 machine-$(CONFIG_ARCH_OXNAS)		+= oxnas
 machine-$(CONFIG_ARCH_OMAP1)		+= omap1
@@ -213,7 +211,7 @@ machine-$(CONFIG_ARCH_S3C24XX)		+= s3c24xx
 machine-$(CONFIG_ARCH_S3C64XX)		+= s3c64xx
 machine-$(CONFIG_ARCH_S5PV210)		+= s5pv210
 machine-$(CONFIG_ARCH_SA1100)		+= sa1100
-machine-$(CONFIG_ARCH_RENESAS)	 	+= shmobile
+machine-$(CONFIG_ARCH_SHMOBILE) 	+= shmobile
 machine-$(CONFIG_ARCH_SIRF)		+= prima2
 machine-$(CONFIG_ARCH_SOCFPGA)		+= socfpga
 machine-$(CONFIG_ARCH_STI)		+= sti
@@ -223,6 +221,7 @@ machine-$(CONFIG_ARCH_TANGO)		+= tango
 machine-$(CONFIG_ARCH_TEGRA)		+= tegra
 machine-$(CONFIG_ARCH_U300)		+= u300
 machine-$(CONFIG_ARCH_U8500)		+= ux500
+machine-$(CONFIG_ARCH_UNIPHIER)		+= uniphier
 machine-$(CONFIG_ARCH_VERSATILE)	+= versatile
 machine-$(CONFIG_ARCH_VEXPRESS)		+= vexpress
 machine-$(CONFIG_ARCH_VT8500)		+= vt8500
@@ -308,7 +307,7 @@ boot := arch/arm/boot
 ifeq ($(CONFIG_XIP_KERNEL),y)
 KBUILD_IMAGE := $(boot)/xipImage
 else ifeq ($(CONFIG_BUILD_ARM_APPENDED_DTB_IMAGE),y)
-KBUILD_IMAGE := $(boot)/zImage-dtb
+KBUILD_IMAGE := $(boot)/$(subst $\",,$(CONFIG_BUILD_ARM_APPENDED_KERNEL_IMAGE_NAME))
 else
 KBUILD_IMAGE := $(boot)/zImage
 endif
@@ -318,10 +317,9 @@ ifeq ($(CONFIG_USE_OF),y)
 KBUILD_DTBS := dtbs
 endif
 
-DTSSUBDIR       := vendor/qcom
-
 all:	$(notdir $(KBUILD_IMAGE)) $(KBUILD_DTBS)
 
+DTSSUBDIR	:= qcom
 
 archheaders:
 	$(Q)$(MAKE) $(build)=arch/arm/tools uapi
@@ -350,14 +348,9 @@ $(INSTALL_TARGETS):
 %.dtb: | scripts
 	$(Q)$(MAKE) $(build)=$(boot)/dts MACHINE=$(MACHINE) $(boot)/dts/$@
 
-PHONY += dtbs dtbs_install
-
-dtbs: prepare scripts
-	$(Q)$(MAKE) $(build)=$(boot)/dts
+dtbs: scripts
+	$(Q)$(MAKE) $(build)=$(boot)/dts MACHINE=$(MACHINE) dtbs
 	$(foreach DIR, $(DTSSUBDIR), $(Q)$(MAKE) $(build)=$(boot)/dts/$(DIR) MACHINE=$(MACHINE) dtbs)
-
-dtbs_install:
-	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts
 
 PHONY += vdso_install
 vdso_install:
@@ -370,6 +363,7 @@ zImage-dtb: vmlinux scripts dtbs
 
 Image-dtb: vmlinux scripts dtbs
 	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) DTSSUBDIR=$(DTSSUBDIR) $(boot)/$@
+
 
 # We use MRPROPER_FILES and CLEAN_FILES now
 archclean:

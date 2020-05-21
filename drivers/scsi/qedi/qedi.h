@@ -358,9 +358,6 @@ struct qedi_ctx {
 #define IPV6_LEN	41
 #define IPV4_LEN	17
 	struct iscsi_boot_kset *boot_kset;
-
-	/* Used for iscsi statistics */
-	struct mutex stats_lock;
 };
 
 struct qedi_work {

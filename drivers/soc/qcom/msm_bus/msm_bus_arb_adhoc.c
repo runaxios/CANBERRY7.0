@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2016, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -540,6 +547,7 @@ static uint64_t aggregate_bus_req(struct msm_bus_node_device_type *bus_dev,
 	struct msm_bus_node_device_type *fab_dev = NULL;
 	uint32_t agg_scheme;
 	uint64_t max_ib = 0;
+	uint64_t max_ab = 0;
 	uint64_t sum_ab = 0;
 
 	if (!bus_dev || !to_msm_bus_node(bus_dev->node_info->bus_device)) {
@@ -547,14 +555,25 @@ static uint64_t aggregate_bus_req(struct msm_bus_node_device_type *bus_dev,
 		goto exit_agg_bus_req;
 	}
 
+	bus_dev->node_bw[ctx].max_ib_cl_name = NULL;
+	bus_dev->node_bw[ctx].max_ab_cl_name = NULL;
 	fab_dev = to_msm_bus_node(bus_dev->node_info->bus_device);
 	for (i = 0; i < bus_dev->num_lnodes; i++) {
+		if (bus_dev->lnode_list[i].lnode_ib[ctx] > max_ib)
+			bus_dev->node_bw[ctx].max_ib_cl_name =
+					bus_dev->lnode_list[i].cl_name;
 		max_ib = max(max_ib, bus_dev->lnode_list[i].lnode_ib[ctx]);
+		if (bus_dev->lnode_list[i].lnode_ab[ctx] > max_ab) {
+			max_ab = bus_dev->lnode_list[i].lnode_ab[ctx];
+			bus_dev->node_bw[ctx].max_ab_cl_name =
+					bus_dev->lnode_list[i].cl_name;
+		}
 		sum_ab += bus_dev->lnode_list[i].lnode_ab[ctx];
 	}
 
 	bus_dev->node_bw[ctx].sum_ab = sum_ab;
 	bus_dev->node_bw[ctx].max_ib = max_ib;
+	bus_dev->node_bw[ctx].max_ab = max_ab;
 
 	if (bus_dev->node_info->agg_params.agg_scheme != AGG_SCHEME_NONE)
 		agg_scheme = bus_dev->node_info->agg_params.agg_scheme;
@@ -603,7 +622,10 @@ static int msm_bus_apply_rules(struct list_head *list, bool after_clk_commit)
 	int ret = 0;
 
 	list_for_each_entry(rule, list, link) {
-		if (rule->after_clk_commit != after_clk_commit)
+		if (!rule)
+			continue;
+
+		if (rule && (rule->after_clk_commit != after_clk_commit))
 			continue;
 
 		dev = bus_find_device(&msm_bus_type, NULL,
@@ -1352,7 +1374,7 @@ register_adhoc(uint32_t mas, uint32_t slv, char *name, bool active_only)
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 
 	if (!(mas && slv && name)) {
-		pr_err("%s: Error: src dst name num_paths are required\n",
+		pr_err("%s: Error: src dst name num_paths are required",
 								 __func__);
 		goto exit_register;
 	}

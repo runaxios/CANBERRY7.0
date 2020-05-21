@@ -1,7 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -127,6 +125,7 @@ inline int ufs_qcom_ice_get_status(struct ufs_qcom_host *qcom_host,
 }
 inline void ufs_qcom_ice_print_regs(struct ufs_qcom_host *qcom_host)
 {
+	return;
 }
 #endif /* CONFIG_SCSI_UFS_QCOM_ICE */
 

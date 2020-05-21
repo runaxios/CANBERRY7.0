@@ -14,7 +14,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2014 ARM Limited
- * Copyright (C) 2020 XiaoMi, Inc.
  *
  * Author: Will Deacon <will.deacon@arm.com>
  */
@@ -29,7 +28,6 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/dma-mapping.h>
-#include <trace/events/iommu.h>
 
 #include <asm/barrier.h>
 
@@ -199,10 +197,10 @@
 		(iopte_type(pte,l) == ARM_LPAE_PTE_TYPE_PAGE) :	\
 		(iopte_type(pte,l) == ARM_LPAE_PTE_TYPE_BLOCK))
 
-#define iopte_to_pfn(pte, d)					\
+#define iopte_to_pfn(pte,d)					\
 	(((pte) & ((1ULL << ARM_LPAE_MAX_ADDR_BITS) - 1)) >> (d)->pg_shift)
 
-#define pfn_to_iopte(pfn, d)					\
+#define pfn_to_iopte(pfn,d)					\
 	(((pfn) << (d)->pg_shift) & ((1ULL << ARM_LPAE_MAX_ADDR_BITS) - 1))
 
 struct arm_lpae_io_pgtable {
@@ -366,9 +364,9 @@ static void __arm_lpae_set_pte(arm_lpae_iopte *ptep, arm_lpae_iopte pte,
 		__arm_lpae_sync_pte(ptep, cfg);
 }
 
-static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
-			       unsigned long iova, size_t size, int lvl,
-			       arm_lpae_iopte *ptep);
+static int __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
+			    unsigned long iova, size_t size, int lvl,
+			    arm_lpae_iopte *ptep);
 
 
 static void __arm_lpae_init_pte(struct arm_lpae_io_pgtable *data,
@@ -528,7 +526,6 @@ static int __arm_lpae_map(struct arm_lpae_io_pgtable *data, unsigned long iova,
 		pte = arm_lpae_install_table(cptep, ptep, 0, cfg, 0);
 		if (pte)
 			__arm_lpae_free_pages(cptep, tblsz, cfg, cookie);
-		trace_io_pgtable_install(cptep, ptep, *ptep, 0);
 
 	} else if (!(cfg->quirks & IO_PGTABLE_QUIRK_NO_DMA) &&
 		   !(pte & ARM_LPAE_PTE_SW_SYNC)) {
@@ -753,10 +750,10 @@ static void arm_lpae_free_pgtable(struct io_pgtable *iop)
 	kfree(data);
 }
 
-static size_t arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
-				       unsigned long iova, size_t size,
-				       arm_lpae_iopte blk_pte, int lvl,
-				       arm_lpae_iopte *ptep)
+static int arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
+				    unsigned long iova, size_t size,
+				    arm_lpae_iopte blk_pte, int lvl,
+				    arm_lpae_iopte *ptep)
 {
 	struct io_pgtable_cfg *cfg = &data->iop.cfg;
 	arm_lpae_iopte pte, *tablep;
@@ -793,8 +790,6 @@ static size_t arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 	}
 
 	pte = arm_lpae_install_table(tablep, ptep, blk_pte, cfg, child_cnt);
-	trace_io_pgtable_install(tablep, ptep, *ptep, 1);
-
 	if (pte != blk_pte) {
 		__arm_lpae_free_pages(tablep, tablesz, cfg, cookie);
 		/*
@@ -815,9 +810,9 @@ static size_t arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 	return size;
 }
 
-static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
-			       unsigned long iova, size_t size, int lvl,
-			       arm_lpae_iopte *ptep)
+static int __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
+			    unsigned long iova, size_t size, int lvl,
+			    arm_lpae_iopte *ptep)
 {
 	arm_lpae_iopte pte;
 	struct io_pgtable *iop = &data->iop;
@@ -833,14 +828,11 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 
 	/* If the size matches this level, we're in the right place */
 	if (size == ARM_LPAE_BLOCK_SIZE(lvl, data)) {
-		arm_lpae_iopte *blk_table = ptep;
 		__arm_lpae_set_pte(ptep, 0, &iop->cfg);
 
 		if (!iopte_leaf(pte, lvl)) {
 			/* Also flush any partial walks */
 			ptep = iopte_deref(pte, data);
-			trace_io_pgtable_free(ptep, blk_table, pte, iova, 1);
-			io_pgtable_tlb_flush_all(&data->iop);
 			__arm_lpae_free_pgtable(data, lvl + 1, ptep);
 		}
 
@@ -873,9 +865,7 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 		iopte_tblcnt_sub(ptep, entries);
 		if (!iopte_tblcnt(*ptep)) {
 			/* no valid mappings left under this table. free it. */
-			trace_io_pgtable_free(table_base, ptep, *ptep, iova, 0);
 			__arm_lpae_set_pte(ptep, 0, &iop->cfg);
-			io_pgtable_tlb_flush_all(&data->iop);
 			__arm_lpae_free_pgtable(data, lvl + 1, table_base);
 		}
 
@@ -895,7 +885,7 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 }
 
 static size_t arm_lpae_unmap(struct io_pgtable_ops *ops, unsigned long iova,
-			size_t size)
+			  size_t size)
 {
 	size_t unmapped = 0;
 	struct arm_lpae_io_pgtable *data = io_pgtable_ops_to_data(ops);
@@ -921,7 +911,6 @@ static size_t arm_lpae_unmap(struct io_pgtable_ops *ops, unsigned long iova,
 		unmapped += ret;
 		iova += ret;
 	}
-
 	if (unmapped)
 		io_pgtable_tlb_flush_all(&data->iop);
 
@@ -1548,7 +1537,8 @@ static int __init arm_lpae_run_tests(struct io_pgtable_cfg *cfg)
 
 		/* Full unmap */
 		iova = 0;
-		for_each_set_bit(j, &cfg->pgsize_bitmap, BITS_PER_LONG) {
+		j = find_first_bit(&cfg->pgsize_bitmap, BITS_PER_LONG);
+		while (j != BITS_PER_LONG) {
 			size = 1UL << j;
 
 			if (ops->unmap(ops, iova, size) != size)
@@ -1568,6 +1558,8 @@ static int __init arm_lpae_run_tests(struct io_pgtable_cfg *cfg)
 				return __FAIL(ops, i);
 
 			iova += SZ_1G;
+			j++;
+			j = find_next_bit(&cfg->pgsize_bitmap, BITS_PER_LONG, j);
 		}
 
 		if (arm_lpae_range_has_mapping(ops, 0, SZ_2G))

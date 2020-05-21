@@ -1,5 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.*/
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ */
 
 #include <linux/cdev.h>
 #include <linux/device.h>
@@ -12,7 +21,6 @@
 #include <linux/of_device.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
-#include <linux/termios.h>
 #include <linux/types.h>
 #include <linux/wait.h>
 #include <linux/uaccess.h>
@@ -45,10 +53,8 @@ struct uci_dev {
 	struct uci_chan ul_chan;
 	struct uci_chan dl_chan;
 	size_t mtu;
-	size_t actual_mtu; /* maximum size of incoming buffer */
 	int ref_count;
 	bool enabled;
-	u32 tiocm;
 	void *ipc_log;
 };
 
@@ -116,24 +122,22 @@ static int mhi_queue_inbound(struct uci_dev *uci_dev)
 	struct mhi_device *mhi_dev = uci_dev->mhi_dev;
 	int nr_trbs = mhi_get_no_free_descriptors(mhi_dev, DMA_FROM_DEVICE);
 	size_t mtu = uci_dev->mtu;
-	size_t actual_mtu = uci_dev->actual_mtu;
 	void *buf;
 	struct uci_buf *uci_buf;
 	int ret = -EIO, i;
 
 	for (i = 0; i < nr_trbs; i++) {
-		buf = kmalloc(mtu, GFP_KERNEL);
+		buf = kmalloc(mtu + sizeof(*uci_buf), GFP_KERNEL);
 		if (!buf)
 			return -ENOMEM;
 
-		uci_buf = buf + actual_mtu;
+		uci_buf = buf + mtu;
 		uci_buf->data = buf;
 
-		MSG_VERB("Allocated buf %d of %d size %ld\n", i, nr_trbs,
-			 actual_mtu);
+		MSG_VERB("Allocated buf %d of %d size %ld\n", i, nr_trbs, mtu);
 
-		ret = mhi_queue_transfer(mhi_dev, DMA_FROM_DEVICE, buf,
-					 actual_mtu, MHI_EOT);
+		ret = mhi_queue_transfer(mhi_dev, DMA_FROM_DEVICE, buf, mtu,
+					 MHI_EOT);
 		if (ret) {
 			kfree(buf);
 			MSG_ERR("Failed to queue buffer %d\n", i);
@@ -150,24 +154,11 @@ static long mhi_uci_ioctl(struct file *file,
 {
 	struct uci_dev *uci_dev = file->private_data;
 	struct mhi_device *mhi_dev = uci_dev->mhi_dev;
-	struct uci_chan *uci_chan = &uci_dev->dl_chan;
 	long ret = -ERESTARTSYS;
 
 	mutex_lock(&uci_dev->mutex);
-
-	if (cmd == TIOCMGET) {
-		spin_lock_bh(&uci_chan->lock);
-		ret = uci_dev->tiocm;
-		spin_unlock_bh(&uci_chan->lock);
-	} else if (uci_dev->enabled) {
+	if (uci_dev->enabled)
 		ret = mhi_ioctl(mhi_dev, cmd, arg);
-		if (!ret) {
-			spin_lock_bh(&uci_chan->lock);
-			uci_dev->tiocm = mhi_dev->tiocm;
-			spin_unlock_bh(&uci_chan->lock);
-		}
-	}
-
 	mutex_unlock(&uci_dev->mutex);
 
 	return ret;
@@ -230,16 +221,9 @@ static unsigned int mhi_uci_poll(struct file *file, poll_table *wait)
 	spin_lock_bh(&uci_chan->lock);
 	if (!uci_dev->enabled) {
 		mask = POLLERR;
-	} else {
-		if (!list_empty(&uci_chan->pending) || uci_chan->cur_buf) {
-			MSG_VERB("Client can read from node\n");
-			mask |= POLLIN | POLLRDNORM;
-		}
-
-		if (uci_dev->tiocm) {
-			MSG_VERB("Line status changed\n");
-			mask |= POLLPRI;
-		}
+	} else if (!list_empty(&uci_chan->pending) || uci_chan->cur_buf) {
+		MSG_VERB("Client can read from node\n");
+		mask |= POLLIN | POLLRDNORM;
 	}
 	spin_unlock_bh(&uci_chan->lock);
 
@@ -428,8 +412,8 @@ static ssize_t mhi_uci_read(struct file *file,
 
 		if (uci_dev->enabled)
 			ret = mhi_queue_transfer(mhi_dev, DMA_FROM_DEVICE,
-						 uci_buf->data,
-						 uci_dev->actual_mtu, MHI_EOT);
+						 uci_buf->data, uci_dev->mtu,
+						 MHI_EOT);
 		else
 			ret = -ERESTARTSYS;
 
@@ -613,10 +597,9 @@ static int mhi_uci_probe(struct mhi_device *mhi_dev,
 		spin_lock_init(&uci_chan->lock);
 		init_waitqueue_head(&uci_chan->wq);
 		INIT_LIST_HEAD(&uci_chan->pending);
-	}
+	};
 
 	uci_dev->mtu = min_t(size_t, id->driver_data, mhi_dev->mtu);
-	uci_dev->actual_mtu = uci_dev->mtu -  sizeof(struct uci_buf);
 	mhi_device_set_devdata(mhi_dev, uci_dev);
 	uci_dev->enabled = true;
 
@@ -660,30 +643,16 @@ static void mhi_dl_xfer_cb(struct mhi_device *mhi_dev,
 	}
 
 	spin_lock_irqsave(&uci_chan->lock, flags);
-	buf = mhi_result->buf_addr + uci_dev->actual_mtu;
+	buf = mhi_result->buf_addr + uci_dev->mtu;
 	buf->data = mhi_result->buf_addr;
 	buf->len = mhi_result->bytes_xferd;
 	list_add_tail(&buf->node, &uci_chan->pending);
 	spin_unlock_irqrestore(&uci_chan->lock, flags);
 
 	if (mhi_dev->dev.power.wakeup)
-		pm_wakeup_hard_event(&mhi_dev->dev);
+		__pm_wakeup_event(mhi_dev->dev.power.wakeup, 0);
 
 	wake_up(&uci_chan->wq);
-}
-
-static void mhi_status_cb(struct mhi_device *mhi_dev, enum MHI_CB reason)
-{
-	struct uci_dev *uci_dev = mhi_device_get_devdata(mhi_dev);
-	struct uci_chan *uci_chan = &uci_dev->dl_chan;
-	unsigned long flags;
-
-	if (reason == MHI_CB_DTR_SIGNAL) {
-		spin_lock_irqsave(&uci_chan->lock, flags);
-		uci_dev->tiocm = mhi_dev->tiocm;
-		spin_unlock_irqrestore(&uci_chan->lock, flags);
-		wake_up(&uci_chan->wq);
-	}
 }
 
 /* .driver_data stores max mtu */
@@ -704,7 +673,6 @@ static struct mhi_driver mhi_uci_driver = {
 	.probe = mhi_uci_probe,
 	.ul_xfer_cb = mhi_ul_xfer_cb,
 	.dl_xfer_cb = mhi_dl_xfer_cb,
-	.status_cb = mhi_status_cb,
 	.driver = {
 		.name = MHI_UCI_DRIVER_NAME,
 		.owner = THIS_MODULE,

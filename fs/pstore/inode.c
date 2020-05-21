@@ -2,7 +2,7 @@
  * Persistent Storage - ramfs parts.
  *
  * Copyright (C) 2010 Intel Corporation <tony.luck@intel.com>
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2 as
@@ -299,7 +299,6 @@ bool pstore_is_mounted(void)
 }
 
 #ifdef CONFIG_PSTORE_LAST_KMSG
-
 static char *console_buffer;
 static ssize_t console_bufsize;
 
@@ -353,6 +352,10 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 		goto fail;
 	inode->i_mode = S_IFREG | 0444;
 	inode->i_fop = &pstore_file_operations;
+	private = kzalloc(sizeof(*private), GFP_KERNEL);
+	if (!private)
+		goto fail_alloc;
+	private->record = record;
 
 	switch (record->type) {
 	case PSTORE_TYPE_DMESG:
@@ -402,16 +405,12 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 		break;
 	}
 
-	private = kzalloc(sizeof(*private), GFP_KERNEL);
-	if (!private)
-		goto fail_inode;
-
 	dentry = d_alloc_name(root, name);
 	if (!dentry)
 		goto fail_private;
 
-	private->record = record;
 	inode->i_size = private->total_size = size;
+
 	inode->i_private = private;
 
 	if (record->time.tv_sec)
@@ -434,7 +433,7 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 
 fail_private:
 	free_pstore_private(private);
-fail_inode:
+fail_alloc:
 	iput(inode);
 
 fail:
@@ -512,7 +511,7 @@ static struct file_system_type pstore_fs_type = {
 	.kill_sb	= pstore_kill_sb,
 };
 
-int __init pstore_init_fs(void)
+static int __init init_pstore_fs(void)
 {
 	int err;
 #ifdef CONFIG_PSTORE_LAST_KMSG
@@ -539,9 +538,14 @@ int __init pstore_init_fs(void)
 out:
 	return err;
 }
+module_init(init_pstore_fs)
 
-void __exit pstore_exit_fs(void)
+static void __exit exit_pstore_fs(void)
 {
 	unregister_filesystem(&pstore_fs_type);
 	sysfs_remove_mount_point(fs_kobj, "pstore");
 }
+module_exit(exit_pstore_fs)
+
+MODULE_AUTHOR("Tony Luck <tony.luck@intel.com>");
+MODULE_LICENSE("GPL");

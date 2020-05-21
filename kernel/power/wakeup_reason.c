@@ -5,6 +5,7 @@
  * the suspend mode.
  *
  * Copyright (C) 2014 Google, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
  * may be copied, distributed, and modified under those terms.
@@ -34,7 +35,7 @@ static int irqcount;
 static bool suspend_abort;
 static char abort_reason[MAX_SUSPEND_ABORT_LEN];
 static struct kobject *wakeup_reason;
-static spinlock_t resume_reason_lock;
+static DEFINE_SPINLOCK(resume_reason_lock);
 
 static ktime_t last_monotime; /* monotonic time before last suspend */
 static ktime_t curr_monotime; /* monotonic time after last suspend */
@@ -46,8 +47,7 @@ static ssize_t last_resume_reason_show(struct kobject *kobj, struct kobj_attribu
 {
 	int irq_no, buf_offset = 0;
 	struct irq_desc *desc;
-	unsigned long flags;
-	spin_lock_irqsave(&resume_reason_lock, flags);
+	spin_lock(&resume_reason_lock);
 	if (suspend_abort) {
 		buf_offset = sprintf(buf, "Abort: %s", abort_reason);
 	} else {
@@ -61,7 +61,7 @@ static ssize_t last_resume_reason_show(struct kobject *kobj, struct kobj_attribu
 						irq_list[irq_no]);
 		}
 	}
-	spin_unlock_irqrestore(&resume_reason_lock, flags);
+	spin_unlock(&resume_reason_lock);
 	return buf_offset;
 }
 
@@ -112,7 +112,8 @@ static struct attribute_group attr_group = {
 void log_wakeup_reason(int irq)
 {
 	struct irq_desc *desc;
-	unsigned long flags;
+        unsigned long flags;
+
 	desc = irq_to_desc(irq);
 	if (desc && desc->action && desc->action->name)
 		printk(KERN_INFO "Resume caused by IRQ %d, %s\n", irq,
@@ -132,10 +133,25 @@ void log_wakeup_reason(int irq)
 	spin_unlock_irqrestore(&resume_reason_lock, flags);
 }
 
+int check_wakeup_reason(int irq)
+{
+	int irq_no;
+	int ret = false;
+
+	spin_lock(&resume_reason_lock);
+	for (irq_no = 0; irq_no < irqcount; irq_no++)
+		if (irq_list[irq_no] == irq) {
+			ret = true;
+			break;
+	}
+	spin_unlock(&resume_reason_lock);
+	return ret;
+}
+
 void log_suspend_abort_reason(const char *fmt, ...)
 {
-	unsigned long flags;
 	va_list args;
+        unsigned long flags;
 
 	spin_lock_irqsave(&resume_reason_lock, flags);
 
@@ -156,13 +172,12 @@ void log_suspend_abort_reason(const char *fmt, ...)
 static int wakeup_reason_pm_event(struct notifier_block *notifier,
 		unsigned long pm_event, void *unused)
 {
-	unsigned long flags;
 	switch (pm_event) {
 	case PM_SUSPEND_PREPARE:
-		spin_lock_irqsave(&resume_reason_lock, flags);
+		spin_lock(&resume_reason_lock);
 		irqcount = 0;
 		suspend_abort = false;
-		spin_unlock_irqrestore(&resume_reason_lock, flags);
+		spin_unlock(&resume_reason_lock);
 		/* monotonic time since boot */
 		last_monotime = ktime_get();
 		/* monotonic time since boot including the time spent in suspend */
@@ -190,7 +205,7 @@ static struct notifier_block wakeup_reason_pm_notifier_block = {
 int __init wakeup_reason_init(void)
 {
 	int retval;
-	spin_lock_init(&resume_reason_lock);
+
 	retval = register_pm_notifier(&wakeup_reason_pm_notifier_block);
 	if (retval)
 		printk(KERN_WARNING "[%s] failed to register PM notifier %d\n",

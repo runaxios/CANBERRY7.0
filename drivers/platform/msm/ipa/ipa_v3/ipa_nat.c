@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/device.h>
@@ -27,9 +34,9 @@
 
 #define IPA_NAT_IPV6CT_TEMP_MEM_SIZE 128
 
-#define IPA_NAT_MAX_NUM_OF_INIT_CMD_DESC 4
-#define IPA_IPV6CT_MAX_NUM_OF_INIT_CMD_DESC 3
-#define IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC 5
+#define IPA_NAT_MAX_NUM_OF_INIT_CMD_DESC 3
+#define IPA_IPV6CT_MAX_NUM_OF_INIT_CMD_DESC 2
+#define IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC 4
 
 /*
  * The base table max entries is limited by index into table 13 bits number.
@@ -273,7 +280,7 @@ static void ipa3_nat_ipv6ct_destroy_device(
 	mutex_lock(&dev->lock);
 
 	if (dev->tmp_mem != NULL &&
-		!(ipa3_ctx->nat_mem.is_tmp_mem_allocated)) {
+		ipa3_ctx->nat_mem.is_tmp_mem_allocated == false) {
 		dev->tmp_mem = NULL;
 	} else if (dev->tmp_mem != NULL &&
 		ipa3_ctx->nat_mem.is_tmp_mem_allocated) {
@@ -492,7 +499,7 @@ int ipa3_allocate_nat_table(struct ipa_ioc_nat_ipv6ct_table_alloc *table_alloc)
 			goto fail_alloc_pdn;
 		}
 
-		pdn_mem->base = dma_zalloc_coherent(ipa3_ctx->pdev,
+		pdn_mem->base = dma_alloc_coherent(ipa3_ctx->pdev,
 			pdn_mem->size,
 			&pdn_mem->phys_base,
 			gfp_flags);
@@ -501,6 +508,7 @@ int ipa3_allocate_nat_table(struct ipa_ioc_nat_ipv6ct_table_alloc *table_alloc)
 			result = -ENOMEM;
 			goto fail_alloc_pdn;
 		}
+		memset(pdn_mem->base, 0, pdn_mem->size);
 		IPADBG("IPA NAT dev allocated PDN memory successfully\n");
 	}
 
@@ -728,43 +736,15 @@ static int ipa3_nat_send_init_cmd(struct ipahal_imm_cmd_ip_v4_nat_init *cmd,
 	struct ipa3_desc desc[IPA_NAT_MAX_NUM_OF_INIT_CMD_DESC];
 	struct ipahal_imm_cmd_pyld *cmd_pyld[IPA_NAT_MAX_NUM_OF_INIT_CMD_DESC];
 	int i, num_cmd = 0, result;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
 
 	IPADBG("\n");
-
-	memset(desc, 0, sizeof(desc));
-	memset(cmd_pyld, 0, sizeof(cmd_pyld));
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmd] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmd]) {
-			IPAERR("failed to construct coal close IC\n");
-			result = -ENOMEM;
-			goto destroy_imm_cmd;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
-		++num_cmd;
-	}
 
 	/* NO-OP IC for ensuring that IPA pipeline is empty */
 	cmd_pyld[num_cmd] =
 		ipahal_construct_nop_imm_cmd(false, IPAHAL_HPS_CLEAR, false);
 	if (!cmd_pyld[num_cmd]) {
 		IPAERR("failed to construct NOP imm cmd\n");
-		result = -ENOMEM;
-		goto destroy_imm_cmd;
+		return -ENOMEM;
 	}
 
 	ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
@@ -826,43 +806,15 @@ static int ipa3_ipv6ct_send_init_cmd(struct ipahal_imm_cmd_ip_v6_ct_init *cmd)
 	struct ipahal_imm_cmd_pyld
 		*cmd_pyld[IPA_IPV6CT_MAX_NUM_OF_INIT_CMD_DESC];
 	int i, num_cmd = 0, result;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
 
 	IPADBG("\n");
-
-	memset(desc, 0, sizeof(desc));
-	memset(cmd_pyld, 0, sizeof(cmd_pyld));
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmd] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmd]) {
-			IPAERR("failed to construct coal close IC\n");
-			result = -ENOMEM;
-			goto destroy_imm_cmd;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
-		++num_cmd;
-	}
 
 	/* NO-OP IC for ensuring that IPA pipeline is empty */
 	cmd_pyld[num_cmd] =
 		ipahal_construct_nop_imm_cmd(false, IPAHAL_HPS_CLEAR, false);
 	if (!cmd_pyld[num_cmd]) {
 		IPAERR("failed to construct NOP imm cmd\n");
-		result = -ENOMEM;
-		goto destroy_imm_cmd;
+		return -ENOMEM;
 	}
 
 	ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
@@ -1362,27 +1314,10 @@ int ipa3_table_dma_cmd(struct ipa_ioc_nat_dma_cmd *dma)
 	struct ipa3_desc desc[IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC];
 	uint8_t cnt, num_cmd = 0;
 	int result = 0;
-	int i;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int max_dma_table_cmds = IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC;
 
 	IPADBG("\n");
-
-	memset(desc, 0, sizeof(desc));
-	memset(cmd_pyld, 0, sizeof(cmd_pyld));
-
-	/**
-	 * We use a descriptor for closing coalsceing endpoint
-	 * by immediate command. So, DMA entries should be less than
-	 * IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC - 1 to overcome
-	 * buffer overflow of ipa3_desc array.
-	 */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1)
-		max_dma_table_cmds -= 1;
-
 	if (!dma->entries ||
-		dma->entries > (max_dma_table_cmds - 1)) {
+		dma->entries >= IPA_MAX_NUM_OF_TABLE_DMA_CMD_DESC) {
 		IPAERR_RL("Invalid number of entries %d\n",
 			dma->entries);
 		result = -EPERM;
@@ -1401,28 +1336,6 @@ int ipa3_table_dma_cmd(struct ipa_ioc_nat_dma_cmd *dma)
 				cnt);
 			goto bail;
 		}
-	}
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmd] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmd]) {
-			IPAERR("failed to construct coal close IC\n");
-			result = -ENOMEM;
-			goto destroy_imm_cmd;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmd], cmd_pyld[num_cmd]);
-		++num_cmd;
 	}
 
 	/* NO-OP IC for ensuring that IPA pipeline is empty */

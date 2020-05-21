@@ -3,7 +3,6 @@
  *  linux/fs/file.c
  *
  *  Copyright (C) 1998-1999, Stephen Tweedie and Bill Hawes
- *  Copyright (C) 2020 XiaoMi, Inc.
  *
  *  Manage the dynamic fd arrays in the process files_struct.
  */
@@ -12,13 +11,18 @@
 #include <linux/export.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/mmzone.h>
+#include <linux/time.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <linux/file.h>
 #include <linux/fdtable.h>
 #include <linux/bitops.h>
+#include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/rcupdate.h>
+#include <linux/workqueue.h>
 
 unsigned int sysctl_nr_open __read_mostly = 1024*1024;
 unsigned int sysctl_nr_open_min = BITS_PER_LONG;
@@ -387,7 +391,7 @@ static struct fdtable *close_files(struct files_struct * files)
 				struct file * file = xchg(&fdt->fd[i], NULL);
 				if (file) {
 					filp_close(file, files);
-					cond_resched();
+					cond_resched_rcu_qs();
 				}
 			}
 			i++;
@@ -541,12 +545,6 @@ static int alloc_fd(unsigned start, unsigned flags)
 	return __alloc_fd(current->files, start, rlimit(RLIMIT_NOFILE), flags);
 }
 
-int get_unused_fd_start_flags(unsigned start, unsigned flags)
-{
-	return __alloc_fd(current->files, start, rlimit(RLIMIT_NOFILE), flags);
-}
-EXPORT_SYMBOL(get_unused_fd_start_flags);
-
 int get_unused_fd_flags(unsigned flags)
 {
 	return __alloc_fd(current->files, 0, rlimit(RLIMIT_NOFILE), flags);
@@ -596,16 +594,13 @@ void __fd_install(struct files_struct *files, unsigned int fd,
 {
 	struct fdtable *fdt;
 
+	might_sleep();
 	rcu_read_lock_sched();
 
-	if (unlikely(files->resize_in_progress)) {
+	while (unlikely(files->resize_in_progress)) {
 		rcu_read_unlock_sched();
-		spin_lock(&files->file_lock);
-		fdt = files_fdtable(files);
-		BUG_ON(fdt->fd[fd] != NULL);
-		rcu_assign_pointer(fdt->fd[fd], file);
-		spin_unlock(&files->file_lock);
-		return;
+		wait_event(files->resize_wait, !files->resize_in_progress);
+		rcu_read_lock_sched();
 	}
 	/* coupled with smp_wmb() in expand_fdtable() */
 	smp_rmb();
@@ -638,6 +633,7 @@ int __close_fd(struct files_struct *files, unsigned fd)
 	if (!file)
 		goto out_unlock;
 	rcu_assign_pointer(fdt->fd[fd], NULL);
+	__clear_close_on_exec(fd, fdt);
 	__put_unused_fd(files, fd);
 	spin_unlock(&files->file_lock);
 	return filp_close(file, files);
@@ -646,7 +642,6 @@ out_unlock:
 	spin_unlock(&files->file_lock);
 	return -EBADF;
 }
-EXPORT_SYMBOL(__close_fd); /* for ksys_close() */
 
 void do_close_on_exec(struct files_struct *files)
 {
@@ -879,7 +874,7 @@ out_unlock:
 	return err;
 }
 
-static int ksys_dup3(unsigned int oldfd, unsigned int newfd, int flags)
+SYSCALL_DEFINE3(dup3, unsigned int, oldfd, unsigned int, newfd, int, flags)
 {
 	int err = -EBADF;
 	struct file *file;
@@ -913,11 +908,6 @@ out_unlock:
 	return err;
 }
 
-SYSCALL_DEFINE3(dup3, unsigned int, oldfd, unsigned int, newfd, int, flags)
-{
-	return ksys_dup3(oldfd, newfd, flags);
-}
-
 SYSCALL_DEFINE2(dup2, unsigned int, oldfd, unsigned int, newfd)
 {
 	if (unlikely(newfd == oldfd)) { /* corner case */
@@ -930,10 +920,10 @@ SYSCALL_DEFINE2(dup2, unsigned int, oldfd, unsigned int, newfd)
 		rcu_read_unlock();
 		return retval;
 	}
-	return ksys_dup3(oldfd, newfd, 0);
+	return sys_dup3(oldfd, newfd, 0);
 }
 
-int ksys_dup(unsigned int fildes)
+SYSCALL_DEFINE1(dup, unsigned int, fildes)
 {
 	int ret = -EBADF;
 	struct file *file = fget_raw(fildes);
@@ -946,11 +936,6 @@ int ksys_dup(unsigned int fildes)
 			fput(file);
 	}
 	return ret;
-}
-
-SYSCALL_DEFINE1(dup, unsigned int, fildes)
-{
-	return ksys_dup(fildes);
 }
 
 int f_dupfd(unsigned int from, struct file *file, unsigned flags)

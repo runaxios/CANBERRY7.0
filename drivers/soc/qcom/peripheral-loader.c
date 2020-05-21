@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -53,19 +60,8 @@
 #define MAX_LEN 96
 #define NUM_OF_ENCRYPTED_KEY	3
 
-#define pil_log(msg, desc)	\
-	do {			\
-		if (pil_ipc_log)		\
-			pil_ipc("[%s]: %s", desc->name, msg); \
-		else		\
-			trace_pil_event(msg, desc);	\
-	} while (0)
-
-
 static void __iomem *pil_info_base;
 static struct md_global_toc *g_md_toc;
-
-void *pil_ipc_log;
 
 /**
  * proxy_timeout - Override for proxy vote timeouts
@@ -390,11 +386,7 @@ static int pil_do_minidump(struct pil_desc *desc, void *ramdump_dev)
 					      &ss_valid_seg_cnt,
 					      desc->num_aux_minidump_ids);
 
-	if (desc->minidump_as_elf32)
-		ret = do_minidump_elf32(ramdump_dev, ramdump_segs,
-					ss_valid_seg_cnt);
-	else
-		ret = do_minidump(ramdump_dev, ramdump_segs, ss_valid_seg_cnt);
+	ret = do_minidump(ramdump_dev, ramdump_segs, ss_valid_seg_cnt);
 	if (ret)
 		pil_err(desc, "%s: Minidump collection failed for subsys %s rc:%d\n",
 			__func__, desc->name, ret);
@@ -411,6 +403,33 @@ mapping_fail:
 setup_fail:
 	iounmap(region_info_ss);
 	return ret;
+}
+
+/**
+ * print_aux_minidump_tocs() - Print the ToC for an auxiliary minidump entry
+ * @desc: PIL descriptor for the subsystem for which minidump is collected
+ *
+ * Prints out the table of contents(ToC) for all of the auxiliary
+ * minidump entries for a subsystem.
+ */
+static void print_aux_minidump_tocs(struct pil_desc *desc)
+{
+	int i;
+	struct md_ss_toc *toc;
+
+	for (i = 0; i < desc->num_aux_minidump_ids; i++) {
+		toc = desc->aux_minidump[i];
+		pr_debug("Minidump : md_aux_toc->toc_init 0x%x\n",
+			 (unsigned int)toc->md_ss_toc_init);
+		pr_debug("Minidump : md_aux_toc->enable_status 0x%x\n",
+			 (unsigned int)toc->md_ss_enable_status);
+		pr_debug("Minidump : md_aux_toc->encryption_status 0x%x\n",
+			 (unsigned int)toc->encryption_status);
+		pr_debug("Minidump : md_aux_toc->ss_region_count 0x%x\n",
+			 (unsigned int)toc->ss_region_count);
+		pr_debug("Minidump : md_aux_toc->smem_regions_baseptr 0x%x\n",
+			 (unsigned int)toc->md_ss_smem_regions_baseptr);
+	}
 }
 
 /**
@@ -441,6 +460,9 @@ int pil_do_ramdump(struct pil_desc *desc,
 		pr_debug("Minidump : md_ss_toc->md_ss_smem_regions_baseptr is 0x%x\n",
 			(unsigned int)
 			desc->minidump_ss->md_ss_smem_regions_baseptr);
+
+		print_aux_minidump_tocs(desc);
+
 		/**
 		 * Collect minidump if SS ToC is valid and segment table
 		 * is initialized in memory and encryption status is set.
@@ -1125,8 +1147,8 @@ static int pil_load_segs(struct pil_desc *desc)
 	struct pil_seg *seg;
 	unsigned long *err_map;
 
-	err_map = kcalloc(BITS_TO_LONGS(priv->num_segs), sizeof(*err_map),
-			  GFP_KERNEL);
+	err_map = kcalloc(BITS_TO_LONGS(priv->num_segs), sizeof(unsigned long),
+				GFP_KERNEL);
 	if (!err_map)
 		return -ENOMEM;
 
@@ -1256,7 +1278,7 @@ int pil_boot(struct pil_desc *desc)
 		goto release_fw;
 	}
 
-	pil_log("before_init_image", desc);
+	trace_pil_event("before_init_image", desc);
 	if (desc->ops->init_image)
 		ret = desc->ops->init_image(desc, fw->data, fw->size);
 	if (ret) {
@@ -1264,7 +1286,7 @@ int pil_boot(struct pil_desc *desc)
 		goto err_boot;
 	}
 
-	pil_log("before_mem_setup", desc);
+	trace_pil_event("before_mem_setup", desc);
 	if (desc->ops->mem_setup)
 		ret = desc->ops->mem_setup(desc, priv->region_start,
 				priv->region_end - priv->region_start);
@@ -1280,7 +1302,7 @@ int pil_boot(struct pil_desc *desc)
 		 * Also for secure boot devices, modem memory has to be released
 		 * after MBA is booted
 		 */
-		pil_log("before_assign_mem", desc);
+		trace_pil_event("before_assign_mem", desc);
 		if (desc->modem_ssr) {
 			ret = pil_assign_mem_to_linux(desc, priv->region_start,
 				(priv->region_end - priv->region_start));
@@ -1299,7 +1321,7 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = true;
 	}
 
-	pil_log("before_load_seg", desc);
+	trace_pil_event("before_load_seg", desc);
 
 	/**
 	 * Fallback to serial loading of blobs if the
@@ -1318,7 +1340,7 @@ int pil_boot(struct pil_desc *desc)
 	}
 
 	if (desc->subsys_vmid > 0) {
-		pil_log("before_reclaim_mem", desc);
+		trace_pil_event("before_reclaim_mem", desc);
 		ret =  pil_reclaim_mem(desc, priv->region_start,
 				(priv->region_end - priv->region_start),
 				desc->subsys_vmid);
@@ -1330,14 +1352,13 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = false;
 	}
 
-	pil_log("before_auth_reset", desc);
-	notify_before_auth_and_reset(desc->dev);
+	trace_pil_event("before_auth_reset", desc);
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset(rc:%d)\n", ret);
 		goto err_auth_and_reset;
 	}
-	pil_log("reset_done", desc);
+	trace_pil_event("reset_done", desc);
 	pil_info(desc, "Brought out of reset\n");
 	desc->modem_ssr = false;
 err_auth_and_reset:
@@ -1572,9 +1593,6 @@ int pil_desc_init(struct pil_desc *desc)
 	if (!desc->unmap_fw_mem)
 		desc->unmap_fw_mem = unmap_fw_mem;
 
-	desc->minidump_as_elf32 = of_property_read_bool(
-					ofnode, "qcom,minidump-as-elf32");
-
 	return 0;
 err_parse_dt:
 	ida_simple_remove(&pil_ida, priv->id);
@@ -1662,9 +1680,6 @@ static int __init msm_pil_init(void)
 	if (!pil_wq)
 		pr_warn("pil: Defaulting to sequential firmware loading.\n");
 
-	pil_ipc_log = ipc_log_context_create(2, "PIL-IPC", 0);
-	if (!pil_ipc_log)
-		pr_warn("Failed to setup PIL ipc logging\n");
 out:
 	return register_pm_notifier(&pil_pm_notifier);
 }

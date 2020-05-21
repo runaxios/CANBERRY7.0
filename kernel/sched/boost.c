@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "sched.h"
@@ -78,12 +86,10 @@ static void sched_full_throttle_boost_exit(void)
 static void sched_conservative_boost_enter(void)
 {
 	update_cgroup_boost_settings();
-	sched_task_filter_util = sysctl_sched_min_task_util_for_boost;
 }
 
 static void sched_conservative_boost_exit(void)
 {
-	sched_task_filter_util = sysctl_sched_min_task_util_for_colocation;
 	restore_cgroup_boost_settings();
 }
 

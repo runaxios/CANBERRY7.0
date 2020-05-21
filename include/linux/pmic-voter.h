@@ -1,7 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-
-/*
- * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016,2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __PMIC_VOTER_H
@@ -21,8 +27,6 @@ enum votable_type {
 bool is_client_vote_enabled(struct votable *votable, const char *client_str);
 bool is_client_vote_enabled_locked(struct votable *votable,
 							const char *client_str);
-bool is_override_vote_enabled(struct votable *votable);
-bool is_override_vote_enabled_locked(struct votable *votable);
 int get_client_vote(struct votable *votable, const char *client_str);
 int get_client_vote_locked(struct votable *votable, const char *client_str);
 int get_effective_result(struct votable *votable);

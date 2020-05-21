@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -11,7 +19,6 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/of.h>
-#include <linux/debugfs.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/regulator/consumer.h>
@@ -92,6 +99,30 @@
 
 #define HSTX_TRIMSIZE			4
 
+static unsigned int tune1;
+module_param(tune1, uint, 0644);
+MODULE_PARM_DESC(tune1, "QUSB PHY TUNE1");
+
+static unsigned int tune2;
+module_param(tune2, uint, 0644);
+MODULE_PARM_DESC(tune2, "QUSB PHY TUNE2");
+
+static unsigned int tune3;
+module_param(tune3, uint, 0644);
+MODULE_PARM_DESC(tune3, "QUSB PHY TUNE3");
+
+static unsigned int tune4;
+module_param(tune4, uint, 0644);
+MODULE_PARM_DESC(tune4, "QUSB PHY TUNE4");
+
+static unsigned int tune5;
+module_param(tune5, uint, 0644);
+MODULE_PARM_DESC(tune5, "QUSB PHY TUNE5");
+
+static bool eud_connected;
+module_param(eud_connected, bool, 0644);
+MODULE_PARM_DESC(eud_connected, "EUD_CONNECTED");
+
 struct qusb_phy {
 	struct usb_phy		phy;
 	void __iomem		*base;
@@ -99,7 +130,6 @@ struct qusb_phy {
 	void __iomem		*ref_clk_base;
 	void __iomem		*tcsr_clamp_dig_n;
 	void __iomem		*tcsr_conn_box_spare;
-	void __iomem		*eud_enable_reg;
 
 	struct clk		*ref_clk_src;
 	struct clk		*ref_clk;
@@ -133,16 +163,17 @@ struct qusb_phy {
 	struct regulator_desc	dpdm_rdesc;
 	struct regulator_dev	*dpdm_rdev;
 
+	/* emulation targets specific */
+	void __iomem		*emu_phy_base;
+	bool			emulation;
+	int			*emu_init_seq;
+	int			emu_init_seq_len;
+	int			*phy_pll_reset_seq;
+	int			phy_pll_reset_seq_len;
+	int			*emu_dcm_reset_seq;
+	int			emu_dcm_reset_seq_len;
 	bool			put_into_high_z_state;
 	struct mutex		phy_lock;
-
-	/* debugfs entries */
-	struct dentry		*root;
-	u8			tune1;
-	u8			tune2;
-	u8			tune3;
-	u8			tune4;
-	u8			tune5;
 };
 
 static void qusb_phy_enable_clocks(struct qusb_phy *qphy, bool on)
@@ -403,12 +434,20 @@ static int qusb_phy_init(struct usb_phy *phy)
 	u8 reg;
 	bool pll_lock_fail = false;
 
-	dev_dbg(phy->dev, "%s\n", __func__);
-
-	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
-		dev_err(qphy->phy.dev, "eud is enabled\n");
+	/*
+	 * If eud is enabled eud_connected parameter will be set to true.
+	 * Phy init will be called when spoof attach is done but it will
+	 * break the eud functionality by powering down the phy and
+	 * re-initializing it. Hence, bail out early from phy init when
+	 * eud_connected param is set to true.
+	 */
+	if (eud_connected) {
+		pr_debug("eud_connected is true so bailing out early from %s\n",
+				__func__);
 		return 0;
 	}
+
+	dev_dbg(phy->dev, "%s\n", __func__);
 
 	/*
 	 * ref clock is enabled by default after power on reset. Linux clock
@@ -436,6 +475,30 @@ static int qusb_phy_init(struct usb_phy *phy)
 	if (ret)
 		dev_err(phy->dev, "%s: phy_reset deassert failed\n", __func__);
 
+	if (qphy->emulation) {
+		if (qphy->emu_init_seq)
+			qusb_phy_write_seq(qphy->emu_phy_base,
+				qphy->emu_init_seq, qphy->emu_init_seq_len, 0);
+
+		if (qphy->qusb_phy_init_seq)
+			qusb_phy_write_seq(qphy->base, qphy->qusb_phy_init_seq,
+					qphy->init_seq_len, 0);
+
+		/* Wait for 5ms as per QUSB2 RUMI sequence */
+		usleep_range(5000, 7000);
+
+		if (qphy->phy_pll_reset_seq)
+			qusb_phy_write_seq(qphy->base, qphy->phy_pll_reset_seq,
+					qphy->phy_pll_reset_seq_len, 10000);
+
+		if (qphy->emu_dcm_reset_seq)
+			qusb_phy_write_seq(qphy->emu_phy_base,
+					qphy->emu_dcm_reset_seq,
+					qphy->emu_dcm_reset_seq_len, 10000);
+
+		return 0;
+	}
+
 	/* Disable the PHY */
 	if (qphy->major_rev < 2)
 		writel_relaxed(CLAMP_N_EN | FREEZIO_N | POWER_DOWN,
@@ -462,7 +525,7 @@ static int qusb_phy_init(struct usb_phy *phy)
 	 * and try to read EFUSE value only once i.e. not every USB
 	 * cable connect case.
 	 */
-	if (qphy->tune2_efuse_reg && !qphy->tune2) {
+	if (qphy->tune2_efuse_reg && !tune2) {
 		if (!qphy->tune2_val)
 			qusb_phy_get_tune2_param(qphy);
 
@@ -473,30 +536,28 @@ static int qusb_phy_init(struct usb_phy *phy)
 	}
 
 	/* If tune modparam set, override tune value */
-	if (qphy->tune1) {
-		writel_relaxed(qphy->tune1,
+
+	pr_debug("%s():userspecified modparams TUNEX val:0x%x %x %x %x %x\n",
+				__func__, tune1, tune2, tune3, tune4, tune5);
+	if (tune1)
+		writel_relaxed(tune1,
 				qphy->base + QUSB2PHY_PORT_TUNE1);
-	}
 
-	if (qphy->tune2) {
-		writel_relaxed(qphy->tune2,
+	if (tune2)
+		writel_relaxed(tune2,
 				qphy->base + QUSB2PHY_PORT_TUNE2);
-	}
 
-	if (qphy->tune3) {
-		writel_relaxed(qphy->tune3,
+	if (tune3)
+		writel_relaxed(tune3,
 				qphy->base + QUSB2PHY_PORT_TUNE3);
-	}
 
-	if (qphy->tune4) {
-		writel_relaxed(qphy->tune4,
+	if (tune4)
+		writel_relaxed(tune4,
 				qphy->base + QUSB2PHY_PORT_TUNE4);
-	}
 
-	if (qphy->tune5) {
-		writel_relaxed(qphy->tune5,
+	if (tune5)
+		writel_relaxed(tune5,
 				qphy->base + QUSB2PHY_PORT_TUNE5);
-	}
 
 	/* ensure above writes are completed before re-enabling PHY */
 	wmb();
@@ -549,8 +610,9 @@ static int qusb_phy_init(struct usb_phy *phy)
 			pll_lock_fail = true;
 	}
 
-	if (pll_lock_fail)
+	if (pll_lock_fail) {
 		dev_err(phy->dev, "QUSB PHY PLL LOCK fails:%x\n", reg);
+	}
 
 	return 0;
 }
@@ -647,15 +709,19 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 			writel_relaxed(0x00,
 				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
 
-			/* Disable PHY */
-			writel_relaxed(POWER_DOWN | readl_relaxed(qphy->base +
-					QUSB2PHY_PORT_POWERDOWN),
+			if (!eud_connected) {
+				/* Disable PHY */
+				writel_relaxed(POWER_DOWN |
+					readl_relaxed(qphy->base +
+						QUSB2PHY_PORT_POWERDOWN),
 					qphy->base + QUSB2PHY_PORT_POWERDOWN);
-			/* Make sure that above write is completed */
-			wmb();
+				/* Make sure that above write is completed */
+				wmb();
 
-			if (qphy->tcsr_clamp_dig_n)
-				writel_relaxed(0x0, qphy->tcsr_clamp_dig_n);
+				if (qphy->tcsr_clamp_dig_n)
+					writel_relaxed(0x0,
+						qphy->tcsr_clamp_dig_n);
+			}
 
 			qusb_phy_enable_clocks(qphy, false);
 			qusb_phy_enable_power(qphy, false);
@@ -722,11 +788,6 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 
 	dev_dbg(qphy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, qphy->dpdm_enable);
-
-	if (qphy->eud_enable_reg && readl_relaxed(qphy->eud_enable_reg)) {
-		dev_err(qphy->phy.dev, "eud is enabled\n");
-		return 0;
-	}
 
 	mutex_lock(&qphy->phy_lock);
 	if (!qphy->dpdm_enable) {
@@ -854,18 +915,10 @@ static int qusb_phy_regulator_init(struct qusb_phy *qphy)
 	cfg.of_node = dev->of_node;
 
 	qphy->dpdm_rdev = devm_regulator_register(dev, &qphy->dpdm_rdesc, &cfg);
-	return PTR_ERR_OR_ZERO(qphy->dpdm_rdev);
+	if (IS_ERR(qphy->dpdm_rdev))
+		return PTR_ERR(qphy->dpdm_rdev);
 
-}
-
-static void qusb_phy_create_debugfs(struct qusb_phy *qphy)
-{
-	qphy->root = debugfs_create_dir(dev_name(qphy->phy.dev), NULL);
-	debugfs_create_x8("tune1", 0644, qphy->root, &qphy->tune1);
-	debugfs_create_x8("tune2", 0644, qphy->root, &qphy->tune2);
-	debugfs_create_x8("tune3", 0644, qphy->root, &qphy->tune3);
-	debugfs_create_x8("tune4", 0644, qphy->root, &qphy->tune4);
-	debugfs_create_x8("tune5", 0644, qphy->root, &qphy->tune5);
+	return 0;
 }
 
 static int qusb_phy_probe(struct platform_device *pdev)
@@ -890,6 +943,16 @@ static int qusb_phy_probe(struct platform_device *pdev)
 		return PTR_ERR(qphy->base);
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+							"emu_phy_base");
+	if (res) {
+		qphy->emu_phy_base = devm_ioremap_resource(dev, res);
+		if (IS_ERR(qphy->emu_phy_base)) {
+			dev_dbg(dev, "couldn't ioremap emu_phy_base\n");
+			qphy->emu_phy_base = NULL;
+		}
+	}
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 							"tune2_efuse_addr");
 	if (res) {
 		qphy->tune2_efuse_reg = devm_ioremap_nocache(dev, res->start,
@@ -911,16 +974,6 @@ static int qusb_phy_probe(struct platform_device *pdev)
 				dev_err(dev, "DT Value for tune2 efuse is invalid.\n");
 				return -EINVAL;
 			}
-		}
-	}
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
-							"eud_enable_reg");
-	if (res) {
-		qphy->eud_enable_reg = devm_ioremap_resource(dev, res);
-		if (IS_ERR(qphy->eud_enable_reg)) {
-			dev_err(dev, "err getting eud_enable_reg address\n");
-			return PTR_ERR(qphy->eud_enable_reg);
 		}
 	}
 
@@ -1043,6 +1096,74 @@ static int qusb_phy_probe(struct platform_device *pdev)
 	if (IS_ERR(qphy->gdsc))
 		qphy->gdsc = NULL;
 
+	qphy->emulation = of_property_read_bool(dev->of_node,
+					"qcom,emulation");
+
+	of_get_property(dev->of_node, "qcom,emu-init-seq", &size);
+	if (size) {
+		qphy->emu_init_seq = devm_kzalloc(dev,
+						size, GFP_KERNEL);
+		if (qphy->emu_init_seq) {
+			qphy->emu_init_seq_len =
+				(size / sizeof(*qphy->emu_init_seq));
+			if (qphy->emu_init_seq_len % 2) {
+				dev_err(dev, "invalid emu_init_seq_len\n");
+				return -EINVAL;
+			}
+
+			of_property_read_u32_array(dev->of_node,
+				"qcom,emu-init-seq",
+				qphy->emu_init_seq,
+				qphy->emu_init_seq_len);
+		} else {
+			dev_dbg(dev, "error allocating memory for emu_init_seq\n");
+		}
+	}
+
+	size = 0;
+	of_get_property(dev->of_node, "qcom,phy-pll-reset-seq", &size);
+	if (size) {
+		qphy->phy_pll_reset_seq = devm_kzalloc(dev,
+						size, GFP_KERNEL);
+		if (qphy->phy_pll_reset_seq) {
+			qphy->phy_pll_reset_seq_len =
+				(size / sizeof(*qphy->phy_pll_reset_seq));
+			if (qphy->phy_pll_reset_seq_len % 2) {
+				dev_err(dev, "invalid phy_pll_reset_seq_len\n");
+				return -EINVAL;
+			}
+
+			of_property_read_u32_array(dev->of_node,
+				"qcom,phy-pll-reset-seq",
+				qphy->phy_pll_reset_seq,
+				qphy->phy_pll_reset_seq_len);
+		} else {
+			dev_dbg(dev, "error allocating memory for phy_pll_reset_seq\n");
+		}
+	}
+
+	size = 0;
+	of_get_property(dev->of_node, "qcom,emu-dcm-reset-seq", &size);
+	if (size) {
+		qphy->emu_dcm_reset_seq = devm_kzalloc(dev,
+						size, GFP_KERNEL);
+		if (qphy->emu_dcm_reset_seq) {
+			qphy->emu_dcm_reset_seq_len =
+				(size / sizeof(*qphy->emu_dcm_reset_seq));
+			if (qphy->emu_dcm_reset_seq_len % 2) {
+				dev_err(dev, "invalid emu_dcm_reset_seq_len\n");
+				return -EINVAL;
+			}
+
+			of_property_read_u32_array(dev->of_node,
+				"qcom,emu-dcm-reset-seq",
+				qphy->emu_dcm_reset_seq,
+				qphy->emu_dcm_reset_seq_len);
+		} else {
+			dev_dbg(dev, "error allocating memory for emu_dcm_reset_seq\n");
+		}
+	}
+
 	size = 0;
 	of_get_property(dev->of_node, "qcom,qusb-phy-init-seq", &size);
 	if (size) {
@@ -1156,8 +1277,6 @@ static int qusb_phy_probe(struct platform_device *pdev)
 
 	qphy->suspended = true;
 
-	qusb_phy_create_debugfs(qphy);
-
 	return ret;
 }
 
@@ -1165,7 +1284,6 @@ static int qusb_phy_remove(struct platform_device *pdev)
 {
 	struct qusb_phy *qphy = platform_get_drvdata(pdev);
 
-	debugfs_remove_recursive(qphy->root);
 	usb_remove_phy(&qphy->phy);
 	qphy->cable_connected = false;
 	qusb_phy_set_suspend(&qphy->phy, true);

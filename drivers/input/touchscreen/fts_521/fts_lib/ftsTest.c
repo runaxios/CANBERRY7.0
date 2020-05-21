@@ -59,12 +59,12 @@ int initTestToDo(void)
 	limit_file.size = 0;
 	limit_file.data = NULL;
 	strlcpy(limit_file.name, " ", MAX_LIMIT_FILE_NAME);
-	tests.SelfHoverForceRaw = 0;		/* /< SS Hover Force Raw min/Max test */
-	tests.SelfHoverSenceRaw = 0;		/* /< SS Hover Sence Raw min/Max test */
-	tests.SelfHoverForceIxTotal = 0;	/* /< SS Hover Total Force Ix min/Max (for each node)* test */
-	tests.SelfHoverSenceIxTotal = 0;
-	tests.MutualRawAdjITO = 1;
-	tests.MutualRaw = 1;
+	tests.SelfHoverForceRaw=1;		/* /< SS Hover Force Raw min/Max test */
+	tests.SelfHoverSenceRaw=1;		/* /< SS Hover Sence Raw min/Max test */
+	tests.SelfHoverForceIxTotal=1;	/* /< SS Hover Total Force Ix min/Max (for each node)* test */
+	tests.SelfHoverSenceIxTotal=1;
+	tests.MutualRawAdjITO = 0;
+	tests.MutualRaw = 0;
 	tests.MutualRawEachNode = 1;
 	tests.MutualRawGap = 0;
 	tests.MutualRawAdj = 0;
@@ -95,7 +95,6 @@ int initTestToDo(void)
 	tests.MutualKeyCxTotal = 0;
 #endif
 	tests.SelfForceRaw = 1;
-	tests.SelfForceRawMap = 1;
 	tests.SelfForceRawGap = 0;
 	tests.SelfForceRawLP = 0;
 	tests.SelfForceRawGapLP = 0;
@@ -110,7 +109,6 @@ int initTestToDo(void)
 	tests.SelfForceCxTotal = 0;
 	tests.SelfForceCxTotalAdj = 0;
 	tests.SelfSenseRaw = 1;
-	tests.SelfSenseRawMap = 1;
 	tests.SelfSenseRawGap = 0;
 	tests.SelfSenseRawLP = 0;
 	tests.SelfSenseRawGapLP = 0;
@@ -740,7 +738,7 @@ int checkLimitsMapAdjTotal(u16 *data, int row, int column, int *max)
  * Perform an ITO test setting all the possible options (see @link ito_opt ITO Options @endlink)
  * @return the number of elements that overcome the specified interval (0 = OK)
  */
-int production_test_ito(const char *path_limits, TestToDo *todo)
+int production_test_ito(char *path_limits, TestToDo *todo)
 {
 	int res = OK;
 	u8 sett[2] = { 0x00, 0x00 };
@@ -769,7 +767,7 @@ int production_test_ito(const char *path_limits, TestToDo *todo)
 	}
 
 	sett[0] = 0xFF;
-	sett[1] = 0x01;
+	sett[1] = 0xFF;
 	logError(0, "%s ITO Check command sent... \n", tag);
 	res = writeSysCmd(SYS_CMD_ITO, sett, 2);
 
@@ -994,7 +992,7 @@ int production_test_initialization(u8 type)
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_main(const char *pathThresholds, int stop_on_fail, int saveInit,
+int production_test_main(char *pathThresholds, int stop_on_fail, int saveInit,
 			 TestToDo *todo)
 {
 	int res, ret;
@@ -1084,7 +1082,7 @@ END:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ms_raw(const char *path_limits, int stop_on_fail, TestToDo *todo)
+int production_test_ms_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 {
 	int ret, count_fail = 0;
 	MutualSenseFrame msRawFrame;
@@ -1465,7 +1463,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ms_raw_lp(const char *path_limits, int stop_on_fail,
+int production_test_ms_raw_lp(char *path_limits, int stop_on_fail,
 			      TestToDo *todo)
 {
 	int ret, count_fail = 0;
@@ -1769,7 +1767,7 @@ ERROR_LIMITS:
  * @param path_limits name of Production Limit file to load or "NULL" if the limits data should be loaded by a .h file
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ms_key_raw(const char *path_limits)
+int production_test_ms_key_raw(char *path_limits)
 {
 	int ret;
 	MutualSenseFrame msRawFrame;
@@ -1860,7 +1858,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ms_cx(const char *path_limits, int stop_on_fail, TestToDo *todo)
+int production_test_ms_cx(char *path_limits, int stop_on_fail, TestToDo *todo)
 {
 	int ret;
 	int count_fail = 0;
@@ -2452,7 +2450,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ms_key_cx(const char *path_limits, int stop_on_fail,
+int production_test_ms_key_cx(char *path_limits, int stop_on_fail,
 			      TestToDo *todo)
 {
 	int ret;
@@ -2721,7 +2719,7 @@ ERROR_LIMITS:
   * @param todo pointer to a TestToDo variable which select the test to do
   * @return OK if success or an error code which specify the type of error
   */
-int production_test_ms_cx_lp(const char *path_limits, int stop_on_fail, TestToDo *todo)
+int production_test_ms_cx_lp(char *path_limits, int stop_on_fail, TestToDo *todo)
 {
 	int ret;
 	int count_fail = 0;
@@ -3272,7 +3270,7 @@ ERROR_LIMITS:
 	return ret;
 }
 
-int production_test_ss_hover_raw(const char *path_limits, int stop_on_fail,
+int production_test_ss_hover_raw(char *path_limits, int stop_on_fail,
 			      TestToDo *todo){
 	int ret;
 	int rows, columns;
@@ -3414,15 +3412,13 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ss_raw(const char *path_limits, int stop_on_fail, TestToDo *todo)
+int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 {
 	int ret;
 	int count_fail = 0;
 	int rows, columns;
 	SelfSenseFrame ssRawFrame;
 	int *thresholds = NULL;
-	int *thresholds_min = NULL;
-	int *thresholds_max = NULL;
 	int trows, tcolumns;
 	logError(0, "%s \n", tag);
 	/******************************* Self Sense Test *******************************/
@@ -3441,7 +3437,7 @@ int production_test_ss_raw(const char *path_limits, int stop_on_fail, TestToDo *
 	}
 
 
-	if (todo->SelfForceRaw == 1 || todo->SelfForceRawGap == 1 || todo->SelfForceRawMap == 1) {
+	if (todo->SelfForceRaw == 1 || todo->SelfForceRawGap == 1) {
 		columns = 1;
 		rows = ssRawFrame.header.force_node;
 		logError(0, "%s SS RAW FORCE MIN MAX TEST:  \n", tag);
@@ -3499,71 +3495,7 @@ int production_test_ss_raw(const char *path_limits, int stop_on_fail, TestToDo *
 				 "%s SS RAW (PROXIMITY) FORCE MIN MAX TEST:.................SKIPPED \n\n",
 				 tag);
 
-		logError(1, "%s SS RAW FORCE MAP MIN MAX TEST:\n", tag);
-		if (todo->SelfForceRawMap == 1) {
-			ret = parseProductionTestLimits(path_limits,
-				&limit_file, SS_RAW_FORCE_EACH_NODE_MIN,
-				&thresholds_min, &trows, &tcolumns);
-			if (ret < OK || (trows != rows ||
-					 tcolumns != columns)) {
-				logError(1,
-					 "%s production_test_data: parseProductionTestLimits SS_RAW_FORCE_EACH_NODE_MIN failed... ERROR %08X\n",
-					 tag, ERROR_PROD_TEST_DATA);
-				ret |= ERROR_PROD_TEST_DATA;
-				goto ERROR_LIMITS;
-			}
-			ret = parseProductionTestLimits(path_limits,
-				&limit_file, SS_RAW_FORCE_EACH_NODE_MAX,
-				&thresholds_max, &trows, &tcolumns);
-			if (ret < OK || (trows != rows ||
-					 tcolumns != columns)) {
-				logError(1,
-					 "%s production_test_data: parseProductionTestLimits SS_RAW_FORCE_EACH_NODE_MAX failed... ERROR %08X\n",
-					 tag, ERROR_PROD_TEST_DATA);
-				ret |= ERROR_PROD_TEST_DATA;
-				goto ERROR_LIMITS;
-			}
-
-			ret = checkLimitsMapTotal(ssRawFrame.force_data, rows,
-						columns, thresholds_min,
-						thresholds_max);
-			if (ret != OK) {
-				logError(1,
-					 "%s production_test_data: checkLimitsMinMax SS RAW FORCE MAP failed... ERROR COUNT = %d\n",
-					 tag, ret);
-				logError(0,
-					 "%s SS RAW FORCE MAP MIN MAX TEST:.................FAIL\n\n",
-					 tag);
-				count_fail += 1;
-				print_frame_short("SS Raw force frame =",
-						  array1dTo2d_short(
-							  ssRawFrame.force_data,
-							  rows *
-							  columns,
-							  columns), rows,
-						  columns);
-				if (stop_on_fail) {
-					ret = ERROR_PROD_TEST_DATA |
-					      ERROR_TEST_CHECK_FAIL;
-					goto ERROR_LIMITS;
-				}
-			} else
-				logError(0,
-					 "%s SS RAW FORCE MAP MIN MAX TEST:.................OK\n\n",
-					 tag);
-
-			if (thresholds_min != NULL) {
-				kfree(thresholds_min);
-				thresholds_min = NULL;
-			}
-			if (thresholds_max != NULL) {
-				kfree(thresholds_max);
-				thresholds_max = NULL;
-			}
-		} else
-			logError(0,
-				 "%s SS RAW FORCE MAP MIN MAX TEST:.................SKIPPED\n\n",
-				 tag);
+		logError(0, "%s \n", tag);
 
 		if (todo->SelfForceRawGap == 1) {
 			logError(1, "%s SS RAW FORCE GAP TEST:  \n", tag);
@@ -3626,7 +3558,7 @@ int production_test_ss_raw(const char *path_limits, int stop_on_fail, TestToDo *
 
 	logError(0, "%s \n", tag);
 
-	if (todo->SelfSenseRaw == 1 || todo->SelfSenseRawGap == 1 || todo->SelfSenseRawMap == 1) {
+	if (todo->SelfSenseRaw == 1 || todo->SelfSenseRawGap == 1) {
 		columns = ssRawFrame.header.sense_node;
 		rows = 1;
 
@@ -3681,71 +3613,6 @@ int production_test_ss_raw(const char *path_limits, int stop_on_fail, TestToDo *
 		} else
 			logError(0,
 				 "%s SS RAW (PROXIMITY) SENSE MIN MAX TEST:.................SKIPPED \n",
-				 tag);
-		logError(1, "%s SS RAW SENSE MAP MIN MAX TEST:\n", tag);
-		if (todo->SelfSenseRawMap == 1) {
-			ret = parseProductionTestLimits(path_limits,
-				&limit_file, SS_RAW_SENSE_EACH_NODE_MIN,
-				&thresholds_min, &trows, &tcolumns);
-			if (ret < OK || (trows != rows ||
-					 tcolumns != columns)) {
-				logError(1,
-					 "%s production_test_data: parseProductionTestLimits SS_RAW_SENSE_EACH_NODE_MIN failed... ERROR %08X\n",
-					 tag, ERROR_PROD_TEST_DATA);
-				ret |= ERROR_PROD_TEST_DATA;
-				goto ERROR_LIMITS;
-			}
-			ret = parseProductionTestLimits(path_limits,
-				&limit_file, SS_RAW_SENSE_EACH_NODE_MAX,
-				&thresholds_max, &trows, &tcolumns);
-			if (ret < OK || (trows != rows ||
-					 tcolumns != columns)) {
-				logError(1,
-					 "%s production_test_data: parseProductionTestLimits SS_RAW_SENSE_EACH_NODE_MAX failed... ERROR %08X\n",
-					 tag, ERROR_PROD_TEST_DATA);
-				ret |= ERROR_PROD_TEST_DATA;
-				goto ERROR_LIMITS;
-			}
-
-			ret = checkLimitsMapTotal(ssRawFrame.sense_data, rows,
-						columns, thresholds_min,
-						thresholds_max);
-			if (ret != OK) {
-				logError(1,
-					 "%s production_test_data: checkLimitsMinMax SS RAW SENSE MAP failed... ERROR COUNT = %d\n",
-					 tag, ret);
-				logError(0,
-					 "%s SS RAW SENSE MAP MIN MAX TEST:.................FAIL\n\n",
-					 tag);
-				count_fail += 1;
-				print_frame_short("SS Raw sense frame =",
-						  array1dTo2d_short(
-							  ssRawFrame.sense_data,
-							  rows *
-							  columns,
-							  columns), rows,
-						  columns);
-				if (stop_on_fail) {
-					ret = ERROR_PROD_TEST_DATA |
-					      ERROR_TEST_CHECK_FAIL;
-					goto ERROR_LIMITS;
-				}
-			} else
-				logError(0,
-					 "%s SS RAW SENSE MAP MIN MAX TEST:.................OK\n\n",
-					 tag);
-
-			if (thresholds_min != NULL) {
-				kfree(thresholds_min);
-				thresholds_min = NULL;
-			}
-			if (thresholds_max != NULL) {
-				kfree(thresholds_max);
-				thresholds_max = NULL;
-			}
-		} else
-			logError(0,
-				 "%s SS RAW SENSE MAP MIN MAX TEST:.................SKIPPED\n\n",
 				 tag);
 
 		logError(0, "%s \n", tag);
@@ -3858,7 +3725,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ss_raw_lp(const char *path_limits, int stop_on_fail,
+int production_test_ss_raw_lp(char *path_limits, int stop_on_fail,
 			      TestToDo *todo)
 {
 	int ret;
@@ -4147,7 +4014,7 @@ ERROR_LIMITS:
 	return ret;
 }
 
-int production_test_ss_hover_ix(const char *path_limits, int stop_on_fail,TestToDo *todo){
+int production_test_ss_hover_ix(char *path_limits, int stop_on_fail,TestToDo *todo){
 	TotSelfSenseData ssHoverCompData;
 	int ret;
 	int trows, tcolumns;
@@ -4356,7 +4223,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_ss_ix_cx(const char *path_limits, int stop_on_fail,
+int production_test_ss_ix_cx(char *path_limits, int stop_on_fail,
 			     TestToDo *todo)
 {
 	int ret;
@@ -5662,7 +5529,7 @@ ERROR_LIMITS:
  * @param todo pointer to a TestToDo variable which select the test to do
  * @return OK if success or an error code which specify the type of error encountered
  */
-int production_test_data(const char *path_limits, int stop_on_fail, TestToDo *todo)
+int production_test_data(char *path_limits, int stop_on_fail, TestToDo *todo)
 {
 	int res = OK, ret;
 
@@ -5673,7 +5540,7 @@ int production_test_data(const char *path_limits, int stop_on_fail, TestToDo *to
 		return (ERROR_OP_NOT_ALLOW | ERROR_PROD_TEST_DATA);
 	}
 
-	logError(1, "%s DATA Production test is starting...,path_limits:%s\n", tag, path_limits);
+	logError(1, "%s DATA Production test is starting...\n", tag);
 	ret = production_test_ms_raw(path_limits, stop_on_fail, todo);
 	res |= ret;
 
@@ -5739,7 +5606,7 @@ END:
  * @param file pointer to the LimitFile struct which will contains the limits data
  * @return OK if success or an error code which specify the type of error encountered
  */
-int getLimitsFile(const char *path, LimitFile *file)
+int getLimitsFile(char *path, LimitFile *file)
 {
 	const struct firmware *fw = NULL;
 	struct device *dev = NULL;
@@ -5873,7 +5740,7 @@ int freeCurrentLimitsFile(void)
  * @param column pointer to a int variable which will contain the number of column of data
  * @return OK if success or an error code which specify the type of error encountered
  */
-int parseProductionTestLimits(const char *path, LimitFile *file, char *label,
+int parseProductionTestLimits(char *path, LimitFile *file, char *label,
 			      int **data, int *row, int *column)
 {
 	int find = 0;
@@ -5891,7 +5758,7 @@ int parseProductionTestLimits(const char *path, LimitFile *file, char *label,
 		logError(0,
 			 "%s No limit File data passed... try to get them from the system!\n",
 			 tag);
-		ret = getLimitsFile(path, &limit_file);
+		ret = getLimitsFile(LIMITS_FILE, &limit_file);
 
 		if (ret < OK) {
 			logError(1,

@@ -1,14 +1,23 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright(C) 2015 Linaro Limited. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  * Author: Mathieu Poirier <mathieu.poirier@linaro.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _CORESIGHT_TMC_H
 #define _CORESIGHT_TMC_H
 
-#include <linux/dma-mapping.h>
 #include <linux/miscdevice.h>
 #include <linux/delay.h>
 #include <asm/cacheflush.h>
@@ -94,6 +103,11 @@
 #define TMC_FFCR_TRIGON_TRIGIN	BIT(8)
 #define TMC_FFCR_STOP_ON_FLUSH	BIT(12)
 
+#define TMC_ETR_SG_ENT_TO_BLK(phys_pte)	(((phys_addr_t)phys_pte >> 4)	\
+					 << PAGE_SHIFT)
+#define TMC_ETR_SG_ENT(phys_pte)	(((phys_pte >> PAGE_SHIFT) << 4) | 0x2)
+#define TMC_ETR_SG_NXT_TBL(phys_pte)	(((phys_pte >> PAGE_SHIFT) << 4) | 0x3)
+#define TMC_ETR_SG_LST_ENT(phys_pte)	(((phys_pte >> PAGE_SHIFT) << 4) | 0x1)
 
 #define TMC_DEVID_NOSCAT	BIT(24)
 
@@ -140,12 +154,15 @@ enum tmc_mem_intf_width {
 #define CORESIGHT_SOC_600_ETR_CAPS	\
 	(TMC_ETR_SAVE_RESTORE | TMC_ETR_AXI_ARCACHE)
 
-enum etr_mode {
-	ETR_MODE_FLAT,		/* Uses contiguous flat buffer */
-	ETR_MODE_ETR_SG,	/* Uses in-built TMC ETR SG mechanism */
-	ETR_MODE_CATU,		/* Use SG mechanism in CATU */
+enum tmc_etr_mem_type {
+	TMC_ETR_MEM_TYPE_CONTIG,
+	TMC_ETR_MEM_TYPE_SG,
 };
 
+static const char * const str_tmc_etr_mem_type[] = {
+	[TMC_ETR_MEM_TYPE_CONTIG]	= "contig",
+	[TMC_ETR_MEM_TYPE_SG]		= "sg",
+};
 enum tmc_etr_out_mode {
 	TMC_ETR_OUT_MODE_NONE,
 	TMC_ETR_OUT_MODE_MEM,
@@ -170,36 +187,6 @@ struct tmc_etr_bam_data {
 	struct sps_mem_buffer	data_fifo;
 	bool			enable;
 };
-struct etr_buf_operations;
-
-struct etr_flat_buf {
-	struct device	*dev;
-	dma_addr_t	daddr;
-	void		*vaddr;
-	size_t		size;
-};
-
-/**
- * struct etr_buf - Details of the buffer used by ETR
- * @mode	: Mode of the ETR buffer, contiguous, Scatter Gather etc.
- * @full	: Trace data overflow
- * @size	: Size of the buffer.
- * @hwaddr	: Address to be programmed in the TMC:DBA{LO,HI}
- * @offset	: Offset of the trace data in the buffer for consumption.
- * @len		: Available trace data @buf (may round up to the beginning).
- * @ops		: ETR buffer operations for the mode.
- * @private	: Backend specific information for the buf
- */
-struct etr_buf {
-	enum etr_mode			mode;
-	bool				full;
-	ssize_t				size;
-	dma_addr_t			hwaddr;
-	unsigned long			offset;
-	s64				len;
-	const struct etr_buf_operations	*ops;
-	void				*private;
-};
 
 /**
  * struct tmc_drvdata - specifics associated to an TMC component
@@ -208,10 +195,11 @@ struct etr_buf {
  * @csdev:	component vitals needed by the framework.
  * @miscdev:	specifics to handle "/dev/xyz.tmc" entry.
  * @spinlock:	only one at a time pls.
- * @buf:	Snapshot of the trace data for ETF/ETB.
- * @etr_buf:	details of buffer used in TMC-ETR
- * @len:	size of the available trace for ETF/ETB.
- * @size:	trace buffer size for this TMC (common for all modes).
+ * @buf:	area of memory where trace data get sent.
+ * @paddr:	DMA start location in RAM.
+ * @vaddr:	virtual representation of @paddr.
+ * @size:	trace buffer size.
+ * @len:	size of the available trace.
  * @mode:	how this TMC is being used.
  * @config_type: TMC variant, must be of type @tmc_config_type.
  * @memwidth:	width of the memory interface databus, in bytes.
@@ -226,70 +214,35 @@ struct tmc_drvdata {
 	struct miscdevice	miscdev;
 	spinlock_t		spinlock;
 	bool			reading;
-	union {
-		char		*buf;		/* TMC ETB */
-		struct etr_buf	*etr_buf;	/* TMC ETR */
-	};
-	u32			len;
+	bool			enable;
+	char			*buf;
+	dma_addr_t		paddr;
+	void			*vaddr;
 	u32			size;
+	u32			len;
 	u32			mode;
 	enum tmc_config_type	config_type;
 	enum tmc_mem_intf_width	memwidth;
 	struct mutex		mem_lock;
+	u32			mem_size;
 	u32			trigger_cntr;
+	enum tmc_etr_mem_type	mem_type;
+	enum tmc_etr_mem_type	memtype;
 	u32			etr_caps;
-	struct coresight_csr	*csr;
-	const char		*csr_name;
-	bool			enable;
+	u32			delta_bottom;
+	int			sg_blk_num;
+	enum tmc_etr_out_mode	out_mode;
 	struct usb_qdss_ch	*usbch;
 	struct tmc_etr_bam_data	*bamdata;
+	bool			sticky_enable;
 	bool			enable_to_bam;
 	struct coresight_cti	*cti_flush;
 	struct coresight_cti	*cti_reset;
-	enum tmc_etr_out_mode	out_mode;
+	struct coresight_csr	*csr;
+	const char		*csr_name;
 	struct byte_cntr	*byte_cntr;
 	struct dma_iommu_mapping *iommu_mapping;
-};
-
-struct etr_buf_operations {
-	int (*alloc)(struct tmc_drvdata *drvdata, struct etr_buf *etr_buf,
-		     int node, void **pages);
-	void (*sync)(struct etr_buf *etr_buf, u64 rrp, u64 rwp);
-	ssize_t (*get_data)(struct etr_buf *etr_buf, u64 offset, size_t len,
-			    char **bufpp);
-	void (*free)(struct etr_buf *etr_buf);
-};
-
-/**
- * struct tmc_pages - Collection of pages used for SG.
- * @nr_pages:		Number of pages in the list.
- * @daddrs:		Array of DMA'able page address.
- * @pages:		Array pages for the buffer.
- */
-struct tmc_pages {
-	int nr_pages;
-	dma_addr_t	*daddrs;
-	struct page	**pages;
-};
-
-/*
- * struct tmc_sg_table - Generic SG table for TMC
- * @dev:		Device for DMA allocations
- * @table_vaddr:	Contiguous Virtual address for PageTable
- * @data_vaddr:		Contiguous Virtual address for Data Buffer
- * @table_daddr:	DMA address of the PageTable base
- * @node:		Node for Page allocations
- * @table_pages:	List of pages & dma address for Table
- * @data_pages:		List of pages & dma address for Data
- */
-struct tmc_sg_table {
-	struct device *dev;
-	void *table_vaddr;
-	void *data_vaddr;
-	dma_addr_t table_daddr;
-	int node;
-	struct tmc_pages table_pages;
-	struct tmc_pages data_pages;
+	bool			force_reg_dump;
 };
 
 /* Generic functions */
@@ -304,16 +257,15 @@ int tmc_read_unprepare_etb(struct tmc_drvdata *drvdata);
 extern const struct coresight_ops tmc_etb_cs_ops;
 extern const struct coresight_ops tmc_etf_cs_ops;
 
-ssize_t tmc_etb_get_sysfs_trace(struct tmc_drvdata *drvdata,
-				loff_t pos, size_t len, char **bufpp);
 /* ETR functions */
+void tmc_etr_sg_compute_read(struct tmc_drvdata *drvdata, loff_t *ppos,
+			     char **bufpp, size_t *len);
 int tmc_read_prepare_etr(struct tmc_drvdata *drvdata);
 int tmc_read_unprepare_etr(struct tmc_drvdata *drvdata);
-void tmc_free_etr_buf(struct etr_buf *etr_buf);
 void __tmc_etr_disable_to_bam(struct tmc_drvdata *drvdata);
 void tmc_etr_bam_disable(struct tmc_drvdata *drvdata);
 void tmc_etr_enable_hw(struct tmc_drvdata *drvdata);
-void tmc_etr_disable_hw(struct tmc_drvdata *drvdata, bool flush);
+void tmc_etr_disable_hw(struct tmc_drvdata *drvdata);
 void usb_notifier(void *priv, unsigned int event, struct qdss_request *d_req,
 		  struct usb_qdss_ch *ch);
 int tmc_etr_bam_init(struct amba_device *adev,
@@ -321,12 +273,11 @@ int tmc_etr_bam_init(struct amba_device *adev,
 extern struct byte_cntr *byte_cntr_init(struct amba_device *adev,
 					struct tmc_drvdata *drvdata);
 extern const struct coresight_ops tmc_etr_cs_ops;
-ssize_t tmc_etr_get_sysfs_trace(struct tmc_drvdata *drvdata,
-				loff_t pos, size_t len, char **bufpp);
-ssize_t tmc_etr_buf_get_data(struct etr_buf *etr_buf,
-				u64 offset, size_t len, char **bufpp);
-int tmc_etr_switch_mode(struct tmc_drvdata *drvdata, const char *out_mode);
-long tmc_sg_get_rwp_offset(struct tmc_drvdata *drvdata);
+extern void tmc_etr_sg_rwp_pos(struct tmc_drvdata *drvdata, phys_addr_t rwp);
+extern void tmc_etr_free_mem(struct tmc_drvdata *drvdata);
+extern int tmc_etr_alloc_mem(struct tmc_drvdata *drvdata);
+
+extern const struct coresight_ops tmc_etr_cs_ops;
 
 #define TMC_REG_PAIR(name, lo_off, hi_off)				\
 static inline u64							\
@@ -360,24 +311,5 @@ static inline bool tmc_etr_has_cap(struct tmc_drvdata *drvdata, u32 cap)
 {
 	return !!(drvdata->etr_caps & cap);
 }
-
-struct tmc_sg_table *tmc_alloc_sg_table(struct device *dev,
-					int node,
-					int nr_tpages,
-					int nr_dpages,
-					void **pages);
-void tmc_free_sg_table(struct tmc_sg_table *sg_table);
-void tmc_sg_table_sync_table(struct tmc_sg_table *sg_table);
-void tmc_sg_table_sync_data_range(struct tmc_sg_table *table,
-				  u64 offset, u64 size);
-ssize_t tmc_sg_table_get_data(struct tmc_sg_table *sg_table,
-			      u64 offset, size_t len, char **bufpp);
-static inline unsigned long
-tmc_sg_table_buf_size(struct tmc_sg_table *sg_table)
-{
-	return sg_table->data_pages.nr_pages << PAGE_SHIFT;
-}
-
-struct coresight_device *tmc_etr_get_catu_device(struct tmc_drvdata *drvdata);
 
 #endif

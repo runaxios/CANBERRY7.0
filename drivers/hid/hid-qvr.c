@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -46,8 +44,6 @@
 #include "hid-ids.h"
 #include "hid-qvr.h"
 #include "hid-trace.h"
-
-#define WAIT_EVENT_INT_TOUT 20
 
 #define QVR_START_IMU		_IO('q', 1)
 #define QVR_STOP_IMU		_IO('q', 2)
@@ -104,6 +100,10 @@ struct qvr_external_sensor {
 	int fd;
 };
 
+const static int msg_size = 368;
+const static int hid_request_report_id = 2;
+const static int hid_request_report_size = 64;
+
 static DECLARE_WAIT_QUEUE_HEAD(wq);
 static struct qvr_external_sensor qvr_external_sensor;
 
@@ -117,18 +117,17 @@ static int read_calibration_len(void)
 	if (hid_buf == NULL)
 		return -ENOMEM;
 
-	hid_buf[0] = QVR_HID_REPORT_ID_CAL;
-	hid_buf[1] = QVR_CMD_ID_CALIBRATION_DATA_SIZE;
+	hid_buf[0] = 2;
+	hid_buf[1] = 20;
 
 	ret = hid_hw_raw_request(sensor->hdev, hid_buf[0],
 		hid_buf,
-		QVR_HID_REQUEST_REPORT_SIZE,
+		hid_request_report_size,
 		HID_FEATURE_REPORT,
 		HID_REQ_SET_REPORT);
 
 	ret = wait_event_interruptible_timeout(wq,
-		sensor->calib_data_len != -1,
-		msecs_to_jiffies(WAIT_EVENT_INT_TOUT));
+		sensor->calib_data_len != -1, msecs_to_jiffies(1000));
 	if (ret == 0) {
 		kfree(hid_buf);
 		return -ETIME;
@@ -147,7 +146,7 @@ static uint8_t *read_calibration_data(void)
 	uint8_t *complete_data = NULL;
 
 	if (sensor->calib_data_len < 0) {
-		pr_err("%s: calibration data len missing\n", __func__);
+		pr_err("%s: calibration data len missing", __func__);
 		return NULL;
 	}
 
@@ -155,8 +154,8 @@ static uint8_t *read_calibration_data(void)
 	if (hid_buf == NULL)
 		return NULL;
 
-	hid_buf[0] = QVR_HID_REPORT_ID_CAL;
-	hid_buf[1] = QVR_CMD_ID_CALIBRATION_BLOCK_DATA;
+	hid_buf[0] = 2;
+	hid_buf[1] = 21;
 
 	complete_data = kzalloc(sensor->calib_data_len, GFP_KERNEL);
 	if (complete_data == NULL) {
@@ -168,14 +167,13 @@ static uint8_t *read_calibration_data(void)
 		sensor->calib_data_recv = 0;
 		ret = hid_hw_raw_request(sensor->hdev, hid_buf[0],
 			hid_buf,
-			QVR_HID_REQUEST_REPORT_SIZE,
+			hid_request_report_size,
 			HID_FEATURE_REPORT,
 			HID_REQ_SET_REPORT);
 		ret = wait_event_interruptible_timeout(wq,
-			sensor->calib_data_recv == 1,
-			msecs_to_jiffies(WAIT_EVENT_INT_TOUT));
+			sensor->calib_data_recv == 1, msecs_to_jiffies(1000));
 		if (ret == 0) {
-			pr_err("%s:get calibration data timeout\n", __func__);
+			pr_err("%s:get calibration data timeout", __func__);
 			kfree(hid_buf);
 			kfree(complete_data);
 			return NULL;
@@ -211,25 +209,25 @@ static int control_imu_stream(bool status)
 	if (hid_buf == NULL)
 		return -ENOMEM;
 
-	hid_buf[0] = QVR_HID_REPORT_ID_CAL;
-	hid_buf[1] = QVR_CMD_ID_IMU_CONTROL;
+	hid_buf[0] = 2;
+	hid_buf[1] = 25;
 	hid_buf[2] = status;
 
 	ret = hid_hw_raw_request(sensor->hdev, hid_buf[0],
 		hid_buf,
-		QVR_HID_REQUEST_REPORT_SIZE,
+		hid_request_report_size,
 		HID_FEATURE_REPORT,
 		HID_REQ_SET_REPORT);
 	ret = wait_event_interruptible_timeout(wq, sensor->ext_ack == 1,
-		msecs_to_jiffies(WAIT_EVENT_INT_TOUT));
-	if (!ret && status) {
+		msecs_to_jiffies(1000));
+	if (ret && status) {
 		pr_debug("qvr: falling back - start IMU stream failed\n");
-		hid_buf[0] = QVR_HID_REPORT_ID_CAL;
-		hid_buf[1] = QVR_CMD_ID_IMU_CONTROL_FALLBACK;
+		hid_buf[0] = hid_request_report_id;
+		hid_buf[1] = 7;
 		ret = hid_hw_raw_request(sensor->hdev, hid_buf[0], hid_buf,
-			QVR_HID_REQUEST_REPORT_SIZE,
-			HID_FEATURE_REPORT,
-			HID_REQ_SET_REPORT);
+				hid_request_report_size,
+				HID_FEATURE_REPORT,
+				HID_REQ_SET_REPORT);
 	}
 	kfree(hid_buf);
 	if (ret > 0)
@@ -248,30 +246,30 @@ static int qvr_send_package_wrap(u8 *message, int msize, struct hid_device *hid)
 	struct external_imu_format imuData = { 0 };
 	struct qvr_buf_index *index_buf;
 
-	if (msize != sizeof(struct external_imu_format)) {
-		pr_err("%s: data size mismatch %d\n", __func__, msize);
-		return -EPROTO;
-	}
-
-	memcpy((void *)&imuData, (void *)message,
-		sizeof(struct external_imu_format));
+	/*
+	 * Actual message size is 369 bytes
+	 * to make it 8 byte aligned we created a structure of size 368 bytes.
+	 * Ignoring the first byte 'report id' (which is always 1)
+	 *
+	 */
+	memcpy((void *)&imuData, (void *)message + 1, msg_size);
 
 	if (!sensor->ts_base)
 		sensor->ts_base = ktime_to_ns(ktime_get_boottime());
 	if (!sensor->ts_offset)
 		sensor->ts_offset = imuData.gts0;
 	index_buf = (struct qvr_buf_index *)((uintptr_t)sensor->vaddr +
-		(sensor->vsize / 2) + (8 * sizeof(*sensor_buf)));
+			(sensor->vsize / 2) + (8 * sizeof(*sensor_buf)));
 	sensor_buf = (struct qvr_sensor_t *)((uintptr_t)sensor->vaddr +
-		(sensor->vsize / 2));
+			(sensor->vsize / 2));
 
 	data = (struct qvr_sensor_t *)&(sensor_buf[buf_index]);
 	if (sensor->ts_offset > imuData.gts0)
 		data->ats = sensor->ts_base +
-			sensor->ts_offset - imuData.gts0;
+				((sensor->ts_offset - imuData.gts0) * 100);
 	else
 		data->ats = sensor->ts_base +
-			imuData.gts0 - sensor->ts_offset;
+				((imuData.gts0 - sensor->ts_offset) * 100);
 	if (imuData.mts0 == 0)
 		data->mts = 0;
 	else
@@ -377,7 +375,7 @@ static ssize_t fd_show(struct kobject *kobj,
 	struct kobj_attribute *attr,
 	char *buf)
 {
-	return snprintf(buf, 16, "%d\n", qvr_external_sensor.fd);
+	return snprintf(buf, sizeof(buf), "%d\n", qvr_external_sensor.fd);
 }
 
 static ssize_t fd_store(struct kobject *kobj,
@@ -416,7 +414,7 @@ static ssize_t ts_base_store(struct kobject *kobj,
 static ssize_t ts_offset_show(struct kobject *kobj,
 	struct kobj_attribute *attr, char *buf)
 {
-	return snprintf(buf, 16, "%lld\n", qvr_external_sensor.ts_offset);
+	return snprintf(buf, 16, "%lld\n", qvr_external_sensor.ts_offset * 100);
 }
 
 static ssize_t ts_offset_store(struct kobject *kobj,
@@ -459,17 +457,17 @@ static int qvr_external_sensor_probe(struct hid_device *hdev,
 
 	ret = register_smp2p(&hdev->dev, node_name, &sensor->gpio_info_out);
 	if (ret) {
-		pr_err("%s: register_smp2p failed\n", __func__);
+		pr_err("%s: register_smp2p failed", __func__);
 		goto err_free;
 	}
 	ret = hid_open_report(hdev);
 	if (ret) {
-		pr_err("%s: hid_open_report failed\n", __func__);
+		pr_err("%s: hid_open_report failed", __func__);
 		goto err_free;
 	}
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	if (ret) {
-		pr_err("%s: hid_hw_start failed\n", __func__);
+		pr_err("%s: hid_hw_start failed", __func__);
 		goto err_free;
 	}
 	sensor->device = &hdev->dev;
@@ -502,7 +500,7 @@ static long qvr_external_sensor_ioctl(struct file *file, unsigned int cmd,
 	int ret;
 
 	if (sensor->device == NULL) {
-		pr_err("%s: device not connected\n", __func__);
+		pr_err("%s: device not connected", __func__);
 		return -EINVAL;
 	}
 
@@ -519,7 +517,7 @@ static long qvr_external_sensor_ioctl(struct file *file, unsigned int cmd,
 		if (ret < 0)
 			return ret;
 		if (copy_to_user(argp, &sensor->calib_data_len,
-				sizeof(sensor->calib_data_len)))
+					sizeof(sensor->calib_data_len)))
 			return -EFAULT;
 		return 0;
 	case QVR_READ_CALIB_DATA:
@@ -536,7 +534,7 @@ static long qvr_external_sensor_ioctl(struct file *file, unsigned int cmd,
 		kfree(calib_data);
 		return 0;
 	default:
-		pr_err("%s: wrong command\n", __func__);
+		pr_err("%s: wrong command", __func__);
 		return -EINVAL;
 
 	}
@@ -582,7 +580,6 @@ static void qvr_external_sensor_device_remove(struct hid_device *hdev)
 static struct hid_device_id qvr_external_sensor_table[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_QVR5, USB_DEVICE_ID_QVR5) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_QVR32A, USB_DEVICE_ID_QVR32A) },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_NREAL, USB_DEVICE_ID_NREAL) },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, qvr_external_sensor_table);
@@ -624,14 +621,14 @@ static int __init qvr_external_sensor_init(void)
 
 	ret = alloc_chrdev_region(&sensor->dev_no, 0, 1, "qvr_external_sensor");
 	if (ret < 0) {
-		pr_err("%s: alloc_chrdev_region failed\n");
+		pr_err("%s: alloc_chrdev_region failed");
 		return ret;
 	}
 	cdev_init(&sensor->cdev, &qvr_external_sensor_ops);
 	ret = cdev_add(&sensor->cdev, sensor->dev_no, 1);
 
 	if (ret < 0) {
-		pr_err("%s: cdev_add failed\n");
+		pr_err("%s: cdev_add failed");
 		return ret;
 	}
 	sensor->class = class_create(THIS_MODULE, "qvr_external_sensor");
@@ -641,8 +638,8 @@ static int __init qvr_external_sensor_init(void)
 		return -ret;
 	}
 	sensor->dev = device_create(sensor->class, NULL,
-		MKDEV(MAJOR(sensor->dev_no), 0), NULL,
-		"qvr_external_sensor_ioctl");
+				MKDEV(MAJOR(sensor->dev_no), 0), NULL,
+				"qvr_external_sensor_ioctl");
 	if (sensor->dev == NULL) {
 		class_destroy(sensor->class);
 		cdev_del(&sensor->cdev);

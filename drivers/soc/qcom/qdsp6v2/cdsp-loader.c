@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2014, 2017-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, 2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -49,7 +57,7 @@ static int cdsp_loader_do(struct platform_device *pdev)
 	const char *img_name;
 
 	if (!pdev) {
-		pr_err("%s: Platform device null\n", __func__);
+		dev_err(&pdev->dev, "%s: Platform device null\n", __func__);
 		goto fail;
 	}
 
@@ -72,16 +80,14 @@ static int cdsp_loader_do(struct platform_device *pdev)
 			priv = platform_get_drvdata(pdev);
 			if (!priv) {
 				dev_err(&pdev->dev,
-				"%s: Private data get failed\n", __func__);
+				" %s: Private data get failed\n", __func__);
 				goto fail;
 			}
 
-			dev_dbg(&pdev->dev, "%s: calling subsystem_get on %s\n",
-					__func__, img_name);
 			priv->pil_h = subsystem_get("cdsp");
 			if (IS_ERR(priv->pil_h)) {
-				dev_err(&pdev->dev, "%s: subsystem_get failed with error %d\n",
-					__func__, (int)(PTR_ERR(priv->pil_h)));
+				dev_err(&pdev->dev, "%s: pil get failed,\n",
+					__func__);
 				goto fail;
 			}
 
@@ -89,7 +95,7 @@ static int cdsp_loader_do(struct platform_device *pdev)
 			cdsp_state = CDSP_SUBSYS_LOADED;
 		} else if (cdsp_state == CDSP_SUBSYS_LOADED) {
 			dev_dbg(&pdev->dev,
-			"%s: CDSP state = 0x%x\n", __func__, cdsp_state);
+			"%s: CDSP state = %x\n", __func__, cdsp_state);
 		}
 
 		dev_dbg(&pdev->dev, "%s: CDSP image is loaded\n", __func__);
@@ -97,11 +103,7 @@ static int cdsp_loader_do(struct platform_device *pdev)
 	}
 
 fail:
-	if (pdev)
-		dev_err(&pdev->dev,
-			"%s: CDSP image loading failed\n", __func__);
-	else
-		pr_err("%s: CDSP image loading failed\n", __func__);
+	dev_err(&pdev->dev, "%s: CDSP image loading failed\n", __func__);
 	return rc;
 }
 
@@ -122,7 +124,7 @@ static ssize_t cdsp_boot_store(struct kobject *kobj,
 		pr_debug("%s: going to call cdsp_loader_do\n", __func__);
 		cdsp_loader_do(cdsp_private);
 	} else if (boot == IMAGE_UNLOAD_CMD) {
-		pr_debug("%s: going to call cdsp_unloader\n", __func__);
+		pr_debug("%s: going to call adsp_unloader\n", __func__);
 		cdsp_loader_unload(cdsp_private);
 	}
 	return count;
@@ -138,7 +140,7 @@ static void cdsp_loader_unload(struct platform_device *pdev)
 		return;
 
 	if (priv->pil_h) {
-		dev_dbg(&pdev->dev, "%s: calling subsystem_put\n", __func__);
+		dev_dbg(&pdev->dev, "%s: calling subsystem put\n", __func__);
 		subsystem_put(priv->pil_h);
 		priv->pil_h = NULL;
 	}
@@ -246,6 +248,7 @@ MODULE_DEVICE_TABLE(of, cdsp_loader_dt_match);
 static struct platform_driver cdsp_loader_driver = {
 	.driver = {
 		.name = "cdsp-loader",
+		.owner = THIS_MODULE,
 		.of_match_table = cdsp_loader_dt_match,
 	},
 	.probe = cdsp_loader_probe,

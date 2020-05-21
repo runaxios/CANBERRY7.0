@@ -2,7 +2,7 @@
  * Backlight Lowlevel Control Abstraction
  *
  * Copyright (C) 2003,2004 Hewlett-Packard Company
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  */
 
@@ -25,6 +25,7 @@
 static struct list_head backlight_dev_list;
 static struct mutex backlight_dev_list_mutex;
 static struct blocking_notifier_head backlight_notifier;
+static int bl_event;
 
 static const char *const backlight_types[] = {
 	[BACKLIGHT_RAW] = "raw",
@@ -190,6 +191,13 @@ int backlight_device_set_brightness(struct backlight_device *bd,
 					bd->use_count--;
 			}
 			pr_debug("set brightness to %lu\n", brightness);
+			if (!brightness) {
+				bl_event = BACKLIGHT_OFF;
+				blocking_notifier_call_chain(&backlight_notifier, BACKLIGHT_UPDATED, &bl_event);
+			} else if (bl_event != BACKLIGHT_ON) {
+				bl_event = BACKLIGHT_ON;
+				blocking_notifier_call_chain(&backlight_notifier, BACKLIGHT_UPDATED, &bl_event);
+			}
 			bd->props.brightness = brightness;
 			rc = backlight_update_status(bd);
 		}
@@ -320,7 +328,9 @@ static ssize_t brightness_clone_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	bd->props.brightness_clone = brightness;
+	bd->props.brightness_clone = (brightness <= bd->thermal_brightness_limit) ?
+				brightness :
+				bd->thermal_brightness_limit;
 
 	envp[0] = "SOURCE=sysfs";
 	envp[1] = NULL;
@@ -686,79 +696,6 @@ struct backlight_device *of_find_backlight_by_node(struct device_node *node)
 }
 EXPORT_SYMBOL(of_find_backlight_by_node);
 #endif
-
-/**
- * of_find_backlight - Get backlight device
- * @dev: Device
- *
- * This function looks for a property named 'backlight' on the DT node
- * connected to @dev and looks up the backlight device.
- *
- * Call backlight_put() to drop the reference on the backlight device.
- *
- * Returns:
- * A pointer to the backlight device if found.
- * Error pointer -EPROBE_DEFER if the DT property is set, but no backlight
- * device is found.
- * NULL if there's no backlight property.
- */
-struct backlight_device *of_find_backlight(struct device *dev)
-{
-	struct backlight_device *bd = NULL;
-	struct device_node *np;
-
-	if (!dev)
-		return NULL;
-
-	if (IS_ENABLED(CONFIG_OF) && dev->of_node) {
-		np = of_parse_phandle(dev->of_node, "backlight", 0);
-		if (np) {
-			bd = of_find_backlight_by_node(np);
-			of_node_put(np);
-			if (!bd)
-				return ERR_PTR(-EPROBE_DEFER);
-			/*
-			 * Note: gpio_backlight uses brightness as
-			 * power state during probe
-			 */
-			if (!bd->props.brightness)
-				bd->props.brightness = bd->props.max_brightness;
-		}
-	}
-
-	return bd;
-}
-EXPORT_SYMBOL(of_find_backlight);
-
-static void devm_backlight_release(void *data)
-{
-	backlight_put(data);
-}
-
-/**
- * devm_of_find_backlight - Resource-managed of_find_backlight()
- * @dev: Device
- *
- * Device managed version of of_find_backlight().
- * The reference on the backlight device is automatically
- * dropped on driver detach.
- */
-struct backlight_device *devm_of_find_backlight(struct device *dev)
-{
-	struct backlight_device *bd;
-	int ret;
-
-	bd = of_find_backlight(dev);
-	if (IS_ERR_OR_NULL(bd))
-		return bd;
-	ret = devm_add_action(dev, devm_backlight_release, bd);
-	if (ret) {
-		backlight_put(bd);
-		return ERR_PTR(ret);
-	}
-	return bd;
-}
-EXPORT_SYMBOL(devm_of_find_backlight);
 
 static void __exit backlight_class_exit(void)
 {

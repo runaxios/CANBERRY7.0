@@ -15,6 +15,10 @@
 #include <linux/if_vlan.h>
 #include <linux/vmalloc.h>
 #include <linux/interrupt.h>
+#include <linux/cpu.h>
+#include <uapi/linux/ip.h>
+#include <uapi/linux/tcp.h>
+#include <uapi/linux/udp.h>
 
 #include "atl_trace.h"
 
@@ -383,7 +387,7 @@ static bool atl_clean_tx(struct atl_desc_ring *ring)
 
 		smp_mb();
 		if (__netif_subqueue_stopped(ndev, ring->qvec->idx) &&
-			test_bit(ATL_ST_UP, &nic->state)) {
+			test_bit(ATL_ST_RINGS_RUNNING, &nic->hw.state)) {
 			atl_nic_dbg("restarting tx queue\n");
 			netif_wake_subqueue(ndev, ring->qvec->idx);
 			atl_update_ring_stat(ring, tx.tx_restart, 1);
@@ -393,12 +397,72 @@ static bool atl_clean_tx(struct atl_desc_ring *ring)
 	return !!budget;
 }
 
+/* work around HW bugs in checksum calculation:
+ * - packets less than 60 octets
+ * - ip, tcp or udp checksum is 0xFFFF
+ */
+static bool atl_checksum_workaround(struct sk_buff *skb,
+				    struct atl_rx_desc_wb *desc)
+{
+	int ip_header_offset = 14;
+	int l4_header_offset = 0;
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+	struct udphdr *udp;
+
+	if (desc->pkt_len <= 60)
+		return true;
+
+	if ((desc->pkt_type & atl_rx_pkt_type_vlan_msk) ==
+	    atl_rx_pkt_type_vlan)
+		ip_header_offset += 4;
+
+	if ((desc->pkt_type & atl_rx_pkt_type_vlan_msk) ==
+	    atl_rx_pkt_type_dbl_vlan)
+		ip_header_offset += 8;
+
+	switch (desc->pkt_type & atl_rx_pkt_type_l3_msk) {
+	case atl_rx_pkt_type_ipv4:
+		ip = (struct iphdr *) &skb->data[ip_header_offset];
+
+		if (ip->check == 0xFFFF)
+			return true;
+		l4_header_offset = ip->ihl << 2;
+		break;
+	case atl_rx_pkt_type_ipv6:
+		l4_header_offset = ip_header_offset + sizeof(struct ipv6hdr);
+		break;
+	default:
+		return false;
+	}
+
+	switch (desc->pkt_type & atl_rx_pkt_type_l4_msk) {
+	case atl_rx_pkt_type_tcp:
+		tcp = (struct tcphdr *) &skb->data[ip_header_offset +
+						  l4_header_offset];
+
+		if (tcp->check == 0xFFFF)
+			return true;
+		break;
+	case atl_rx_pkt_type_udp:
+		udp = (struct udphdr *) &skb->data[ip_header_offset +
+						  l4_header_offset];
+		if (udp->check == 0xFFFF)
+			return true;
+		break;
+	default:
+		return false;
+	}
+
+	return false;
+}
+
 static bool atl_rx_checksum(struct sk_buff *skb, struct atl_rx_desc_wb *desc,
 	struct atl_desc_ring *ring)
 {
 	struct atl_nic *nic = ring->qvec->nic;
 	struct net_device *ndev = nic->ndev;
-	int csum_ok = 1, recheck = 0;
+	int csum_ok = 1;
 
 	skb_checksum_none_assert(skb);
 
@@ -425,7 +489,6 @@ static bool atl_rx_checksum(struct sk_buff *skb, struct atl_rx_desc_wb *desc,
 	switch (desc->pkt_type & atl_rx_pkt_type_l4_msk) {
 	case atl_rx_pkt_type_tcp:
 	case atl_rx_pkt_type_udp:
-		recheck = desc->pkt_len <= 60;
 		csum_ok &= !(desc->rx_stat & atl_rx_stat_l4_err);
 		break;
 	default:
@@ -435,8 +498,10 @@ static bool atl_rx_checksum(struct sk_buff *skb, struct atl_rx_desc_wb *desc,
 	if (csum_ok) {
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 		return true;
-	} else if (recheck)
-		return true;
+	} else {
+		if (atl_checksum_workaround(skb, desc))
+			return true;
+	}
 
 	atl_update_ring_stat(ring, rx.csum_err, 1);
 
@@ -500,18 +565,19 @@ module_param_named(rx_linear, atl_rx_linear, uint, 0444);
  * for the target page.
  */
 static int atl_get_page(struct atl_pgref *pgref, unsigned int order,
-	struct device *dev)
+	struct device *dev, bool atomic)
 {
 	struct atl_rxpage *rxpage;
 	struct page *page;
 	dma_addr_t daddr;
 	int ret = -ENOMEM;
+	gfp_t flags = atomic ? GFP_ATOMIC | __GFP_NOWARN : GFP_KERNEL;
 
-	rxpage = kmalloc(sizeof(*rxpage), GFP_ATOMIC | __GFP_NOWARN);
+	rxpage = kmalloc(sizeof(*rxpage), flags);
 	if (unlikely(!rxpage))
 		return ret;
 
-	page = dev_alloc_pages(order);
+	page = __dev_alloc_pages(flags, order);
 	if (unlikely(!page))
 		goto free_rxpage;
 
@@ -541,7 +607,7 @@ free_rxpage:
 }
 
 static int atl_get_pages(struct atl_rxbuf *rxbuf,
-	struct atl_desc_ring *ring)
+	struct atl_desc_ring *ring, bool atomic)
 {
 	int ret;
 	struct device *dev = ring->qvec->dev;
@@ -551,7 +617,8 @@ static int atl_get_pages(struct atl_rxbuf *rxbuf,
 		return 0;
 
 	if (!rxbuf->head.rxpage && !atl_rx_linear) {
-		ret = atl_get_page(&rxbuf->head, ATL_RX_HEAD_ORDER, dev);
+		ret = atl_get_page(&rxbuf->head, ATL_RX_HEAD_ORDER,
+			dev, atomic);
 		if (ret) {
 			atl_update_ring_stat(ring,
 				rx.alloc_head_page_failed, 1);
@@ -561,7 +628,8 @@ static int atl_get_pages(struct atl_rxbuf *rxbuf,
 	}
 
 	if (!rxbuf->data.rxpage) {
-		ret = atl_get_page(&rxbuf->data, ATL_RX_DATA_ORDER, dev);
+		ret = atl_get_page(&rxbuf->data, ATL_RX_DATA_ORDER,
+			dev, atomic);
 		if (ret) {
 			atl_update_ring_stat(ring,
 				rx.alloc_data_page_failed, 1);
@@ -594,14 +662,14 @@ static inline void atl_fill_rx_desc(struct atl_desc_ring *ring,
 	COMMIT_DESC(ring, ring->tail, scratch);
 }
 
-static int atl_fill_rx(struct atl_desc_ring *ring, uint32_t count)
+static int atl_fill_rx(struct atl_desc_ring *ring, uint32_t count, bool atomic)
 {
 	int ret = 0;
 
 	while (count) {
 		struct atl_rxbuf *rxbuf = &ring->rxbufs[ring->tail];
 
-		ret = atl_get_pages(rxbuf, ring);
+		ret = atl_get_pages(rxbuf, ring, atomic);
 		if (ret)
 			break;
 
@@ -844,6 +912,13 @@ static struct sk_buff *atl_process_rx_frag(struct atl_desc_ring *ring,
 	struct atl_pgref *headref = &rxbuf->head, *dataref = &rxbuf->data;
 	struct device *dev = ring->qvec->dev;
 
+	if (unlikely(wb->rdm_err)) {
+		if (skb && skb != (void *)-1l)
+			dev_kfree_skb_any(skb);
+
+		skb = (void *)-1l;
+	}
+
 	if (!skb) {
 		 /* First buffer of a packet */
 		skb = atl_init_skb(ring, rxbuf, wb);
@@ -969,7 +1044,7 @@ static int atl_clean_rx(struct atl_desc_ring *ring, int budget)
 		DECLARE_SCRATCH_DESC(scratch);
 
 		if (space >= atl_rx_refill_batch)
-			atl_fill_rx(ring, space);
+			atl_fill_rx(ring, space, true);
 
 		rxbuf = &ring->rxbufs[ring->head];
 
@@ -1062,25 +1137,24 @@ static int atl_poll(struct napi_struct *napi, int budget)
 }
 
 /* XXX NOTE: only checked on device probe for now */
-static int enable_msi = 1;
-module_param_named(msi, enable_msi, int, 0444);
+int atl_enable_msi = 1;
+module_param_named(msi, atl_enable_msi, int, 0444);
 
 static int atl_config_interrupts(struct atl_nic *nic)
 {
 	struct atl_hw *hw = &nic->hw;
 	unsigned int flags;
 	int ret;
-	struct irq_affinity iaff = {
-		.pre_vectors = ATL_NUM_NON_RING_IRQS,
-		.post_vectors = 0,
-	};
 
-	if (enable_msi) {
-		flags = PCI_IRQ_MSIX | PCI_IRQ_MSI | PCI_IRQ_AFFINITY;
-		ret = pci_alloc_irq_vectors_affinity(hw->pdev,
+	if (atl_enable_msi) {
+		int nvecs;
+
+		nvecs = min_t(int, nic->requested_nvecs, num_present_cpus());
+		flags = PCI_IRQ_MSIX | PCI_IRQ_MSI;
+		ret = pci_alloc_irq_vectors(hw->pdev,
 			ATL_NUM_NON_RING_IRQS + 1,
-			ATL_NUM_NON_RING_IRQS + nic->requested_nvecs,
-			flags, &iaff);
+			ATL_NUM_NON_RING_IRQS + nvecs,
+			flags);
 
 		/* pci_alloc_irq_vectors() never allocates less
 		 * than min_vectors
@@ -1125,16 +1199,16 @@ void atl_clear_datapath(struct atl_nic *nic)
 	 * pci_ops->remove(), without an intervening
 	 * atl_setup_datapath().
 	 */
-	if (!test_and_clear_bit(ATL_ST_CONFIGURED, &nic->state))
+	if (!test_and_clear_bit(ATL_ST_CONFIGURED, &nic->hw.state))
 		return;
 
-#ifdef ATL_COMPAT_PCI_ALLOC_IRQ_VECTORS_AFFINITY
+	atl_free_link_intr(nic);
+
 	for (i = 0; i < nic->nvecs; i++) {
 		int vector = pci_irq_vector(nic->hw.pdev,
 			i + ATL_NUM_NON_RING_IRQS);
 		irq_set_affinity_hint(vector, NULL);
 	}
-#endif
 
 	pci_free_irq_vectors(nic->hw.pdev);
 
@@ -1145,6 +1219,34 @@ void atl_clear_datapath(struct atl_nic *nic)
 		netif_napi_del(&qvecs[i].napi);
 	kfree(qvecs);
 	nic->qvecs = NULL;
+}
+
+static void atl_calc_affinities(struct atl_nic *nic)
+{
+	struct pci_dev *pdev = nic->hw.pdev;
+	int i;
+	unsigned int cpu;
+
+	get_online_cpus();
+	cpu = cpumask_first(cpu_online_mask);
+
+	for (i = 0; i < nic->nvecs; i++) {
+		cpumask_t *cpumask = &nic->qvecs[i].affinity_hint;
+		int vector;
+
+		/* If more vectors got allocated (based on
+		 * cpu_present_mask) than cpus currently online,
+		 * spread the remaining vectors among online cpus.
+		 */
+		if (cpu >= nr_cpumask_bits)
+			cpu = cpumask_first(cpu_online_mask);
+
+		cpumask_clear(cpumask);
+		cpumask_set_cpu(cpu, cpumask);
+		cpu = cpumask_next(cpu, cpu_online_mask);
+		vector = pci_irq_vector(pdev, i + ATL_NUM_NON_RING_IRQS);
+	}
+	put_online_cpus();
 }
 
 int atl_setup_datapath(struct atl_nic *nic)
@@ -1160,9 +1262,13 @@ int atl_setup_datapath(struct atl_nic *nic)
 	if (!qvec) {
 		atl_nic_err("Couldn't alloc qvecs\n");
 		ret = -ENOMEM;
-		goto exit_free;
+		goto err_alloc;
 	}
 	nic->qvecs = qvec;
+
+	ret = atl_alloc_link_intr(nic);
+	if (ret)
+		goto err_link_intr;
 
 	for (i = 0; i < nvecs; i++, qvec++) {
 		qvec->nic = nic;
@@ -1183,15 +1289,20 @@ int atl_setup_datapath(struct atl_nic *nic)
 		netif_napi_add(nic->ndev, &qvec->napi, atl_poll, 64);
 	}
 
-	atl_compat_calc_affinities(nic);
+	atl_calc_affinities(nic);
 
 	nic->max_mtu = atl_rx_linear ? ATL_MAX_RX_LINEAR_MTU : ATL_MAX_MTU;
 
-	set_bit(ATL_ST_CONFIGURED, &nic->state);
+	set_bit(ATL_ST_CONFIGURED, &nic->hw.state);
 	return 0;
 
-exit_free:
-	atl_clear_datapath(nic);
+err_link_intr:
+	kfree(nic->qvecs);
+	nic->qvecs = NULL;
+
+err_alloc:
+	pci_free_irq_vectors(nic->hw.pdev);
+
 	return ret;
 }
 
@@ -1304,6 +1415,13 @@ free:
 	return ret;
 }
 
+static void atl_set_affinity(int vector, struct atl_queue_vec *qvec)
+{
+	cpumask_t *cpumask = qvec ? &qvec->affinity_hint : NULL;
+
+	irq_set_affinity_hint(vector, cpumask);
+}
+
 static int atl_alloc_qvec_intr(struct atl_queue_vec *qvec)
 {
 	struct atl_nic *nic = qvec->nic;
@@ -1323,7 +1441,7 @@ static int atl_alloc_qvec_intr(struct atl_queue_vec *qvec)
 		return ret;
 	}
 
-	atl_compat_set_affinity(vector, qvec);
+	atl_set_affinity(vector, qvec);
 
 	return 0;
 }
@@ -1335,7 +1453,7 @@ static void atl_free_qvec_intr(struct atl_queue_vec *qvec)
 	if (!(qvec->nic->flags & ATL_FL_MULTIPLE_VECTORS))
 		return;
 
-	atl_compat_set_affinity(vector, NULL);
+	atl_set_affinity(vector, NULL);
 	free_irq(vector, &qvec->napi);
 }
 
@@ -1450,7 +1568,7 @@ static void atl_start_rx_ring(struct atl_desc_ring *ring)
 	unsigned int rx_ctl;
 
 	atl_write(hw, ATL_RING_BASE_LSW(ring), ring->hw.daddr);
-	atl_write(hw, ATL_RING_BASE_MSW(ring), ring->hw.daddr >> 32);
+	atl_write(hw, ATL_RING_BASE_MSW(ring), upper_32_bits(ring->hw.daddr));
 
 	atl_write(hw, ATL_RX_RING_TAIL(ring), ring->tail);
 	atl_write(hw, ATL_RX_RING_BUF_SIZE(ring),
@@ -1473,7 +1591,7 @@ static void atl_start_tx_ring(struct atl_desc_ring *ring)
 	struct atl_hw *hw = &nic->hw;
 
 	atl_write(hw, ATL_RING_BASE_LSW(ring), ring->hw.daddr);
-	atl_write(hw, ATL_RING_BASE_MSW(ring), ring->hw.daddr >> 32);
+	atl_write(hw, ATL_RING_BASE_MSW(ring), upper_32_bits(ring->hw.daddr));
 
 	/* Enable TSO on all active Tx rings */
 	atl_write(hw, ATL_TX_LSO_CTRL, BIT(nic->nvecs) - 1);
@@ -1496,7 +1614,7 @@ static int atl_start_qvec(struct atl_queue_vec *qvec)
 	rx->head = rx->tail = atl_read(hw, ATL_RING_HEAD(rx)) & 0x1fff;
 	tx->head = tx->tail = atl_read(hw, ATL_RING_HEAD(tx)) & 0x1fff;
 
-	ret = atl_fill_rx(rx, ring_space(rx));
+	ret = atl_fill_rx(rx, ring_space(rx), false);
 	if (ret)
 		return ret;
 
@@ -1552,6 +1670,9 @@ static void atl_set_lro(struct atl_nic *nic)
 	uint32_t val = nic->ndev->features & NETIF_F_LRO ?
 		BIT(nic->nvecs) - 1 : 0;
 
+	if (val)
+		atl_nic_warn("There are unresolved issues with LRO, enabling it isn't recommended for now\n");
+
 	atl_write_bits(hw, ATL_RX_LRO_CTRL1, 0, nic->nvecs, val);
 	atl_write_bits(hw, ATL_INTR_RSC_EN, 0, nic->nvecs, val);
 }
@@ -1563,12 +1684,17 @@ int atl_start_rings(struct atl_nic *nic)
 	struct atl_queue_vec *qvec;
 	int ret;
 
-	mask = BIT(nic->nvecs + ATL_NUM_NON_RING_IRQS) -
-		BIT(ATL_NUM_NON_RING_IRQS);
-	/* Enable auto-masking of ring interrupts on intr generation */
-	atl_set_bits(hw, ATL_INTR_AUTO_MASK, mask);
-	/* Enable status auto-clear on intr generation */
-	atl_set_bits(hw, ATL_INTR_AUTO_CLEAR, mask);
+	if (test_bit(ATL_ST_RINGS_RUNNING, &hw->state))
+		return 0;
+
+	if (nic->flags & ATL_FL_MULTIPLE_VECTORS) {
+		mask = BIT(nic->nvecs + ATL_NUM_NON_RING_IRQS) -
+			BIT(ATL_NUM_NON_RING_IRQS);
+		/* Enable auto-masking of ring interrupts on intr generation */
+		atl_set_bits(hw, ATL_INTR_AUTO_MASK, mask);
+		/* Enable status auto-clear on intr generation */
+		atl_set_bits(hw, ATL_INTR_AUTO_CLEAR, mask);
+	}
 
 	atl_set_lro(nic);
 	atl_set_rss_tbl(hw);
@@ -1579,6 +1705,9 @@ int atl_start_rings(struct atl_nic *nic)
 			goto stop;
 	}
 
+	set_bit(ATL_ST_RINGS_RUNNING, &hw->state);
+	netif_tx_start_all_queues(nic->ndev);
+
 	return 0;
 
 stop:
@@ -1588,17 +1717,28 @@ stop:
 	return ret;
 }
 
-void atl_stop_rings(struct atl_nic *nic)
+void atl_clear_rdm_cache(struct atl_nic *nic)
 {
-	struct atl_queue_vec *qvec;
 	struct atl_hw *hw = &nic->hw;
-
-	atl_for_each_qvec(nic, qvec)
-		atl_stop_qvec(qvec);
 
 	atl_write_bit(hw, 0x5a00, 0, 1);
 	udelay(10);
 	atl_write_bit(hw, 0x5a00, 0, 0);
+}
+
+void atl_stop_rings(struct atl_nic *nic)
+{
+	struct atl_queue_vec *qvec;
+
+	if (!test_and_clear_bit(ATL_ST_RINGS_RUNNING, &nic->hw.state))
+		return;
+
+	netif_tx_stop_all_queues(nic->ndev);
+
+	atl_for_each_qvec(nic, qvec)
+		atl_stop_qvec(qvec);
+
+	atl_clear_rdm_cache(nic);
 }
 
 int atl_set_features(struct net_device *ndev, netdev_features_t features)
@@ -1638,6 +1778,10 @@ void atl_update_global_stats(struct atl_nic *nic)
 {
 	int i;
 	struct atl_ring_stats stats;
+
+	if (!test_bit(ATL_ST_ENABLED, &nic->hw.state) ||
+	    test_bit(ATL_ST_RESETTING, &nic->hw.state))
+		return;
 
 	memset(&stats, 0, sizeof(stats));
 	atl_update_eth_stats(nic);

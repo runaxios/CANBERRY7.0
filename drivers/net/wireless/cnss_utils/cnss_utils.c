@@ -1,5 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2017, 2019 The Linux Foundation. All rights reserved. */
+/* Copyright (c) 2017 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #define pr_fmt(fmt) "cnss_utils: " fmt
 
@@ -56,7 +65,7 @@ int cnss_utils_set_wlan_unsafe_channel(struct device *dev,
 		return -EINVAL;
 
 	mutex_lock(&priv->unsafe_channel_list_lock);
-	if (!unsafe_ch_list || ch_count > CNSS_MAX_CH_NUM) {
+	if ((!unsafe_ch_list) || (ch_count > CNSS_MAX_CH_NUM)) {
 		mutex_unlock(&priv->unsafe_channel_list_lock);
 		return -EINVAL;
 	}
@@ -120,10 +129,11 @@ int cnss_utils_wlan_set_dfs_nol(struct device *dev,
 	if (!info || !info_len)
 		return -EINVAL;
 
-	temp = kmemdup(info, info_len, GFP_ATOMIC);
+	temp = kmalloc(info_len, GFP_ATOMIC);
 	if (!temp)
 		return -ENOMEM;
 
+	memcpy(temp, info, info_len);
 	spin_lock_bh(&priv->dfs_nol_info_lock);
 	dfs_info = &priv->dfs_nol_info;
 	old_nol_info = dfs_info->dfs_nol_info;
@@ -242,8 +252,8 @@ int cnss_utils_set_wlan_mac_address(const u8 *mac_list, const uint32_t len)
 }
 EXPORT_SYMBOL(cnss_utils_set_wlan_mac_address);
 
-int cnss_utils_set_wlan_derived_mac_address(const u8 *mac_list,
-					    const uint32_t len)
+int cnss_utils_set_wlan_derived_mac_address(
+				const u8 *mac_list, const uint32_t len)
 {
 	return set_wlan_mac_address(mac_list, len, CNSS_MAC_DERIVED);
 }
@@ -281,8 +291,8 @@ u8 *cnss_utils_get_wlan_mac_address(struct device *dev, uint32_t *num)
 }
 EXPORT_SYMBOL(cnss_utils_get_wlan_mac_address);
 
-u8 *cnss_utils_get_wlan_derived_mac_address(struct device *dev,
-					    uint32_t *num)
+u8 *cnss_utils_get_wlan_derived_mac_address(
+			struct device *dev, uint32_t *num)
 {
 	return get_wlan_mac_address(dev, num, CNSS_MAC_DERIVED);
 }
@@ -321,7 +331,7 @@ static ssize_t cnss_utils_mac_write(struct file *fp,
 	char *input, *mac_type, *mac_address;
 	u8 *dest_mac;
 	u8 val;
-	const char *delim = "\n";
+	const char *delim = " \n";
 	size_t len = 0;
 	char temp[3] = "";
 
@@ -341,7 +351,7 @@ static ssize_t cnss_utils_mac_write(struct file *fp,
 	mac_address = strsep(&input, delim);
 	if (!mac_address)
 		return -EINVAL;
-	if (strcmp("0x", mac_address)) {
+	if (strncmp("0x", mac_address, MAC_PREFIX_LEN)) {
 		pr_err("Invalid MAC prefix\n");
 		return -EINVAL;
 	}

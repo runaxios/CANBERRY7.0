@@ -19,10 +19,12 @@
 #include <crypto/algapi.h>
 #include <crypto/aes.h>
 #include <crypto/ctr.h>
-#include <crypto/gcm.h>
 #include <crypto/scatterwalk.h>
+#include <linux/delay.h>
 
 #include "ccp-crypto.h"
+
+#define	AES_GCM_IVSIZE	12
 
 static int ccp_aes_gcm_complete(struct crypto_async_request *async_req, int ret)
 {
@@ -61,19 +63,6 @@ static int ccp_aes_gcm_setkey(struct crypto_aead *tfm, const u8 *key,
 static int ccp_aes_gcm_setauthsize(struct crypto_aead *tfm,
 				   unsigned int authsize)
 {
-	switch (authsize) {
-	case 16:
-	case 15:
-	case 14:
-	case 13:
-	case 12:
-	case 8:
-	case 4:
-		break;
-	default:
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -106,9 +95,9 @@ static int ccp_aes_gcm_crypt(struct aead_request *req, bool encrypt)
 	 */
 
 	/* Prepare the IV: 12 bytes + an integer (counter) */
-	memcpy(rctx->iv, req->iv, GCM_AES_IV_SIZE);
+	memcpy(rctx->iv, req->iv, AES_GCM_IVSIZE);
 	for (i = 0; i < 3; i++)
-		rctx->iv[i + GCM_AES_IV_SIZE] = 0;
+		rctx->iv[i + AES_GCM_IVSIZE] = 0;
 	rctx->iv[AES_BLOCK_SIZE - 1] = 1;
 
 	/* Set up a scatterlist for the IV */
@@ -120,7 +109,6 @@ static int ccp_aes_gcm_crypt(struct aead_request *req, bool encrypt)
 	memset(&rctx->cmd, 0, sizeof(rctx->cmd));
 	INIT_LIST_HEAD(&rctx->cmd.entry);
 	rctx->cmd.engine = CCP_ENGINE_AES;
-	rctx->cmd.u.aes.authsize = crypto_aead_authsize(tfm);
 	rctx->cmd.u.aes.type = ctx->u.aes.type;
 	rctx->cmd.u.aes.mode = ctx->u.aes.mode;
 	rctx->cmd.u.aes.action = encrypt;
@@ -172,7 +160,7 @@ static struct aead_alg ccp_aes_gcm_defaults = {
 	.encrypt = ccp_aes_gcm_encrypt,
 	.decrypt = ccp_aes_gcm_decrypt,
 	.init = ccp_aes_gcm_cra_init,
-	.ivsize = GCM_AES_IV_SIZE,
+	.ivsize = AES_GCM_IVSIZE,
 	.maxauthsize = AES_BLOCK_SIZE,
 	.base = {
 		.cra_flags	= CRYPTO_ALG_TYPE_ABLKCIPHER |

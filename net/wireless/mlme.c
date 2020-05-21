@@ -692,7 +692,7 @@ int cfg80211_mlme_mgmt_tx(struct cfg80211_registered_device *rdev,
 	return rdev_mgmt_tx(rdev, wdev, params, cookie);
 }
 
-bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
+bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_mbm,
 		      const u8 *buf, size_t len, u32 flags)
 {
 	struct wiphy *wiphy = wdev->wiphy;
@@ -708,7 +708,7 @@ bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
 		cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE);
 	u16 stype;
 
-	trace_cfg80211_rx_mgmt(wdev, freq, sig_dbm);
+	trace_cfg80211_rx_mgmt(wdev, freq, sig_mbm);
 	stype = (le16_to_cpu(mgmt->frame_control) & IEEE80211_FCTL_STYPE) >> 4;
 
 	if (!(stypes->rx & BIT(stype))) {
@@ -735,7 +735,7 @@ bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
 
 		/* Indicate the received Action frame to user space */
 		if (nl80211_send_mgmt(rdev, wdev, reg->nlportid,
-				      freq, sig_dbm,
+				      freq, sig_mbm,
 				      buf, len, flags, GFP_ATOMIC))
 			continue;
 

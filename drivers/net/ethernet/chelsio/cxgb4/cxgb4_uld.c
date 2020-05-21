@@ -137,12 +137,13 @@ static int uldrx_handler(struct sge_rspq *q, const __be64 *rsp,
 static int alloc_uld_rxqs(struct adapter *adap,
 			  struct sge_uld_rxq_info *rxq_info, bool lro)
 {
+	struct sge *s = &adap->sge;
 	unsigned int nq = rxq_info->nrxq + rxq_info->nciq;
-	int i, err, msi_idx, que_idx = 0, bmap_idx = 0;
 	struct sge_ofld_rxq *q = rxq_info->uldrxq;
 	unsigned short *ids = rxq_info->rspq_id;
-	struct sge *s = &adap->sge;
+	unsigned int bmap_idx = 0;
 	unsigned int per_chan;
+	int i, err, msi_idx, que_idx = 0;
 
 	per_chan = rxq_info->nrxq / adap->params.nports;
 
@@ -160,10 +161,6 @@ static int alloc_uld_rxqs(struct adapter *adap,
 
 		if (msi_idx >= 0) {
 			bmap_idx = get_msix_idx_from_bmap(adap);
-			if (bmap_idx < 0) {
-				err = -ENOSPC;
-				goto freeout;
-			}
 			msi_idx = adap->msix_info_ulds[bmap_idx].idx;
 		}
 		err = t4_sge_alloc_rxq(adap, &q->rspq, false,
@@ -564,13 +561,13 @@ int t4_uld_mem_alloc(struct adapter *adap)
 	if (!adap->uld)
 		return -ENOMEM;
 
-	s->uld_rxq_info = kcalloc(CXGB4_ULD_MAX,
+	s->uld_rxq_info = kzalloc(CXGB4_ULD_MAX *
 				  sizeof(struct sge_uld_rxq_info *),
 				  GFP_KERNEL);
 	if (!s->uld_rxq_info)
 		goto err_uld;
 
-	s->uld_txq_info = kcalloc(CXGB4_TX_MAX,
+	s->uld_txq_info = kzalloc(CXGB4_TX_MAX *
 				  sizeof(struct sge_uld_txq_info *),
 				  GFP_KERNEL);
 	if (!s->uld_txq_info)
@@ -641,7 +638,6 @@ static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld)
 	lld->nchan = adap->params.nports;
 	lld->nports = adap->params.nports;
 	lld->wr_cred = adap->params.ofldq_wr_cred;
-	lld->crypto = adap->params.crypto;
 	lld->iscsi_iolen = MAXRXDATA_G(t4_read_reg(adap, TP_PARA_REG2_A));
 	lld->iscsi_tagmask = t4_read_reg(adap, ULP_RX_ISCSI_TAGMASK_A);
 	lld->iscsi_pgsz_order = t4_read_reg(adap, ULP_RX_ISCSI_PSZ_A);
@@ -669,8 +665,6 @@ static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld)
 	lld->ulptx_memwrite_dsgl = adap->params.ulptx_memwrite_dsgl;
 	lld->nodeid = dev_to_node(adap->pdev_dev);
 	lld->fr_nsmr_tpte_wr_support = adap->params.fr_nsmr_tpte_wr_support;
-	lld->write_w_imm_support = adap->params.write_w_imm_support;
-	lld->write_cmpl_support = adap->params.write_cmpl_support;
 }
 
 static void uld_attach(struct adapter *adap, unsigned int uld)

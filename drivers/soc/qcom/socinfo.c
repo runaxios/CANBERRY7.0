@@ -1,7 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2009-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+/*
+ * SOC Info Routines
+ *
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -54,9 +67,15 @@ enum {
 	HW_PLATFORM_RCM	= 21,
 	HW_PLATFORM_STP = 23,
 	HW_PLATFORM_SBC = 24,
-	HW_PLATFORM_J2  = 35,
-	HW_PLATFORM_J1  = 36,
+	HW_PLATFORM_ADP = 25,
 	HW_PLATFORM_HDK = 31,
+	HW_PLATFORM_IOT = 32,
+	HW_PLATFORM_IDP = 34,
+	HW_PLATFORM_F1  = 37,
+	HW_PLATFORM_F10 = 38,
+	HW_PLATFORM_E5G = 39,
+	HW_PLATFORM_F11 = 40,
+	HW_PLATFORM_F1B = 41,
 	HW_PLATFORM_INVALID
 };
 
@@ -77,14 +96,62 @@ const char *hw_platform[] = {
 	[HW_PLATFORM_DTV] = "DTV",
 	[HW_PLATFORM_STP] = "STP",
 	[HW_PLATFORM_SBC] = "SBC",
-	[HW_PLATFORM_J2] = "UMI",
-	[HW_PLATFORM_J1] = "CMI",
+	[HW_PLATFORM_ADP] = "ADP",
 	[HW_PLATFORM_HDK] = "HDK",
+	[HW_PLATFORM_IOT] = "IOT",
+	[HW_PLATFORM_IDP] = "IDP",
+	[HW_PLATFORM_F1]  = "CEPHEUS",
+	[HW_PLATFORM_F10] = "DAVINCI",
+	[HW_PLATFORM_E5G] = "ANDROMEDA",
+	[HW_PLATFORM_F11] = "RAPHAEL",
+	[HW_PLATFORM_F1B] = "HERCULES"
 };
 
 enum {
 	ACCESSORY_CHIP_UNKNOWN = 0,
 	ACCESSORY_CHIP_CHARM = 58,
+};
+
+enum {
+	PLATFORM_SUBTYPE_SA8155_ADP_STAR = 0x0,
+	PLATFORM_SUBTYPE_SA8155_ADP_AIR = 0x1,
+	PLATFORM_SUBTYPE_SA8155_ADP_ALCOR = 0x2,
+	PLATFORM_SUBTYPE_SA8155_ADP_INVALID,
+};
+
+static const char * const sa8155adp_hw_platform_subtype[] = {
+	[PLATFORM_SUBTYPE_SA8155_ADP_STAR] = "ADP_STAR",
+	[PLATFORM_SUBTYPE_SA8155_ADP_AIR] = "ADP_AIR",
+	[PLATFORM_SUBTYPE_SA8155_ADP_ALCOR] = "ADP_ALCOR",
+	[PLATFORM_SUBTYPE_SA8155_ADP_INVALID] = "INVALID",
+};
+
+enum {
+	PLATFORM_SUBTYPE_SA6155_ADP_STAR = 0x0,
+	PLATFORM_SUBTYPE_SA6155_ADP_STAR_EMACPPO = 0x1,
+	PLATFORM_SUBTYPE_SA6155_ADP_STAR_AUDREFCLK = 0x2,
+	PLATFORM_SUBTYPE_SA6155_ADP_AIR = 0x3,
+	PLATFORM_SUBTYPE_SA6155_ADP_INVALID,
+};
+
+static const char * const sa6155adp_hw_platform_subtype[] = {
+	[PLATFORM_SUBTYPE_SA6155_ADP_STAR] = "ADP_STAR",
+	[PLATFORM_SUBTYPE_SA6155_ADP_STAR_EMACPPO] = "ADP_STAR_EMACPPO",
+	[PLATFORM_SUBTYPE_SA6155_ADP_STAR_AUDREFCLK] = "ADP_STAR_AUDREFCLK",
+	[PLATFORM_SUBTYPE_SA6155_ADP_AIR] = "ADP_AIR",
+	[PLATFORM_SUBTYPE_SA6155_ADP_INVALID] = "INVALID",
+};
+
+enum {
+	PLATFORM_SUBTYPE_SA8195_ADP_STAR = 0x0,
+	PLATFORM_SUBTYPE_SA8195_ADP_AIR = 0x1,
+	PLATFORM_SUBTYPE_SA8195_ADP_INVALID,
+};
+
+static const char * const sa8195adp_hw_platform_subtype[] = {
+	[PLATFORM_SUBTYPE_SA8195_ADP_STAR] = "ADP_STAR",
+	[PLATFORM_SUBTYPE_SA8195_ADP_AIR] = "ADP_AIR",
+	[PLATFORM_SUBTYPE_SA8195_ADP_INVALID] = "INVALID",
 };
 
 enum {
@@ -301,8 +368,17 @@ static struct msm_soc_info cpu_of_id[] = {
 	/* sm8150 ID */
 	[339] = {MSM_CPU_SM8150, "SM8150"},
 
-	/* sa8150 ID */
-	[362] = {MSM_CPU_SA8150, "SA8150"},
+	/* sm8150p ID */
+	[361] = {MSM_CPU_SM8150, "SM8150P"},
+
+	/* sa8155 ID */
+	[362] = {MSM_CPU_SA8155, "SA8155"},
+
+	/* sa8155P ID */
+	[367] = {MSM_CPU_SA8155P, "SA8155P"},
+
+	/* sa8195P ID */
+	[405] = {MSM_CPU_SA8195P, "SA8195P"},
 
 	/* sdmshrike ID */
 	[340] = {MSM_CPU_SDMSHRIKE, "SDMSHRIKE"},
@@ -310,23 +386,55 @@ static struct msm_soc_info cpu_of_id[] = {
 	/* sm6150 ID */
 	[355] = {MSM_CPU_SM6150, "SM6150"},
 
+	/* sm6150p ID */
+	[369] = {MSM_CPU_SM6150P, "SM6150P"},
+
 	/* qcs405 ID */
 	[352] = {MSM_CPU_QCS405, "QCS405"},
 
+	/* qcs404 ID */
+	[410] = {MSM_CPU_QCS404, "QCS404"},
+
+	/* qcs407 ID */
+	[411] = {MSM_CPU_QCS407, "QCS407"},
+
+	/* qcs403 ID */
+	[373] = {MSM_CPU_QCS403, "QCS403"},
+
+	/* qcs401 ID */
+	[372] = {MSM_CPU_QCS401, "QCS401"},
+
 	/* sdxprairie ID */
 	[357] = {SDX_CPU_SDXPRAIRIE, "SDXPRAIRIE"},
+	[368] = {SDX_CPU_SDXPRAIRIE, "SDXPRAIRIE"},
+	[418] = {SDX_CPU_SDXPRAIRIE, "SDXPRAIRIE"},
 
 	/* sdmmagpie ID */
 	[365] = {MSM_CPU_SDMMAGPIE, "SDMMAGPIE"},
 
-	/* kona ID */
-	[356] = {MSM_CPU_KONA, "SM8250"},
+	/* sdmmagpiep ID */
+	[366] = {MSM_CPU_SDMMAGPIEP, "SDMMAGPIEP"},
 
-	/* Lito ID */
-	[400] = {MSM_CPU_LITO, "LITO"},
+	/* sa6155P ID */
+	[377] = {MSM_CPU_SA6155P, "SA6155P"},
 
-	/* Bengal ID */
-	[417] = {MSM_CPU_BENGAL, "BENGAL"},
+	/* sa4155P ID */
+	[380] = {MSM_CPU_SA4155P, "SA4155P"},
+
+	/* sa6155 ID */
+	[384] = {MSM_CPU_SA6155, "SA6155"},
+
+	/* trinket ID */
+	[394] = {MSM_CPU_TRINKET, "TRINKET"},
+
+	/* qcs610 ID */
+	[401] = {MSM_CPU_QCS610, "QCS610"},
+
+	/* qcs410 ID */
+	[406] = {MSM_CPU_QCS410, "QCS410"},
+
+	/* atoll ID */
+	[407] = {MSM_CPU_ATOLL, "ATOLL"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	 * MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -359,6 +467,7 @@ uint32_t socinfo_get_version(void)
 {
 	return (socinfo) ? socinfo->v0_1.version : 0;
 }
+EXPORT_SYMBOL(socinfo_get_version);
 
 char *socinfo_get_build_id(void)
 {
@@ -621,7 +730,7 @@ msm_get_vendor(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "Qualcomm Technologies, Inc\n");
+	return snprintf(buf, PAGE_SIZE, "Qualcomm\n");
 }
 
 static ssize_t
@@ -688,6 +797,7 @@ msm_get_platform_subtype(struct device *dev,
 			char *buf)
 {
 	uint32_t hw_subtype;
+	const char *machine_name;
 
 	hw_subtype = socinfo_get_platform_subtype();
 	if (socinfo_get_platform_type() == HW_PLATFORM_QRD) {
@@ -697,6 +807,44 @@ msm_get_platform_subtype(struct device *dev,
 		}
 		return snprintf(buf, PAGE_SIZE, "%-.32s\n",
 					qrd_hw_platform_subtype[hw_subtype]);
+	}
+	if (socinfo_get_platform_type() == HW_PLATFORM_ADP) {
+		machine_name = socinfo_get_id_string();
+		if (machine_name) {
+			if ((strcmp(machine_name, "SA8155") == 0) ||
+				(strcmp(machine_name, "SA8155P") == 0)) {
+				if (hw_subtype >=
+					PLATFORM_SUBTYPE_SA8155_ADP_INVALID) {
+					pr_err("Invalid hardware platform sub type for adp found\n");
+					hw_subtype =
+					PLATFORM_SUBTYPE_SA8155_ADP_INVALID;
+				}
+				return snprintf(buf, PAGE_SIZE, "%-.32s\n",
+				sa8155adp_hw_platform_subtype[hw_subtype]);
+			} else if ((strcmp(machine_name, "SA6155") == 0) ||
+				(strcmp(machine_name, "SA6155P") == 0)) {
+				if (hw_subtype >=
+					PLATFORM_SUBTYPE_SA6155_ADP_INVALID) {
+					pr_err("Invalid hardware platform sub type for adp found\n");
+					hw_subtype =
+					PLATFORM_SUBTYPE_SA6155_ADP_INVALID;
+				}
+				return snprintf(buf, PAGE_SIZE, "%-.32s\n",
+				sa6155adp_hw_platform_subtype[hw_subtype]);
+			} else if ((strcmp(machine_name, "SA8195P") == 0)) {
+				if (hw_subtype >=
+					PLATFORM_SUBTYPE_SA8195_ADP_INVALID) {
+					pr_err("Invalid hardware platform sub type for adp found\n");
+					hw_subtype =
+					PLATFORM_SUBTYPE_SA8195_ADP_INVALID;
+				}
+				return snprintf(buf, PAGE_SIZE, "%-.32s\n",
+				sa8195adp_hw_platform_subtype[hw_subtype]);
+			} else {
+				pr_err("Invalid machine name for ADP platform\n");
+				return 0;
+			}
+		}
 	} else {
 		if (hw_subtype >= PLATFORM_SUBTYPE_INVALID) {
 			pr_err("Invalid hardware platform subtype\n");
@@ -705,6 +853,7 @@ msm_get_platform_subtype(struct device *dev,
 		return snprintf(buf, PAGE_SIZE, "%-.32s\n",
 			hw_platform_subtype[hw_subtype]);
 	}
+	return 0;
 }
 
 static ssize_t
@@ -1183,21 +1332,17 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 339;
 		strlcpy(dummy_socinfo.build_id, "sm8150 - ",
 		sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_sa8150()) {
+	} else if (early_machine_is_sm8150p()) {
+		dummy_socinfo.id = 361;
+		strlcpy(dummy_socinfo.build_id, "sm8150p - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sa8155()) {
 		dummy_socinfo.id = 362;
-		strlcpy(dummy_socinfo.build_id, "sa8150 - ",
+		strlcpy(dummy_socinfo.build_id, "sa8155 - ",
 		sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_kona()) {
-		dummy_socinfo.id = 356;
-		strlcpy(dummy_socinfo.build_id, "kona - ",
-		sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_lito()) {
-		dummy_socinfo.id = 400;
-		strlcpy(dummy_socinfo.build_id, "lito - ",
-		sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_bengal()) {
-		dummy_socinfo.id = 417;
-		strlcpy(dummy_socinfo.build_id, "bengal - ",
+	} else if (early_machine_is_sa8155p()) {
+		dummy_socinfo.id = 367;
+		strlcpy(dummy_socinfo.build_id, "sa8155p - ",
 		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_sdmshrike()) {
 		dummy_socinfo.id = 340;
@@ -1207,9 +1352,33 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 355;
 		strlcpy(dummy_socinfo.build_id, "sm6150 - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sm6150p()) {
+		dummy_socinfo.id = 369;
+		strlcpy(dummy_socinfo.build_id, "sm6150p - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sa8195p()) {
+		dummy_socinfo.id = 405;
+		strlcpy(dummy_socinfo.build_id, "sa8195p - ",
+		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_qcs405()) {
 		dummy_socinfo.id = 352;
 		strlcpy(dummy_socinfo.build_id, "qcs405 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs403()) {
+		dummy_socinfo.id = 373;
+		strlcpy(dummy_socinfo.build_id, "qcs403 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs401()) {
+		dummy_socinfo.id = 372;
+		strlcpy(dummy_socinfo.build_id, "qcs401 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs404()) {
+		dummy_socinfo.id = 410;
+		strlcpy(dummy_socinfo.build_id, "qcs404 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs407()) {
+		dummy_socinfo.id = 411;
+		strlcpy(dummy_socinfo.build_id, "qcs407 - ",
 		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_sdxprairie()) {
 		dummy_socinfo.id = 357;
@@ -1218,6 +1387,38 @@ static void * __init setup_dummy_socinfo(void)
 	} else if (early_machine_is_sdmmagpie()) {
 		dummy_socinfo.id = 365;
 		strlcpy(dummy_socinfo.build_id, "sdmmagpie - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sdmmagpiep()) {
+		dummy_socinfo.id = 366;
+		strlcpy(dummy_socinfo.build_id, "sdmmagpiep - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sa6155p()) {
+		dummy_socinfo.id = 377;
+		strlcpy(dummy_socinfo.build_id, "sa6155p - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sa4155p()) {
+		dummy_socinfo.id = 380;
+		strlcpy(dummy_socinfo.build_id, "sa4155p - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sa6155()) {
+		dummy_socinfo.id = 384;
+		strlcpy(dummy_socinfo.build_id, "sa6155 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_trinket()) {
+		dummy_socinfo.id = 394;
+		strlcpy(dummy_socinfo.build_id, "trinket - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs610()) {
+		dummy_socinfo.id = 401;
+		strlcpy(dummy_socinfo.build_id, "qcs610 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qcs410()) {
+		dummy_socinfo.id = 406;
+		strlcpy(dummy_socinfo.build_id, "qcs410 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_atoll()) {
+		dummy_socinfo.id = 407;
+		strlcpy(dummy_socinfo.build_id, "atoll - ",
 		sizeof(dummy_socinfo.build_id));
 	} else
 		strlcat(dummy_socinfo.build_id, "Dummy socinfo",
@@ -1587,10 +1788,16 @@ EXPORT_SYMBOL(get_hw_country_version);
 uint32_t get_hw_version_platform(void)
 {
 	uint32_t hw_type = socinfo_get_platform_type();
-	if (hw_type == HW_PLATFORM_J2)
-		return HARDWARE_PLATFORM_UMI;
-	if (hw_type == HW_PLATFORM_J1)
-		return HARDWARE_PLATFORM_CMI;
+	if (hw_type == HW_PLATFORM_F1)
+		return HARDWARE_PLATFORM_CEPHEUS;
+	else if (hw_type == HW_PLATFORM_F10)
+		return HARDWARE_PLATFORM_DAVINCI;
+	else if (hw_type == HW_PLATFORM_E5G)
+		return HARDWARE_PLATFORM_ANDROMEDA;
+	else if (hw_type == HW_PLATFORM_F11)
+		return HARDWARE_PLATFORM_RAPHAEL;
+	if (hw_type == HW_PLATFORM_F1B)
+		return HARDWARE_PLATFORM_HERCULES;
 	else
 		return HARDWARE_PLATFORM_UNKNOWN;
 }
@@ -1637,8 +1844,8 @@ int __init socinfo_init(void)
 	WARN(!socinfo_get_id(), "Unknown SOC ID!\n");
 
 	soc_info_id = socinfo_get_id();
-	if ((soc_info_id >= ARRAY_SIZE(cpu_of_id)) ||
-			(!cpu_of_id[soc_info_id].soc_id_string))
+	if ((!cpu_of_id[soc_info_id].soc_id_string) ||
+			(soc_info_id >= ARRAY_SIZE(cpu_of_id)))
 		pr_warn("New IDs added! ID => CPU mapping needs an update.\n");
 
 	cur_cpu = cpu_of_id[socinfo->v0_1.id].generic_soc_type;

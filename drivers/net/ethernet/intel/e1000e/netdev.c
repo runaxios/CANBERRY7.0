@@ -1,5 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 1999 - 2018 Intel Corporation. */
+/* Intel PRO/1000 Linux driver
+ * Copyright(c) 1999 - 2015 Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in
+ * the file called "COPYING".
+ *
+ * Contact Information:
+ * Linux NICS <linux.nics@intel.com>
+ * e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -1053,8 +1071,7 @@ next_desc:
 }
 
 static void e1000_put_txbuf(struct e1000_ring *tx_ring,
-			    struct e1000_buffer *buffer_info,
-			    bool drop)
+			    struct e1000_buffer *buffer_info)
 {
 	struct e1000_adapter *adapter = tx_ring->adapter;
 
@@ -1068,10 +1085,7 @@ static void e1000_put_txbuf(struct e1000_ring *tx_ring,
 		buffer_info->dma = 0;
 	}
 	if (buffer_info->skb) {
-		if (drop)
-			dev_kfree_skb_any(buffer_info->skb);
-		else
-			dev_consume_skb_any(buffer_info->skb);
+		dev_kfree_skb_any(buffer_info->skb);
 		buffer_info->skb = NULL;
 	}
 	buffer_info->time_stamp = 0;
@@ -1185,7 +1199,7 @@ static void e1000e_tx_hwtstamp_work(struct work_struct *work)
 		wmb(); /* force write prior to skb_tstamp_tx */
 
 		skb_tstamp_tx(skb, &shhwtstamps);
-		dev_consume_skb_any(skb);
+		dev_kfree_skb_any(skb);
 	} else if (time_after(jiffies, adapter->tx_hwtstamp_start
 			      + adapter->tx_timeout_factor * HZ)) {
 		dev_kfree_skb_any(adapter->tx_hwtstamp_skb);
@@ -1240,7 +1254,7 @@ static bool e1000_clean_tx_irq(struct e1000_ring *tx_ring)
 				}
 			}
 
-			e1000_put_txbuf(tx_ring, buffer_info, false);
+			e1000_put_txbuf(tx_ring, buffer_info);
 			tx_desc->upper.data = 0;
 
 			i++;
@@ -2413,7 +2427,7 @@ static void e1000_clean_tx_ring(struct e1000_ring *tx_ring)
 
 	for (i = 0; i < tx_ring->count; i++) {
 		buffer_info = &tx_ring->buffer_info[i];
-		e1000_put_txbuf(tx_ring, buffer_info, false);
+		e1000_put_txbuf(tx_ring, buffer_info);
 	}
 
 	netdev_reset_queue(adapter->netdev);
@@ -3220,6 +3234,14 @@ static void e1000_configure_rx(struct e1000_adapter *adapter)
 		 */
 		ew32(RXDCTL(0), E1000_RXDCTL_DMA_BURST_ENABLE);
 		ew32(RXDCTL(1), E1000_RXDCTL_DMA_BURST_ENABLE);
+
+		/* override the delay timers for enabling bursting, only if
+		 * the value was not set by the user via module options
+		 */
+		if (adapter->rx_int_delay == DEFAULT_RDTR)
+			adapter->rx_int_delay = BURST_RDTR;
+		if (adapter->rx_abs_int_delay == DEFAULT_RADV)
+			adapter->rx_abs_int_delay = BURST_RADV;
 	}
 
 	/* set the Receive Delay Timer Register */
@@ -3274,11 +3296,9 @@ static void e1000_configure_rx(struct e1000_adapter *adapter)
 		if (adapter->flags & FLAG_IS_ICH) {
 			u32 rxdctl = er32(RXDCTL(0));
 
-			ew32(RXDCTL(0), rxdctl | 0x3 | BIT(8));
+			ew32(RXDCTL(0), rxdctl | 0x3);
 		}
 
-		dev_info(&adapter->pdev->dev,
-			 "Some CPU C-states have been disabled in order to enable jumbo frames\n");
 		pm_qos_update_request(&adapter->pm_qos_req, lat);
 	} else {
 		pm_qos_update_request(&adapter->pm_qos_req,
@@ -3312,7 +3332,7 @@ static int e1000e_write_mc_addr_list(struct net_device *netdev)
 		return 0;
 	}
 
-	mta_list = kcalloc(netdev_mc_count(netdev), ETH_ALEN, GFP_ATOMIC);
+	mta_list = kzalloc(netdev_mc_count(netdev) * ETH_ALEN, GFP_ATOMIC);
 	if (!mta_list)
 		return -ENOMEM;
 
@@ -4208,7 +4228,7 @@ void e1000e_up(struct e1000_adapter *adapter)
 		e1000_configure_msix(adapter);
 	e1000_irq_enable(adapter);
 
-	/* Tx queue started by watchdog timer when link is up */
+	netif_start_queue(adapter->netdev);
 
 	e1000e_trigger_lsc(adapter);
 }
@@ -4584,7 +4604,6 @@ int e1000e_open(struct net_device *netdev)
 	pm_runtime_get_sync(&pdev->dev);
 
 	netif_carrier_off(netdev);
-	netif_stop_queue(netdev);
 
 	/* allocate transmit descriptors */
 	err = e1000e_setup_tx_resources(adapter->tx_ring);
@@ -4645,6 +4664,7 @@ int e1000e_open(struct net_device *netdev)
 	e1000_irq_enable(adapter);
 
 	adapter->tx_hang_recheck = false;
+	netif_start_queue(netdev);
 
 	hw->mac.get_link_status = true;
 	pm_runtime_put(&pdev->dev);
@@ -4796,9 +4816,9 @@ static void e1000e_update_phy_task(struct work_struct *work)
  * Need to wait a few seconds after link up to get diagnostic information from
  * the phy
  **/
-static void e1000_update_phy_info(struct timer_list *t)
+static void e1000_update_phy_info(unsigned long data)
 {
-	struct e1000_adapter *adapter = from_timer(adapter, t, phy_info_timer);
+	struct e1000_adapter *adapter = (struct e1000_adapter *)data;
 
 	if (test_bit(__E1000_DOWN, &adapter->state))
 		return;
@@ -5062,7 +5082,7 @@ static bool e1000e_has_link(struct e1000_adapter *adapter)
 
 	/* get_link_status is set on LSC (link status) interrupt or
 	 * Rx sequence error interrupt.  get_link_status will stay
-	 * true until the check_for_link establishes link
+	 * false until the check_for_link establishes link
 	 * for copper adapters ONLY
 	 */
 	switch (hw->phy.media_type) {
@@ -5080,7 +5100,7 @@ static bool e1000e_has_link(struct e1000_adapter *adapter)
 		break;
 	case e1000_media_type_internal_serdes:
 		ret_val = hw->mac.ops.check_for_link(hw);
-		link_active = hw->mac.serdes_has_link;
+		link_active = adapter->hw.mac.serdes_has_link;
 		break;
 	default:
 	case e1000_media_type_unknown:
@@ -5132,9 +5152,9 @@ static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
  * e1000_watchdog - Timer Call-back
  * @data: pointer to adapter cast into an unsigned long
  **/
-static void e1000_watchdog(struct timer_list *t)
+static void e1000_watchdog(unsigned long data)
 {
-	struct e1000_adapter *adapter = from_timer(adapter, t, watchdog_timer);
+	struct e1000_adapter *adapter = (struct e1000_adapter *)data;
 
 	/* Do the rest outside of interrupt context */
 	schedule_work(&adapter->watchdog_task);
@@ -5266,7 +5286,6 @@ static void e1000_watchdog_task(struct work_struct *work)
 			if (phy->ops.cfg_on_link_up)
 				phy->ops.cfg_on_link_up(hw);
 
-			netif_wake_queue(netdev);
 			netif_carrier_on(netdev);
 
 			if (!test_bit(__E1000_DOWN, &adapter->state))
@@ -5280,7 +5299,6 @@ static void e1000_watchdog_task(struct work_struct *work)
 			/* Link status message must follow this format */
 			pr_info("%s NIC Link is Down\n", adapter->netdev->name);
 			netif_carrier_off(netdev);
-			netif_stop_queue(netdev);
 			if (!test_bit(__E1000_DOWN, &adapter->state))
 				mod_timer(&adapter->phy_info_timer,
 					  round_jiffies(jiffies + 2 * HZ));
@@ -5288,8 +5306,13 @@ static void e1000_watchdog_task(struct work_struct *work)
 			/* 8000ES2LAN requires a Rx packet buffer work-around
 			 * on link down event; reset the controller to flush
 			 * the Rx packet buffer.
+			 *
+			 * If the link is lost the controller stops DMA, but
+			 * if there is queued Tx work it cannot be done.  So
+			 * reset the controller to flush the Tx packet buffers.
 			 */
-			if (adapter->flags & FLAG_RX_NEEDS_RESTART)
+			if ((adapter->flags & FLAG_RX_NEEDS_RESTART) ||
+			    e1000_desc_unused(tx_ring) + 1 < tx_ring->count)
 				adapter->flags |= FLAG_RESTART_NOW;
 			else
 				pm_schedule_suspend(netdev->dev.parent,
@@ -5311,14 +5334,6 @@ link_up:
 	adapter->gotc = adapter->stats.gotc - adapter->gotc_old;
 	adapter->gotc_old = adapter->stats.gotc;
 	spin_unlock(&adapter->stats64_lock);
-
-	/* If the link is lost the controller stops DMA, but
-	 * if there is queued Tx work it cannot be done.  So
-	 * reset the controller to flush the Tx packet buffers.
-	 */
-	if (!netif_carrier_ok(netdev) &&
-	    (e1000_desc_unused(tx_ring) + 1 < tx_ring->count))
-		adapter->flags |= FLAG_RESTART_NOW;
 
 	/* If reset is necessary, do it outside of interrupt context. */
 	if (adapter->flags & FLAG_RESTART_NOW) {
@@ -5604,7 +5619,7 @@ dma_error:
 			i += tx_ring->count;
 		i--;
 		buffer_info = &tx_ring->buffer_info[i];
-		e1000_put_txbuf(tx_ring, buffer_info, true);
+		e1000_put_txbuf(tx_ring, buffer_info);
 	}
 
 	return 0;
@@ -7242,8 +7257,13 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_eeprom;
 	}
 
-	timer_setup(&adapter->watchdog_timer, e1000_watchdog, 0);
-	timer_setup(&adapter->phy_info_timer, e1000_update_phy_info, 0);
+	init_timer(&adapter->watchdog_timer);
+	adapter->watchdog_timer.function = e1000_watchdog;
+	adapter->watchdog_timer.data = (unsigned long)adapter;
+
+	init_timer(&adapter->phy_info_timer);
+	adapter->phy_info_timer.function = e1000_update_phy_info;
+	adapter->phy_info_timer.data = (unsigned long)adapter;
 
 	INIT_WORK(&adapter->reset_task, e1000_reset_task);
 	INIT_WORK(&adapter->watchdog_task, e1000_watchdog_task);
@@ -7332,9 +7352,7 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	e1000_print_device_info(adapter);
 
-	dev_pm_set_driver_flags(&pdev->dev, DPM_FLAG_NEVER_SKIP);
-
-	if (pci_dev_run_wake(pdev) && hw->mac.type < e1000_pch_cnp)
+	if (pci_dev_run_wake(pdev))
 		pm_runtime_put_noidle(&pdev->dev);
 
 	return 0;
@@ -7398,7 +7416,7 @@ static void e1000_remove(struct pci_dev *pdev)
 	if (adapter->flags & FLAG_HAS_HW_TIMESTAMP) {
 		cancel_work_sync(&adapter->tx_hwtstamp_work);
 		if (adapter->tx_hwtstamp_skb) {
-			dev_consume_skb_any(adapter->tx_hwtstamp_skb);
+			dev_kfree_skb_any(adapter->tx_hwtstamp_skb);
 			adapter->tx_hwtstamp_skb = NULL;
 		}
 	}

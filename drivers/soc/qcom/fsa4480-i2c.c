@@ -1,8 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
+#define DEBUG
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
@@ -148,8 +157,8 @@ static int fsa4480_usbc_analog_setup_switches(struct fsa4480_priv *fsa_priv)
 			__func__, rc);
 		goto done;
 	}
-	dev_info(dev, "%s: setting GPIOs active = %d, mode.intval = %d\n",
-		__func__, mode.intval != POWER_SUPPLY_TYPEC_NONE, mode.intval);
+	dev_dbg(dev, "%s: setting GPIOs active = %d\n",
+		__func__, mode.intval != POWER_SUPPLY_TYPEC_NONE);
 
 	switch (mode.intval) {
 	/* add all modes FSA should notify for in here */
@@ -292,7 +301,7 @@ int fsa4480_switch_event(struct device_node *node,
 		else
 			switch_control = 0x7;
 		fsa4480_usbc_update_settings(fsa_priv, switch_control, 0x9F);
-		return 1;
+		break;
 	case FSA_USBC_ORIENTATION_CC1:
 		fsa4480_usbc_update_settings(fsa_priv, 0x18, 0xF8);
 		return fsa4480_validate_display_port_settings(fsa_priv);
@@ -406,7 +415,7 @@ static int fsa4480_remove(struct i2c_client *i2c)
 		return -EINVAL;
 
 	fsa4480_usbc_update_settings(fsa_priv, 0x18, 0x98);
-	cancel_work_sync(&fsa_priv->usbc_analog_work);
+	cancel_work(&fsa_priv->usbc_analog_work);
 	pm_relax(fsa_priv->dev);
 	/* deregister from PMI */
 	power_supply_unreg_notifier(&fsa_priv->psy_nb);

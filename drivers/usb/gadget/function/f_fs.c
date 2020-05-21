@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_fs.c -- user mode file system API for USB composite function controllers
  *
@@ -8,6 +7,11 @@
  * Based on inode.c (GadgetFS) which was:
  * Copyright (C) 2003-2004 David Brownell
  * Copyright (C) 2003 Agilent Technologies
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 
@@ -139,6 +143,7 @@ struct ffs_epfile {
 
 	struct ffs_data			*ffs;
 	struct ffs_ep			*ep;	/* P: ffs->eps_lock */
+	atomic_t			opened;
 
 	struct dentry			*dentry;
 
@@ -205,7 +210,7 @@ struct ffs_epfile {
 	unsigned char			in;	/* P: ffs->eps_lock */
 	unsigned char			isoc;	/* P: ffs->eps_lock */
 
-	unsigned char			_pad;
+	bool				invalid;
 };
 
 struct ffs_buffer {
@@ -278,7 +283,6 @@ static void ffs_ep0_complete(struct usb_ep *ep, struct usb_request *req)
 }
 
 static int __ffs_ep0_queue_wait(struct ffs_data *ffs, char *data, size_t len)
-	__releases(&ffs->ev.waitq.lock)
 {
 	struct usb_request *req = ffs->ep0req;
 	int ret;
@@ -487,7 +491,6 @@ done_spin:
 /* Called with ffs->ev.waitq.lock and ffs->mutex held, both released on exit. */
 static ssize_t __ffs_ep0_read_events(struct ffs_data *ffs, char __user *buf,
 				     size_t n)
-	__releases(&ffs->ev.waitq.lock)
 {
 	/*
 	 * n cannot be bigger than ffs->ev.count, which cannot be bigger than
@@ -580,7 +583,6 @@ static ssize_t ffs_ep0_read(struct file *file, char __user *buf,
 			break;
 		}
 
-		/* unlocks spinlock */
 		return __ffs_ep0_read_events(ffs, buf,
 					     min(n, (size_t)ffs->ev.count));
 
@@ -689,10 +691,10 @@ static long ffs_ep0_ioctl(struct file *file, unsigned code, unsigned long value)
 	return ret;
 }
 
-static __poll_t ffs_ep0_poll(struct file *file, poll_table *wait)
+static unsigned int ffs_ep0_poll(struct file *file, poll_table *wait)
 {
 	struct ffs_data *ffs = file->private_data;
-	__poll_t mask = EPOLLWRNORM;
+	unsigned int mask = POLLWRNORM;
 	int ret;
 
 	ffs_log("enter:state %d setup_state %d flags %lu opened %d", ffs->state,
@@ -707,19 +709,19 @@ static __poll_t ffs_ep0_poll(struct file *file, poll_table *wait)
 	switch (ffs->state) {
 	case FFS_READ_DESCRIPTORS:
 	case FFS_READ_STRINGS:
-		mask |= EPOLLOUT;
+		mask |= POLLOUT;
 		break;
 
 	case FFS_ACTIVE:
 		switch (ffs->setup_state) {
 		case FFS_NO_SETUP:
 			if (ffs->ev.count)
-				mask |= EPOLLIN;
+				mask |= POLLIN;
 			break;
 
 		case FFS_SETUP_PENDING:
 		case FFS_SETUP_CANCELLED:
-			mask |= (EPOLLIN | EPOLLOUT);
+			mask |= (POLLIN | POLLOUT);
 			break;
 		}
 	case FFS_CLOSING:
@@ -956,6 +958,16 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 		if (file->f_flags & O_NONBLOCK)
 			return -EAGAIN;
 
+		/*
+		 * epfile->invalid is set when EPs are disabled. Userspace
+		 * might have stale threads continuing to do I/O and may be
+		 * unaware of that especially if we block here. Instead return
+		 * an error immediately here and don't allow any more I/O
+		 * until the epfile is reopened.
+		 */
+		if (epfile->invalid)
+			return -ENODEV;
+
 		ret = wait_event_interruptible(
 				epfile->ffs->wait, (ep = epfile->ep));
 		if (ret)
@@ -1063,7 +1075,7 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 
 		spin_unlock_irq(&epfile->ffs->eps_lock);
 
-		ffs_log("queued %zd bytes on %s", data_len, epfile->name);
+		ffs_log("queued %ld bytes on %s", data_len, epfile->name);
 
 		if (unlikely(wait_for_completion_interruptible(&done))) {
 			/*
@@ -1074,7 +1086,12 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 			 */
 			spin_lock_irq(&epfile->ffs->eps_lock);
 			interrupted = true;
-			if (ep->ep) {
+			/*
+			 * While we were acquiring lock endpoint got
+			 * disabled (disconnect) or changed
+			 (composition switch) ?
+			 */
+			if (epfile->ep == ep) {
 				usb_ep_dequeue(ep->ep, req);
 				spin_unlock_irq(&epfile->ffs->eps_lock);
 				wait_for_completion(&done);
@@ -1084,8 +1101,7 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 			}
 		}
 
-		ffs_log("%s:ep status %d for req %pK", epfile->name, ep->status,
-				req);
+		ffs_log("ep status %d for req %pK", ep->status, req);
 
 		if (interrupted) {
 			ret = -EINTR;
@@ -1094,7 +1110,12 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 
 		ret = -ENODEV;
 		spin_lock_irq(&epfile->ffs->eps_lock);
-		if (ep->ep)
+		/*
+		 * While we were acquiring lock endpoint got
+		 * disabled (disconnect) or changed
+		 * (composition switch) ?
+		 */
+		if (epfile->ep == ep)
 			ret = ep->status;
 		spin_unlock_irq(&epfile->ffs->eps_lock);
 		if (io_data->read && ret > 0)
@@ -1121,7 +1142,7 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 			goto error_lock;
 		}
 
-		ffs_log("queued %zd bytes on %s", data_len, epfile->name);
+		ffs_log("queued %ld bytes on %s", data_len, epfile->name);
 
 		ret = -EIOCBQUEUED;
 		/*
@@ -1151,15 +1172,16 @@ ffs_epfile_open(struct inode *inode, struct file *file)
 
 	ENTER();
 
-	ffs_log("%s: state %d setup_state %d flag %lu", epfile->name,
-		epfile->ffs->state, epfile->ffs->setup_state,
-		epfile->ffs->flags);
+	ffs_log("%s: state %d setup_state %d flag %lu opened %u",
+		epfile->name, epfile->ffs->state, epfile->ffs->setup_state,
+		epfile->ffs->flags, atomic_read(&epfile->opened));
 
 	if (WARN_ON(epfile->ffs->state != FFS_ACTIVE))
 		return -ENODEV;
 
 	file->private_data = epfile;
 	ffs_data_opened(epfile->ffs);
+	atomic_inc(&epfile->opened);
 
 	return 0;
 }
@@ -1173,8 +1195,8 @@ static int ffs_aio_cancel(struct kiocb *kiocb)
 
 	ENTER();
 
-	ffs_log("enter:state %d setup_state %d flag %lu", epfile->ffs->state,
-		epfile->ffs->setup_state, epfile->ffs->flags);
+	ffs_log("enter:state %d setup_state %d flag %lu", ffs->state,
+	ffs->setup_state, ffs->flags);
 
 	spin_lock_irq(&epfile->ffs->eps_lock);
 
@@ -1184,7 +1206,6 @@ static int ffs_aio_cancel(struct kiocb *kiocb)
 		value = -EINVAL;
 
 	spin_unlock_irq(&epfile->ffs->eps_lock);
-
 	ffs_log("exit: value %d", value);
 
 	return value;
@@ -1202,12 +1223,11 @@ static ssize_t ffs_epfile_write_iter(struct kiocb *kiocb, struct iov_iter *from)
 	ffs_log("enter");
 
 	if (!is_sync_kiocb(kiocb)) {
-		p = kzalloc(sizeof(io_data), GFP_KERNEL);
+		p = kmalloc(sizeof(io_data), GFP_KERNEL);
 		if (unlikely(!p))
 			return -ENOMEM;
 		p->aio = true;
 	} else {
-		memset(p, 0, sizeof(*p));
 		p->aio = false;
 	}
 
@@ -1246,12 +1266,11 @@ static ssize_t ffs_epfile_read_iter(struct kiocb *kiocb, struct iov_iter *to)
 	ffs_log("enter");
 
 	if (!is_sync_kiocb(kiocb)) {
-		p = kzalloc(sizeof(io_data), GFP_KERNEL);
+		p = kmalloc(sizeof(io_data), GFP_KERNEL);
 		if (unlikely(!p))
 			return -ENOMEM;
 		p->aio = true;
 	} else {
-		memset(p, 0, sizeof(*p));
 		p->aio = false;
 	}
 
@@ -1299,9 +1318,12 @@ ffs_epfile_release(struct inode *inode, struct file *file)
 	ENTER();
 
 	__ffs_epfile_read_buffer_free(epfile);
-	ffs_log("%s: state %d setup_state %d flag %lu", epfile->name,
-			epfile->ffs->state, epfile->ffs->setup_state,
-			epfile->ffs->flags);
+	ffs_log("%s: state %d setup_state %d flag %lu opened %u",
+		epfile->name, epfile->ffs->state, epfile->ffs->setup_state,
+		epfile->ffs->flags, atomic_read(&epfile->opened));
+
+	if (atomic_dec_and_test(&epfile->opened))
+		epfile->invalid = false;
 
 	ffs_data_closed(epfile->ffs);
 
@@ -1330,6 +1352,10 @@ static long ffs_epfile_ioctl(struct file *file, unsigned code,
 	if (!ep) {
 		if (file->f_flags & O_NONBLOCK)
 			return -EAGAIN;
+
+		/* don't allow any I/O until file is reopened */
+		if (epfile->invalid)
+			return -ENODEV;
 
 		ret = wait_event_interruptible(
 				epfile->ffs->wait, (ep = epfile->ep));
@@ -1380,7 +1406,7 @@ static long ffs_epfile_ioctl(struct file *file, unsigned code,
 		memcpy(&desc1, desc, desc->bLength);
 
 		spin_unlock_irq(&epfile->ffs->eps_lock);
-		ret = copy_to_user((void __user *)value, &desc1, desc1.bLength);
+		ret = copy_to_user((void *)value, &desc1, desc1.bLength);
 		if (ret)
 			ret = -EFAULT;
 		return ret;
@@ -1395,14 +1421,6 @@ static long ffs_epfile_ioctl(struct file *file, unsigned code,
 	return ret;
 }
 
-#ifdef CONFIG_COMPAT
-static long ffs_epfile_compat_ioctl(struct file *file, unsigned code,
-		unsigned long value)
-{
-	return ffs_epfile_ioctl(file, code, value);
-}
-#endif
-
 static const struct file_operations ffs_epfile_operations = {
 	.llseek =	no_llseek,
 
@@ -1411,9 +1429,6 @@ static const struct file_operations ffs_epfile_operations = {
 	.read_iter =	ffs_epfile_read_iter,
 	.release =	ffs_epfile_release,
 	.unlocked_ioctl =	ffs_epfile_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = ffs_epfile_compat_ioctl,
-#endif
 };
 
 
@@ -1440,7 +1455,7 @@ ffs_sb_make_inode(struct super_block *sb, void *data,
 	inode = new_inode(sb);
 
 	if (likely(inode)) {
-		struct timespec64 ts = current_time(inode);
+		struct timespec ts = current_time(inode);
 
 		inode->i_ino	 = get_next_ino();
 		inode->i_mode    = perms->mode;
@@ -1992,6 +2007,8 @@ static int ffs_epfiles_create(struct ffs_data *ffs)
 			ffs_epfiles_destroy(epfiles, i - 1);
 			return -ENOMEM;
 		}
+
+		atomic_set(&epfile->opened, 0);
 	}
 
 	ffs->epfiles = epfiles;
@@ -2039,6 +2056,7 @@ static void ffs_func_eps_disable(struct ffs_function *func)
 		++ep;
 
 		if (epfile) {
+			epfile->invalid = true; /* until file is reopened */
 			epfile->ep = NULL;
 			__ffs_epfile_read_buffer_free(epfile);
 			++epfile;
@@ -2536,7 +2554,7 @@ static int __ffs_data_do_os_desc(enum ffs_os_desc_type type,
 				  length, pnl, type);
 			return -EINVAL;
 		}
-		pdl = le32_to_cpu(*(__le32 *)((u8 *)data + 10 + pnl));
+		pdl = le32_to_cpu(*(u32 *)((u8 *)data + 10 + pnl));
 		if (length != 14 + pnl + pdl) {
 			pr_vdebug("invalid os descriptor length: %d pnl:%d pdl:%d (descriptor %d)\n",
 				  length, pnl, pdl, type);
@@ -3110,7 +3128,7 @@ static int __ffs_func_bind_do_os_desc(enum ffs_os_desc_type type,
 
 		ext_prop->type = le32_to_cpu(desc->dwPropertyDataType);
 		ext_prop->name_len = le16_to_cpu(desc->wPropertyNameLength);
-		ext_prop->data_len = le32_to_cpu(*(__le32 *)
+		ext_prop->data_len = le32_to_cpu(*(u32 *)
 			usb_ext_prop_data_len_ptr(data, ext_prop->name_len));
 		length = ext_prop->name_len + ext_prop->data_len + 14;
 
@@ -3421,8 +3439,12 @@ static int ffs_func_set_alt(struct usb_function *f,
 			return intf;
 	}
 
-	if (ffs->func)
+	if (ffs->func) {
 		ffs_func_eps_disable(ffs->func);
+		ffs->func = NULL;
+		/* matching put to allow LPM on disconnect */
+		usb_gadget_autopm_put_async(ffs->gadget);
+	}
 
 	if (ffs->state == FFS_DEACTIVATED) {
 		ffs->state = FFS_CLOSING;
@@ -3442,8 +3464,11 @@ static int ffs_func_set_alt(struct usb_function *f,
 
 	ffs->func = func;
 	ret = ffs_func_eps_enable(func);
-	if (likely(ret >= 0))
+	if (likely(ret >= 0)) {
 		ffs_event_add(ffs, FUNCTIONFS_ENABLE);
+		/* Disable USB LPM later on bus_suspend */
+		usb_gadget_autopm_get_async(ffs->gadget);
+	}
 
 	return ret;
 }
@@ -3527,6 +3552,12 @@ static bool ffs_func_req_match(struct usb_function *f,
 			       bool config0)
 {
 	struct ffs_function *func = ffs_func_from_usb(f);
+	struct ffs_data *ffs = func->ffs;
+
+	if (!test_bit(FFS_FL_BOUND, &func->ffs->flags)) {
+		ffs_log("ffs function do not bind yet.\n");
+		return false;
+	}
 
 	if (config0 && !(func->ffs->user_flags & FUNCTIONFS_CONFIG0_SETUP))
 		return false;
@@ -3659,7 +3690,7 @@ static struct configfs_item_operations ffs_item_ops = {
 	.release	= ffs_attr_release,
 };
 
-static const struct config_item_type ffs_func_type = {
+static struct config_item_type ffs_func_type = {
 	.ct_item_ops	= &ffs_item_ops,
 	.ct_owner	= THIS_MODULE,
 };
@@ -3746,6 +3777,7 @@ static void ffs_func_unbind(struct usb_configuration *c,
 		if (ep->ep && ep->req)
 			usb_ep_free_request(ep->ep, ep->req);
 		ep->req = NULL;
+		ep->ep = NULL;
 		++ep;
 	}
 	spin_unlock_irqrestore(&func->ffs->eps_lock, flags);

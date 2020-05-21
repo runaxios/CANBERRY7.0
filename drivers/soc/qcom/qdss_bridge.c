@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define KMSG_COMPONENT "QDSS diag bridge"
@@ -13,6 +20,7 @@
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
 #include <linux/platform_device.h>
+#include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
 #include <linux/dma-direction.h>
 #include <linux/mhi.h>
@@ -22,17 +30,8 @@
 #include "qdss_bridge.h"
 
 #define MODULE_NAME "qdss_bridge"
-#define INIT_STATUS -1
 
 static struct class *mhi_class;
-static enum mhi_dev_state dev_state = INIT_STATUS;
-static enum mhi_ch curr_chan;
-
-static const char * const str_mhi_curr_chan[] = {
-		[QDSS]			= "QDSS",
-		[QDSS_HW]		= "IP_HW_QDSS",
-		[EMPTY]			= "EMPTY",
-};
 
 static const char * const str_mhi_transfer_mode[] = {
 		[MHI_TRANSFER_TYPE_USB]			= "usb",
@@ -174,6 +173,7 @@ static void qdss_del_buf_tbl_entry(struct qdss_bridge_drvdata *drvdata,
 			return;
 		}
 	}
+
 	spin_unlock_bh(&drvdata->lock);
 }
 
@@ -218,7 +218,7 @@ static void mhi_ch_close(struct qdss_bridge_drvdata *drvdata)
 	}
 }
 
-static ssize_t mode_show(struct device *dev,
+static ssize_t mhi_show_transfer_mode(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct qdss_bridge_drvdata *drvdata = dev_get_drvdata(dev);
@@ -227,15 +227,7 @@ static ssize_t mode_show(struct device *dev,
 			str_mhi_transfer_mode[drvdata->mode]);
 }
 
-static ssize_t curr_chan_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	if (curr_chan < QDSS || curr_chan > EMPTY)
-		return -EINVAL;
-	return scnprintf(buf, PAGE_SIZE, "%s\n", str_mhi_curr_chan[curr_chan]);
-}
-
-static ssize_t mode_store(struct device *dev,
+static ssize_t mhi_store_transfer_mode(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t size)
 {
@@ -303,8 +295,9 @@ out:
 	return ret;
 }
 
-static DEVICE_ATTR_RW(mode);
-static DEVICE_ATTR_RO(curr_chan);
+static DEVICE_ATTR(mode, 0644,
+		mhi_show_transfer_mode, mhi_store_transfer_mode);
+
 
 static void mhi_read_work_fn(struct work_struct *work)
 {
@@ -436,9 +429,11 @@ static void mhi_read_done_work_fn(struct work_struct *work)
 static void usb_write_done(struct qdss_bridge_drvdata *drvdata,
 				   struct qdss_request *d_req)
 {
-	if (d_req->status)
+	if (d_req->status) {
 		pr_err_ratelimited("USB write failed err:%d\n", d_req->status);
-
+		mhi_queue_read(drvdata);
+		return;
+	}
 	qdss_buf_tbl_remove(drvdata, d_req->buf);
 	mhi_queue_read(drvdata);
 }
@@ -803,13 +798,6 @@ static void qdss_mhi_remove(struct mhi_device *mhi_dev)
 	drvdata = mhi_dev->priv_data;
 	if (!drvdata)
 		return;
-
-	pr_debug("remove dev state: %d\n", mhi_dev->mhi_cntrl->dev_state);
-
-	dev_state = mhi_dev->mhi_cntrl->dev_state;
-	if (mhi_dev->mhi_cntrl->dev_state != MHI_STATE_RESET)
-		curr_chan = EMPTY;
-
 	spin_lock_bh(&drvdata->lock);
 	if (drvdata->opened == ENABLE) {
 		drvdata->opened = SSR;
@@ -859,39 +847,10 @@ static int qdss_mhi_probe(struct mhi_device *mhi_dev,
 				const struct mhi_device_id *id)
 {
 	int ret;
-	bool def = false;
 	unsigned int baseminor = 0;
 	unsigned int count = 1;
 	struct qdss_bridge_drvdata *drvdata;
-	struct device_node *of_node = mhi_dev->dev.of_node;
 	dev_t dev;
-
-	pr_debug("probe dev state: %d chan: %s curr_chan: %d\n",
-		  mhi_dev->mhi_cntrl->dev_state,
-		  id->chan,
-		  curr_chan);
-
-	def = of_property_read_bool(of_node, "mhi,default-channel");
-	if (dev_state == INIT_STATUS) {
-		if (!def)
-			return -EINVAL;
-		if (!strcmp(id->chan, "QDSS"))
-			curr_chan = QDSS;
-		if (!strcmp(id->chan, "IP_HW_QDSS"))
-			curr_chan = QDSS_HW;
-	} else if (dev_state == MHI_STATE_RESET) {
-		if (strcmp(id->chan, str_mhi_curr_chan[curr_chan]))
-			return -EINVAL;
-	} else {
-		if (curr_chan != EMPTY) {
-			pr_err("Need unbind another channel before bind.\n");
-			return -EINVAL;
-		}
-		if (!strcmp(id->chan, "QDSS"))
-			curr_chan = QDSS;
-		if (!strcmp(id->chan, "IP_HW_QDSS"))
-			curr_chan = QDSS_HW;
-	}
 
 	drvdata = devm_kzalloc(&mhi_dev->dev, sizeof(*drvdata), GFP_KERNEL);
 	if (!drvdata) {
@@ -930,12 +889,7 @@ static int qdss_mhi_probe(struct mhi_device *mhi_dev,
 
 	ret = device_create_file(drvdata->dev, &dev_attr_mode);
 	if (ret) {
-		pr_err("mode sysfs node create failed error:%d\n", ret);
-		goto exit_destroy_device;
-	}
-	ret = device_create_file(drvdata->dev, &dev_attr_curr_chan);
-	if (ret) {
-		pr_err("curr_chan sysfs node create failed error:%d\n", ret);
+		pr_err("sysfs node create failed error:%d\n", ret);
 		goto exit_destroy_device;
 	}
 
@@ -961,7 +915,6 @@ exit_unreg_chrdev_region:
 
 static const struct mhi_device_id qdss_mhi_match_table[] = {
 	{ .chan = "QDSS", .driver_data = 0x8000 },
-	{ .chan = "IP_HW_QDSS", .driver_data = 0x8000 },
 	{},
 };
 

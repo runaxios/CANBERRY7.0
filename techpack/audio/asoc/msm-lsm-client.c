@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #include <linux/init.h>
 #include <linux/err.h>
@@ -24,8 +32,6 @@
 #include <dsp/msm_audio_ion.h>
 #include <dsp/q6lsm.h>
 #include "msm-pcm-routing-v2.h"
-
-#define DRV_NAME "msm-lsm-client"
 
 #define CAPTURE_MIN_NUM_PERIODS     2
 #define CAPTURE_MAX_NUM_PERIODS     8
@@ -773,7 +779,7 @@ static int msm_lsm_check_and_set_lab_controls(struct snd_pcm_substream *substrea
 	struct lsm_priv *prtd = runtime->private_data;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct lsm_hw_params *out_hw_params = &prtd->lsm_client->out_hw_params;
-	u8 *chmap = NULL;
+	u8 chmap[out_hw_params->num_chs];
 	u32 ch_idx;
 	int rc = 0, stage_idx = p_info->stage_idx;
 
@@ -784,15 +790,11 @@ static int msm_lsm_check_and_set_lab_controls(struct snd_pcm_substream *substrea
 		return rc;
 	}
 
-	chmap = kzalloc(out_hw_params->num_chs, GFP_KERNEL);
-	if (!chmap)
-		return -ENOMEM;
-
 	rc = q6lsm_lab_control(prtd->lsm_client, enable, p_info);
 	if (rc) {
 		dev_err(rtd->dev, "%s: Failed to set lab_control param, err = %d\n",
 			__func__, rc);
-		goto fail;
+		return rc;
 	} else {
 		if (LSM_IS_LAST_STAGE(prtd->lsm_client, stage_idx)) {
 			rc = msm_lsm_lab_buffer_alloc(prtd,
@@ -801,7 +803,7 @@ static int msm_lsm_check_and_set_lab_controls(struct snd_pcm_substream *substrea
 				dev_err(rtd->dev,
 					"%s: msm_lsm_lab_buffer_alloc failed rc %d for %s\n",
 					__func__, rc, enable ? "ALLOC" : "DEALLOC");
-				goto fail;
+				return rc;
 			} else {
 				/* set client level flag based on last stage control */
 				prtd->lsm_client->lab_enable = enable;
@@ -811,6 +813,7 @@ static int msm_lsm_check_and_set_lab_controls(struct snd_pcm_substream *substrea
 			prtd->lsm_client->stage_cfg[stage_idx].lab_enable = enable;
 	}
 
+	memset(chmap, 0, out_hw_params->num_chs);
 	/*
 	 * First channel to be read from lab is always the
 	 * best channel (0xff). For second channel onwards,
@@ -825,8 +828,6 @@ static int msm_lsm_check_and_set_lab_controls(struct snd_pcm_substream *substrea
 		dev_err(rtd->dev, "%s: Failed to set lab out ch cfg %d\n",
 			__func__, rc);
 
-fail:
-	kfree(chmap);
 	return rc;
 }
 
@@ -1432,8 +1433,8 @@ static int msm_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 		dev_dbg(rtd->dev, "%s: Starting LSM client session\n",
 			__func__);
 		if (!prtd->lsm_client->started) {
-			rc = q6lsm_start(prtd->lsm_client, true);
-			if (!rc) {
+			ret = q6lsm_start(prtd->lsm_client, true);
+			if (!ret) {
 				prtd->lsm_client->started = true;
 				dev_dbg(rtd->dev, "%s: LSM client session started\n",
 					 __func__);
@@ -1449,19 +1450,19 @@ static int msm_lsm_ioctl_shared(struct snd_pcm_substream *substream,
 			if (prtd->lsm_client->lab_enable) {
 				atomic_set(&prtd->read_abort, 1);
 				if (prtd->lsm_client->lab_started) {
-					rc = q6lsm_stop_lab(prtd->lsm_client);
-					if (rc)
+					ret = q6lsm_stop_lab(prtd->lsm_client);
+					if (ret)
 						dev_err(rtd->dev,
-							"%s: stop lab failed rc %d\n",
-							__func__, rc);
+							"%s: stop lab failed ret %d\n",
+							__func__, ret);
 					prtd->lsm_client->lab_started = false;
 				}
 			}
-			rc = q6lsm_stop(prtd->lsm_client, true);
-			if (!rc)
+			ret = q6lsm_stop(prtd->lsm_client, true);
+			if (!ret)
 				dev_dbg(rtd->dev,
 					"%s: LSM client session stopped %d\n",
-					__func__, rc);
+					__func__, ret);
 			prtd->lsm_client->started = false;
 		}
 		break;
@@ -2425,7 +2426,6 @@ static int msm_lsm_open(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct lsm_priv *prtd;
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	int ret = 0;
 
 	pr_debug("%s\n", __func__);
@@ -2484,14 +2484,11 @@ static int msm_lsm_open(struct snd_pcm_substream *substream)
 		return -ENOMEM;
 	}
 	prtd->lsm_client->opened = false;
-	prtd->lsm_client->started = false;
 	prtd->lsm_client->session_state = IDLE;
 	prtd->lsm_client->poll_enable = true;
 	prtd->lsm_client->perf_mode = 0;
 	prtd->lsm_client->event_mode = LSM_EVENT_NON_TIME_STAMP_MODE;
 	prtd->lsm_client->event_type = LSM_DET_EVENT_TYPE_LEGACY;
-	prtd->lsm_client->fe_id = rtd->dai_link->id;
-	prtd->lsm_client->unprocessed_data = 0;
 
 	return 0;
 }
@@ -2614,6 +2611,7 @@ static int msm_lsm_prepare(struct snd_pcm_substream *substream)
 	}
 
 	prtd->lsm_client->session_state = RUNNING;
+	prtd->lsm_client->started = false;
 	runtime->private_data = prtd;
 	return ret;
 }
@@ -2624,10 +2622,7 @@ static int msm_lsm_close(struct snd_pcm_substream *substream)
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct lsm_priv *prtd = runtime->private_data;
 	struct snd_soc_pcm_runtime *rtd;
-	struct msm_pcm_stream_app_type_cfg cfg_data = {0};
 	int ret = 0;
-	int be_id = 0;
-	int fe_id = 0;
 
 	if (!substream->private_data) {
 		pr_err("%s: Invalid private_data", __func__);
@@ -2641,25 +2636,6 @@ static int msm_lsm_close(struct snd_pcm_substream *substream)
 
 	dev_dbg(rtd->dev, "%s\n", __func__);
 	if (prtd->lsm_client->started) {
-		if (prtd->lsm_client->lab_enable) {
-			atomic_set(&prtd->read_abort, 1);
-			if (prtd->lsm_client->lab_started) {
-				ret = q6lsm_stop_lab(prtd->lsm_client);
-				if (ret)
-					dev_err(rtd->dev,
-						"%s: stop lab failed ret %d\n",
-						__func__, ret);
-				prtd->lsm_client->lab_started = false;
-			}
-			if (prtd->lsm_client->lab_buffer) {
-				ret = msm_lsm_lab_buffer_alloc(prtd,
-						LAB_BUFFER_DEALLOC);
-				if (ret)
-					dev_err(rtd->dev,
-						"%s: lab buffer dealloc failed ret %d\n",
-						__func__, ret);
-			}
-		}
 		ret = q6lsm_stop(prtd->lsm_client, true);
 		if (ret)
 			dev_err(rtd->dev,
@@ -2693,37 +2669,6 @@ static int msm_lsm_close(struct snd_pcm_substream *substream)
 		q6lsm_close(prtd->lsm_client);
 		prtd->lsm_client->opened = false;
 	}
-
-	fe_id = prtd->lsm_client->fe_id;
-	ret = msm_pcm_routing_get_stream_app_type_cfg(fe_id, SESSION_TYPE_TX,
-						      &be_id, &cfg_data);
-	if (ret < 0)
-		dev_dbg(rtd->dev,
-			"%s: get stream app type cfg failed, err = %d\n",
-			__func__, ret);
-	/*
-	 * be_id will be 0 in case of LSM directly connects to AFE due to
-	 * last_be_id_configured[fedai_id][session_type] has not been updated.
-	 * And then the cfg_data from wrong combination would be reset without
-	 * this if check. We reset only if app_type, acdb_dev_id, and sample_rate
-	 * are valid.
-	 */
-	if (!cfg_data.app_type &&
-	    !cfg_data.acdb_dev_id && !cfg_data.sample_rate) {
-		dev_dbg(rtd->dev, "%s: no need to reset app type configs\n",
-			__func__);
-	} else {
-		memset(&cfg_data, 0, sizeof(cfg_data));
-		ret = msm_pcm_routing_reg_stream_app_type_cfg(fe_id,
-							      SESSION_TYPE_TX,
-							      be_id,
-							      &cfg_data);
-		if (ret < 0)
-			dev_dbg(rtd->dev,
-				"%s: set stream app type cfg failed, err = %d\n",
-				__func__, ret);
-	}
-
 	q6lsm_client_free(prtd->lsm_client);
 
 	spin_lock_irqsave(&prtd->event_lock, flags);
@@ -2995,81 +2940,13 @@ static int msm_lsm_add_app_type_controls(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
-static int msm_lsm_afe_data_ctl_put(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_value *ucontrol)
-{
-	u64 fe_id = kcontrol->private_value;
-	uint16_t afe_data_format = 0;
-	int ret = 0;
-
-	afe_data_format = ucontrol->value.integer.value[0];
-	pr_debug("%s: afe data is %s\n", __func__,
-		 afe_data_format ? "unprocessed" : "processed");
-
-	ret = q6lsm_set_afe_data_format(fe_id, afe_data_format);
-	if (ret)
-		pr_err("%s: q6lsm_set_afe_data_format failed, ret = %d\n",
-			__func__, ret);
-
-	return ret;
-}
-
-static int msm_lsm_afe_data_ctl_get(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_value *ucontrol)
-{
-	u64 fe_id = kcontrol->private_value;
-	uint16_t afe_data_format = 0;
-	int ret = 0;
-
-	q6lsm_get_afe_data_format(fe_id, &afe_data_format);
-	ucontrol->value.integer.value[0] = afe_data_format;
-	pr_debug("%s: afe data is %s\n", __func__,
-		 afe_data_format ? "unprocessed" : "processed");
-
-	return ret;
-}
-
-static int msm_lsm_add_afe_data_controls(struct snd_soc_pcm_runtime *rtd)
-{
-	struct snd_pcm *pcm = rtd->pcm;
-	struct snd_pcm_usr *afe_data_info;
-	struct snd_kcontrol *kctl;
-	const char *mixer_ctl_name	= "Listen Stream";
-	const char *deviceNo		= "NN";
-	const char *suffix		= "Unprocessed Data";
-	int ctl_len, ret = 0;
-
-	ctl_len = strlen(mixer_ctl_name) + 1 + strlen(deviceNo) + 1 +
-		  strlen(suffix) + 1;
-	pr_debug("%s: Adding Listen afe data cntrls\n", __func__);
-	ret = snd_pcm_add_usr_ctls(pcm, SNDRV_PCM_STREAM_CAPTURE,
-				   NULL, 1, ctl_len, rtd->dai_link->id,
-				   &afe_data_info);
-	if (ret < 0) {
-		pr_err("%s: Adding Listen afe data cntrls failed: %d\n",
-		       __func__, ret);
-		return ret;
-	}
-	kctl = afe_data_info->kctl;
-	snprintf(kctl->id.name, ctl_len, "%s %d %s",
-		 mixer_ctl_name, rtd->pcm->device, suffix);
-	kctl->put = msm_lsm_afe_data_ctl_put;
-	kctl->get = msm_lsm_afe_data_ctl_get;
-
-	return 0;
-}
-
 static int msm_lsm_add_controls(struct snd_soc_pcm_runtime *rtd)
 {
 	int ret = 0;
 
 	ret = msm_lsm_add_app_type_controls(rtd);
 	if (ret)
-		pr_err("%s, add app type controls failed:%d\n", __func__, ret);
-
-	ret = msm_lsm_add_afe_data_controls(rtd);
-	if (ret)
-		pr_err("%s, add afe data controls failed:%d\n", __func__, ret);
+		pr_err("%s, add  app type controls failed:%d\n", __func__, ret);
 
 	return ret;
 }
@@ -3100,15 +2977,14 @@ static int msm_asoc_lsm_new(struct snd_soc_pcm_runtime *rtd)
 	return ret;
 }
 
-static int msm_asoc_lsm_probe(struct snd_soc_component *component)
+static int msm_asoc_lsm_probe(struct snd_soc_platform *platform)
 {
 	pr_debug("enter %s\n", __func__);
 
 	return 0;
 }
 
-static struct snd_soc_component_driver msm_soc_component = {
-	.name		= DRV_NAME,
+static struct snd_soc_platform_driver msm_soc_platform = {
 	.ops		= &msm_lsm_ops,
 	.pcm_new	= msm_asoc_lsm_new,
 	.probe		= msm_asoc_lsm_probe,
@@ -3117,13 +2993,12 @@ static struct snd_soc_component_driver msm_soc_component = {
 static int msm_lsm_probe(struct platform_device *pdev)
 {
 
-	return snd_soc_register_component(&pdev->dev, &msm_soc_component,
-					  NULL, 0);
+	return snd_soc_register_platform(&pdev->dev, &msm_soc_platform);
 }
 
 static int msm_lsm_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_platform(&pdev->dev);
 
 	return 0;
 }
@@ -3138,7 +3013,6 @@ static struct platform_driver msm_lsm_driver = {
 		.name = "msm-lsm-client",
 		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(msm_lsm_client_dt_match),
-		.suppress_bind_attrs = true,
 	},
 	.probe = msm_lsm_probe,
 	.remove = msm_lsm_remove,

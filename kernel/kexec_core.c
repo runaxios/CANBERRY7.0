@@ -301,8 +301,6 @@ static struct page *kimage_alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
 	struct page *pages;
 
-	if (fatal_signal_pending(current))
-		return NULL;
 	pages = alloc_pages(gfp_mask & ~__GFP_ZERO, order);
 	if (pages) {
 		unsigned int count, i;
@@ -831,8 +829,6 @@ static int kimage_load_normal_segment(struct kimage *image,
 		else
 			buf += mchunk;
 		mbytes -= mchunk;
-
-		cond_resched();
 	}
 out:
 	return result;
@@ -897,8 +893,6 @@ static int kimage_load_crash_segment(struct kimage *image,
 		else
 			buf += mchunk;
 		mbytes -= mchunk;
-
-		cond_resched();
 	}
 out:
 	return result;

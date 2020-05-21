@@ -73,7 +73,7 @@ hns_ppe_common_get_ioaddr(struct ppe_common_cb *ppe_common)
  * comm_index: common index
  * retuen 0 - success , negative --fail
  */
-static int hns_ppe_common_get_cfg(struct dsaf_device *dsaf_dev, int comm_index)
+int hns_ppe_common_get_cfg(struct dsaf_device *dsaf_dev, int comm_index)
 {
 	struct ppe_common_cb *ppe_common;
 	int ppe_num;
@@ -104,8 +104,7 @@ static int hns_ppe_common_get_cfg(struct dsaf_device *dsaf_dev, int comm_index)
 	return 0;
 }
 
-static void
-hns_ppe_common_free_cfg(struct dsaf_device *dsaf_dev, u32 comm_index)
+void hns_ppe_common_free_cfg(struct dsaf_device *dsaf_dev, u32 comm_index)
 {
 	dsaf_dev->ppe_common[comm_index] = NULL;
 }
@@ -204,9 +203,9 @@ static int hns_ppe_common_init_hw(struct ppe_common_cb *ppe_common)
 	enum dsaf_mode dsaf_mode = dsaf_dev->dsaf_mode;
 
 	dsaf_dev->misc_op->ppe_comm_srst(dsaf_dev, 0);
-	msleep(100);
+	mdelay(100);
 	dsaf_dev->misc_op->ppe_comm_srst(dsaf_dev, 1);
-	msleep(100);
+	mdelay(100);
 
 	if (ppe_common->ppe_mode == PPE_COMMON_MODE_SERVICE) {
 		switch (dsaf_mode) {
@@ -361,7 +360,7 @@ static void hns_ppe_uninit_hw(struct hns_ppe_cb *ppe_cb)
 	}
 }
 
-static void hns_ppe_uninit_ex(struct ppe_common_cb *ppe_common)
+void hns_ppe_uninit_ex(struct ppe_common_cb *ppe_common)
 {
 	u32 i;
 

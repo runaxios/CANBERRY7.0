@@ -1,9 +1,18 @@
-// SPDX-License-Identifier: GPL-1.0+
 /*
  * Renesas USB driver
  *
  * Copyright (C) 2011 Renesas Solutions Corp.
  * Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -502,7 +511,6 @@ static int usbhsg_irq_ctrl_stage(struct usbhs_priv *priv,
 	case READ_STATUS_STAGE:
 	case WRITE_STATUS_STAGE:
 		usbhs_dcp_control_transfer_done(pipe);
-		/* fall through */
 	default:
 		return ret;
 	}
@@ -721,25 +729,14 @@ static int __usbhsg_ep_set_halt_wedge(struct usb_ep *ep, int halt, int wedge)
 	struct usbhs_priv *priv = usbhsg_gpriv_to_priv(gpriv);
 	struct device *dev = usbhsg_gpriv_to_dev(gpriv);
 	unsigned long flags;
-	int ret = 0;
+
+	usbhsg_pipe_disable(uep);
 
 	dev_dbg(dev, "set halt %d (pipe %d)\n",
 		halt, usbhs_pipe_number(pipe));
 
 	/********************  spin lock ********************/
 	usbhs_lock(priv, flags);
-
-	/*
-	 * According to usb_ep_set_halt()'s description, this function should
-	 * return -EAGAIN if the IN endpoint has any queue or data. Note
-	 * that the usbhs_pipe_is_dir_in() returns false if the pipe is an
-	 * IN endpoint in the gadget mode.
-	 */
-	if (!usbhs_pipe_is_dir_in(pipe) && (__usbhsf_pkt_get(pipe) ||
-	    usbhs_pipe_contains_transmittable_data(pipe))) {
-		ret = -EAGAIN;
-		goto out;
-	}
 
 	if (halt)
 		usbhs_pipe_stall(pipe);
@@ -751,11 +748,10 @@ static int __usbhsg_ep_set_halt_wedge(struct usb_ep *ep, int halt, int wedge)
 	else
 		usbhsg_status_clr(gpriv, USBHSG_STATUS_WEDGE);
 
-out:
 	usbhs_unlock(priv, flags);
 	/********************  spin unlock ******************/
 
-	return ret;
+	return 0;
 }
 
 static int usbhsg_ep_set_halt(struct usb_ep *ep, int value)
@@ -1081,7 +1077,7 @@ int usbhs_mod_gadget_probe(struct usbhs_priv *priv)
 	if (!gpriv)
 		return -ENOMEM;
 
-	uep = kcalloc(pipe_size, sizeof(struct usbhsg_uep), GFP_KERNEL);
+	uep = kzalloc(sizeof(struct usbhsg_uep) * pipe_size, GFP_KERNEL);
 	if (!uep) {
 		ret = -ENOMEM;
 		goto usbhs_mod_gadget_probe_err_gpriv;

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 #ifndef UAPI_MMC_CORE_H
 #define UAPI_MMC_CORE_H
 

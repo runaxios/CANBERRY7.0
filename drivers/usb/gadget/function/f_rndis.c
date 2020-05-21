@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_rndis.c -- RNDIS link function driver
  *
@@ -7,6 +6,11 @@
  * Copyright (C) 2008 Nokia Corporation
  * Copyright (C) 2009 Samsung Electronics
  *                    Author: Michal Nazarewicz (mina86@mina86.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -66,7 +70,15 @@
  *   - MS-Windows drivers sometimes emit undocumented requests.
  */
 
-#define RNDIS_UL_MAX_PKT_PER_XFER	3
+static bool rndis_multipacket_dl_disable;
+module_param(rndis_multipacket_dl_disable, bool, 0644);
+MODULE_PARM_DESC(rndis_multipacket_dl_disable,
+	"Disable RNDIS Multi-packet support in DownLink");
+
+static unsigned int rndis_ul_max_pkt_per_xfer = 3;
+module_param(rndis_ul_max_pkt_per_xfer, uint, 0644);
+MODULE_PARM_DESC(rndis_ul_max_pkt_per_xfer,
+	"Maximum packets per transfer for UL aggregation");
 
 struct f_rndis {
 	struct gether			port;
@@ -672,7 +684,6 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_string	*us;
 	int			status;
 	struct usb_ep		*ep;
-	unsigned int		max;
 
 	struct f_rndis_opts *rndis_opts;
 
@@ -741,6 +752,27 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	rndis_data_intf.bInterfaceNumber = status;
 	rndis_union_desc.bSlaveInterface0 = status;
 
+	if (rndis_opts->wceis) {
+		/* "Wireless" RNDIS; auto-detected by Windows */
+		rndis_iad_descriptor.bFunctionClass =
+						USB_CLASS_WIRELESS_CONTROLLER;
+		rndis_iad_descriptor.bFunctionSubClass = 0x01;
+		rndis_iad_descriptor.bFunctionProtocol = 0x03;
+		rndis_control_intf.bInterfaceClass =
+						USB_CLASS_WIRELESS_CONTROLLER;
+		rndis_control_intf.bInterfaceSubClass =	 0x01;
+		rndis_control_intf.bInterfaceProtocol =	 0x03;
+	} else {
+		rndis_iad_descriptor.bFunctionClass = USB_CLASS_COMM;
+		rndis_iad_descriptor.bFunctionSubClass =
+						USB_CDC_SUBCLASS_ETHERNET;
+		rndis_iad_descriptor.bFunctionProtocol = USB_CDC_PROTO_NONE;
+		rndis_control_intf.bInterfaceClass = USB_CLASS_COMM;
+		rndis_control_intf.bInterfaceSubClass =	USB_CDC_SUBCLASS_ACM;
+		rndis_control_intf.bInterfaceProtocol =
+						USB_CDC_ACM_PROTO_VENDOR;
+	}
+
 	status = -ENODEV;
 
 	/* allocate instance-specific endpoints */
@@ -798,11 +830,7 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 
 	rndis_set_param_medium(rndis->params, RNDIS_MEDIUM_802_3, 0);
 	rndis_set_host_mac(rndis->params, rndis->ethaddr);
-	max = gether_get_ul_max_pkts_per_xfer(rndis_opts->net);
-	if (!max)
-		max = RNDIS_UL_MAX_PKT_PER_XFER;
-
-	rndis_set_max_pkt_xfer(rndis->params, max);
+	rndis_set_max_pkt_xfer(rndis->params, rndis_ul_max_pkt_per_xfer);
 
 	if (rndis->manufacturer && rndis->vendorID &&
 			rndis_set_param_vendor(rndis->params, rndis->vendorID,
@@ -883,9 +911,8 @@ USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, subclass);
 /* f_rndis_opts_protocol */
 USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, protocol);
 
-/* f_rndis_opts_ul_max_pkt_per_xfer */
-USB_ETHER_CONFIGFS_ITEM_ATTR_UL_MAX_PKT_PER_XFER(rndis);
-
+/* f_rndis_opts_wceis */
+USB_ETHERNET_CONFIGFS_ITEM_ATTR_WCEIS(rndis);
 
 static struct configfs_attribute *rndis_attrs[] = {
 	&rndis_opts_attr_dev_addr,
@@ -895,11 +922,11 @@ static struct configfs_attribute *rndis_attrs[] = {
 	&rndis_opts_attr_class,
 	&rndis_opts_attr_subclass,
 	&rndis_opts_attr_protocol,
-	&rndis_opts_attr_ul_max_pkt_per_xfer,
+	&rndis_opts_attr_wceis,
 	NULL,
 };
 
-static const struct config_item_type rndis_func_type = {
+static struct config_item_type rndis_func_type = {
 	.ct_item_ops	= &rndis_item_ops,
 	.ct_attrs	= rndis_attrs,
 	.ct_owner	= THIS_MODULE,
@@ -960,6 +987,9 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 	}
 	opts->rndis_interf_group = rndis_interf_group;
 
+	/* Enable "Wireless" RNDIS by default */
+	opts->wceis = true;
+
 	return &opts->func_inst;
 }
 
@@ -1017,8 +1047,7 @@ static struct usb_function *rndis_alloc(struct usb_function_instance *fi)
 	rndis->port.header_len = sizeof(struct rndis_packet_msg_type);
 	rndis->port.wrap = rndis_add_header;
 	rndis->port.unwrap = rndis_rm_hdr;
-	if (!gether_get_ul_max_pkts_per_xfer(opts->net))
-		rndis->port.ul_max_pkts_per_xfer = RNDIS_UL_MAX_PKT_PER_XFER;
+	rndis->port.ul_max_pkts_per_xfer = rndis_ul_max_pkt_per_xfer;
 
 	rndis->port.func.name = "rndis";
 	/* descriptors are per-instance copies */

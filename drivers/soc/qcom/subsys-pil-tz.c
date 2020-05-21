@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -351,7 +358,6 @@ static int of_read_regs(struct device *dev, struct reg_info **regs_ref,
 	return reg_count;
 }
 
-#if defined(CONFIG_QCOM_BUS_SCALING)
 static int of_read_bus_pdata(struct platform_device *pdev,
 			     struct pil_tz_data *d)
 {
@@ -368,34 +374,6 @@ static int of_read_bus_pdata(struct platform_device *pdev,
 
 	return 0;
 }
-static int do_bus_scaling_request(struct pil_desc *pil, int enable)
-{
-	int rc;
-	struct pil_tz_data *d = desc_to_data(pil);
-
-	if (d->bus_client) {
-		rc = msm_bus_scale_client_update_request(d->bus_client, enable);
-		if (rc) {
-			dev_err(pil->dev, "bandwidth request failed(rc:%d)\n",
-									rc);
-			return rc;
-		}
-	} else
-		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
-					d->subsys_desc.name);
-	return 0;
-}
-#else
-static int of_read_bus_pdata(struct platform_device *pdev,
-			     struct pil_tz_data *d)
-{
-	return 0;
-}
-static int do_bus_scaling_request(struct pil_desc *pil, int enable)
-{
-	return 0;
-}
-#endif
 
 static int piltz_resc_init(struct platform_device *pdev, struct pil_tz_data *d)
 {
@@ -562,9 +540,16 @@ static int pil_make_proxy_vote(struct pil_desc *pil)
 	if (d->subsys_desc.no_auth)
 		return 0;
 
-	rc = do_bus_scaling_request(pil, 1);
-	if (rc)
-		return rc;
+	if (d->bus_client) {
+		rc = msm_bus_scale_client_update_request(d->bus_client, 1);
+		if (rc) {
+			dev_err(pil->dev, "bandwidth request failed(rc:%d)\n",
+									rc);
+			return rc;
+		}
+	} else
+		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
+					d->subsys_desc.name);
 
 	rc = enable_regulators(d, pil->dev, d->proxy_regs,
 					d->proxy_reg_count, false);
@@ -595,7 +580,11 @@ static void pil_remove_proxy_vote(struct pil_desc *pil)
 
 	disable_regulators(d, d->proxy_regs, d->proxy_reg_count, true);
 
-	do_bus_scaling_request(pil, 0);
+	if (d->bus_client)
+		msm_bus_scale_client_update_request(d->bus_client, 0);
+	else
+		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
+					d->subsys_desc.name);
 }
 
 static int pil_init_image_trusted(struct pil_desc *pil,
@@ -658,7 +647,7 @@ static int pil_mem_setup_trusted(struct pil_desc *pil, phys_addr_t addr,
 
 	desc.args[0] = d->pas_id;
 	desc.args[1] = addr;
-	desc.args[2] = size + pil->extra_size;
+	desc.args[2] = size;
 	desc.arginfo = SCM_ARGS(3);
 	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_MEM_SETUP_CMD),
 			&desc);
@@ -724,9 +713,16 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 	desc.args[0] = proc = d->pas_id;
 	desc.arginfo = SCM_ARGS(1);
 
-	rc = do_bus_scaling_request(pil, 1);
-	if (rc)
-		return rc;
+	if (d->bus_client) {
+		rc = msm_bus_scale_client_update_request(d->bus_client, 1);
+		if (rc) {
+			dev_err(pil->dev, "bandwidth request failed(rc:%d)\n",
+									rc);
+			return rc;
+		}
+	} else
+		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
+					d->subsys_desc.name);
 
 	rc = enable_regulators(d, pil->dev, d->proxy_regs,
 					d->proxy_reg_count, true);
@@ -744,8 +740,11 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 
 	disable_unprepare_clocks(d->proxy_clks, d->proxy_clk_count);
 	disable_regulators(d, d->proxy_regs, d->proxy_reg_count, false);
-
-	do_bus_scaling_request(pil, 0);
+	if (d->bus_client)
+		msm_bus_scale_client_update_request(d->bus_client, 0);
+	else
+		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
+					d->subsys_desc.name);
 
 	if (rc)
 		return rc;
@@ -758,8 +757,11 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 err_clks:
 	disable_regulators(d, d->proxy_regs, d->proxy_reg_count, false);
 err_regulators:
-	do_bus_scaling_request(pil, 0);
-
+	if (d->bus_client)
+		msm_bus_scale_client_update_request(d->bus_client, 0);
+	else
+		WARN(d->enable_bus_scaling, "Bus scaling not set up for %s!\n",
+					d->subsys_desc.name);
 	return rc;
 }
 
@@ -954,13 +956,11 @@ static void clear_pbl_done(struct pil_tz_data *d)
 	uint32_t err_value;
 
 	err_value =  __raw_readl(d->err_status);
-
+	pr_debug("PBL_DONE received from %s!\n", d->subsys_desc.name);
 	if (err_value) {
 		uint32_t rmb_err_spare0;
 		uint32_t rmb_err_spare1;
 		uint32_t rmb_err_spare2;
-
-		pr_debug("PBL_DONE received from %s!\n", d->subsys_desc.name);
 
 		rmb_err_spare2 =  __raw_readl(d->err_status_spare);
 		rmb_err_spare1 =  __raw_readl(d->err_status_spare-4);
@@ -974,9 +974,6 @@ static void clear_pbl_done(struct pil_tz_data *d)
 			rmb_err_spare1);
 		pr_err("PBL error status spare2 register: 0x%08x\n",
 			rmb_err_spare2);
-	} else {
-		pr_info("PBL_DONE - 1st phase loading [%s] completed ok\n",
-			d->subsys_desc.name);
 	}
 	__raw_writel(BIT(d->bits_arr[PBL_DONE]), d->irq_clear);
 }
@@ -985,36 +982,9 @@ static void clear_err_ready(struct pil_tz_data *d)
 {
 	pr_debug("Subsystem error services up received from %s\n",
 							d->subsys_desc.name);
-
-	pr_info("SW_INIT_DONE - 2nd phase loading [%s] completed ok\n",
-		d->subsys_desc.name);
-
 	__raw_writel(BIT(d->bits_arr[ERR_READY]), d->irq_clear);
 	complete_err_ready(d->subsys);
 }
-
-static void clear_sw_init_done_error(struct pil_tz_data *d, int err)
-{
-	uint32_t rmb_err_spare0;
-	uint32_t rmb_err_spare1;
-	uint32_t rmb_err_spare2;
-
-	pr_info("SW_INIT_DONE - ERROR [%s] [0x%x].\n",
-		d->subsys_desc.name, err);
-
-	rmb_err_spare2 =  __raw_readl(d->err_status_spare);
-	rmb_err_spare1 =  __raw_readl(d->err_status_spare-4);
-	rmb_err_spare0 =  __raw_readl(d->err_status_spare-8);
-
-	pr_err("spare0 register: 0x%08x\n", rmb_err_spare0);
-	pr_err("spare1 register: 0x%08x\n", rmb_err_spare1);
-	pr_err("spare2 register: 0x%08x\n", rmb_err_spare2);
-
-	/* Clear the interrupt source */
-	__raw_writel(BIT(d->bits_arr[ERR_READY]), d->irq_clear);
-}
-
-
 
 static void clear_wdog(struct pil_tz_data *d)
 {
@@ -1036,14 +1006,12 @@ static irqreturn_t subsys_generic_handler(int irq, void *dev_id)
 	err_value =  __raw_readl(d->err_status_spare);
 	status_val = __raw_readl(d->irq_status);
 
-	if (status_val & BIT(d->bits_arr[ERR_READY])) {
-		if (!err_value)
-			clear_err_ready(d);
-		else if (err_value == 0x44554d50)
-			clear_wdog(d);
-		else
-			clear_sw_init_done_error(d, err_value);
-	}
+	if ((status_val & BIT(d->bits_arr[ERR_READY])) && !err_value)
+		clear_err_ready(d);
+
+	if ((status_val & BIT(d->bits_arr[ERR_READY])) &&
+					err_value == 0x44554d50)
+		clear_wdog(d);
 
 	if (status_val & BIT(d->bits_arr[PBL_DONE]))
 		clear_pbl_done(d);
@@ -1120,7 +1088,7 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		if (rc) {
 			dev_err(&pdev->dev, "Failed to find the pas_id(rc:%d)\n",
 									rc);
-			goto err_deregister_bus;
+			return rc;
 		}
 
 		crypto_id = MSM_BUS_MASTER_CRYPTO_CORE_0;
@@ -1136,7 +1104,7 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 
 	rc = pil_desc_init(&d->desc);
 	if (rc)
-		goto err_deregister_bus;
+		return rc;
 
 	init_completion(&d->stop_ack);
 
@@ -1207,10 +1175,6 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		}
 		mask_scsr_irqs(d);
 
-		rc = of_property_read_u32(pdev->dev.of_node, "qcom,extra-size",
-						&d->desc.extra_size);
-		if (rc)
-			d->desc.extra_size = 0;
 	} else {
 		d->subsys_desc.err_fatal_handler =
 						subsys_err_fatal_intr_handler;
@@ -1268,9 +1232,6 @@ err_minidump:
 err_ramdump:
 	pil_desc_release(&d->desc);
 	platform_set_drvdata(pdev, NULL);
-err_deregister_bus:
-	if (d->bus_client)
-		msm_bus_scale_unregister_client(d->bus_client);
 
 	return rc;
 }

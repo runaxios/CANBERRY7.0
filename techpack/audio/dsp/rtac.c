@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/fs.h>
@@ -985,7 +993,6 @@ int send_rtac_asm_apr(void *buf, u32 opcode)
 	u32 user_buf_size = 0;
 	u32 bytes_returned = 0;
 	u32 session_id = 0;
-	u8  stream_id = 0;
 	u32 payload_size;
 	u32 data_size = 0;
 	struct apr_hdr asm_params;
@@ -1041,13 +1048,6 @@ int send_rtac_asm_apr(void *buf, u32 opcode)
 	mutex_lock(&rtac_asm_apr_mutex);
 	if (rtac_asm_apr_data[session_id].apr_handle == NULL) {
 		pr_err("%s: APR not initialized\n", __func__);
-		result = -EINVAL;
-		goto err;
-	}
-
-	stream_id = q6asm_get_asm_stream_id(session_id);
-	if ((stream_id != 1) && (stream_id != 2)) {
-		pr_err("%s: Invalid stream id %u\n", __func__, stream_id);
 		result = -EINVAL;
 		goto err;
 	}
@@ -1111,10 +1111,10 @@ int send_rtac_asm_apr(void *buf, u32 opcode)
 		payload_size);
 	asm_params.src_svc = q6asm_get_apr_service_id(session_id);
 	asm_params.src_domain = APR_DOMAIN_APPS;
-	asm_params.src_port = (session_id << 8) | stream_id;
+	asm_params.src_port = (session_id << 8) | 0x0001;
 	asm_params.dest_svc = APR_SVC_ASM;
 	asm_params.dest_domain = APR_DOMAIN_ADSP;
-	asm_params.dest_port = (session_id << 8) | stream_id;
+	asm_params.dest_port = (session_id << 8) | 0x0001;
 	asm_params.token = session_id;
 	asm_params.opcode = opcode;
 

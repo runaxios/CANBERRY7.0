@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -10,10 +18,10 @@
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include "../../../drivers/clk/qcom/common.h"
-#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <dt-bindings/clock/qcom,audio-ext-clk.h>
 #include <dsp/q6afe-v2.h>
+#include <dsp/q6core.h>
 #include "audio-ext-clk-up.h"
 
 enum {
@@ -27,11 +35,8 @@ enum {
 	AUDIO_EXT_CLK_LPASS6,
 	AUDIO_EXT_CLK_LPASS7,
 	AUDIO_EXT_CLK_LPASS_CORE_HW_VOTE,
-	AUDIO_EXT_CLK_LPASS8,
-	AUDIO_EXT_CLK_LPASS_AUDIO_HW_VOTE,
 	AUDIO_EXT_CLK_LPASS_MAX,
-	AUDIO_EXT_CLK_EXTERNAL_PLL = AUDIO_EXT_CLK_LPASS_MAX,
-	AUDIO_EXT_CLK_MAX,
+	AUDIO_EXT_CLK_MAX = AUDIO_EXT_CLK_LPASS_MAX,
 };
 
 struct pinctrl_info {
@@ -53,7 +58,6 @@ struct audio_ext_clk_priv {
 	struct audio_ext_clk audio_clk;
 	const char *clk_name;
 	uint32_t lpass_core_hwvote_client_handle;
-	uint32_t lpass_audio_hwvote_client_handle;
 };
 
 static inline struct audio_ext_clk_priv *to_audio_clk(struct clk_hw *hw)
@@ -143,26 +147,30 @@ static u8 audio_ext_clk_get_parent(struct clk_hw *hw)
 static int lpass_hw_vote_prepare(struct clk_hw *hw)
 {
 	struct audio_ext_clk_priv *clk_priv = to_audio_clk(hw);
-	int ret;
+	int ret = 0;
+	int32_t avs_state = 0;
+	uint32_t *client_handle = &clk_priv->lpass_core_hwvote_client_handle;
 
 	if (clk_priv->clk_src == AUDIO_EXT_CLK_LPASS_CORE_HW_VOTE)  {
 		ret = afe_vote_lpass_core_hw(AFE_LPASS_CORE_HW_MACRO_BLOCK,
-			"LPASS_HW_MACRO",
-			&clk_priv->lpass_core_hwvote_client_handle);
+					     "LPASS_HW_MACRO",
+					     client_handle);
 		if (ret < 0) {
 			pr_err("%s lpass core hw vote failed %d\n",
 				__func__, ret);
-			return ret;
-		}
-	}
-
-	if (clk_priv->clk_src == AUDIO_EXT_CLK_LPASS_AUDIO_HW_VOTE)  {
-		ret = afe_vote_lpass_core_hw(AFE_LPASS_CORE_HW_DCODEC_BLOCK,
-			"LPASS_HW_DCODEC",
-			&clk_priv->lpass_audio_hwvote_client_handle);
-		if (ret < 0) {
-			pr_err("%s lpass audio hw vote failed %d\n",
-				__func__, ret);
+			/*
+			 * DSP returns -EBUSY when AVS services are not up
+			 * Check for AVS state and then retry voting
+			 * for core hw clock.
+			 */
+			if (ret == -EBUSY) {
+				q6core_is_avs_up(&avs_state);
+				if (avs_state)
+					ret = afe_vote_lpass_core_hw(
+						AFE_LPASS_CORE_HW_MACRO_BLOCK,
+						"LPASS_HW_MACRO",
+						client_handle);
+			}
 			return ret;
 		}
 	}
@@ -179,20 +187,9 @@ static void lpass_hw_vote_unprepare(struct clk_hw *hw)
 		ret = afe_unvote_lpass_core_hw(
 			AFE_LPASS_CORE_HW_MACRO_BLOCK,
 			clk_priv->lpass_core_hwvote_client_handle);
-		if (ret < 0) {
+		if (ret < 0)
 			pr_err("%s lpass core hw vote failed %d\n",
 				__func__, ret);
-		}
-	}
-
-	if (clk_priv->clk_src == AUDIO_EXT_CLK_LPASS_AUDIO_HW_VOTE) {
-		ret = afe_unvote_lpass_core_hw(
-			AFE_LPASS_CORE_HW_DCODEC_BLOCK,
-			clk_priv->lpass_audio_hwvote_client_handle);
-		if (ret < 0) {
-			pr_err("%s lpass audio hw unvote failed %d\n",
-				__func__, ret);
-		}
 	}
 }
 
@@ -341,37 +338,6 @@ static struct audio_ext_clk audio_clk_array[] = {
 			.hw.init = &(struct clk_init_data){
 				.name = "lpass_hw_vote_clk",
 				.ops = &lpass_hw_vote_ops,
-			},
-		},
-	},
-	{
-		.pnctrl_info = {NULL},
-		.fact = {
-			.mult = 1,
-			.div = 1,
-			.hw.init = &(struct clk_init_data){
-				.name = "audio_lpass_mclk8",
-				.ops = &audio_ext_clk_ops,
-			},
-		},
-	},
-	{
-		.pnctrl_info = {NULL},
-		.fact = {
-			.hw.init = &(struct clk_init_data){
-				.name = "lpass_audio_hw_vote_clk",
-				.ops = &lpass_hw_vote_ops,
-			},
-		},
-	},
-	{
-		.pnctrl_info = {NULL},
-		.fact = {
-			.mult = 1,
-			.div = 1,
-			.hw.init = &(struct clk_init_data){
-				.name = "audio_external_pll_clk",
-				.ops = &audio_ext_clk_ops,
 			},
 		},
 	},
@@ -576,6 +542,7 @@ static int audio_ref_clk_probe(struct platform_device *pdev)
 		audio_put_pinctrl(pdev);
 		return ret;
 	}
+
 	return 0;
 }
 
@@ -597,7 +564,6 @@ static struct platform_driver audio_ref_clk_driver = {
 		.name = "audio-ref-clk",
 		.owner = THIS_MODULE,
 		.of_match_table = audio_ref_clk_match,
-		.suppress_bind_attrs = true,
 	},
 	.probe = audio_ref_clk_probe,
 	.remove = audio_ref_clk_remove,

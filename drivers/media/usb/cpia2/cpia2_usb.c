@@ -33,13 +33,13 @@
 
 static int frame_sizes[] = {
 	0,	// USBIF_CMDONLY
-	0,	// USBIF_BULK
-	128,	// USBIF_ISO_1
-	384,	// USBIF_ISO_2
-	640,	// USBIF_ISO_3
-	768,	// USBIF_ISO_4
-	896,	// USBIF_ISO_5
-	1023,	// USBIF_ISO_6
+	0, 	// USBIF_BULK
+	128, 	// USBIF_ISO_1
+	384, 	// USBIF_ISO_2
+	640, 	// USBIF_ISO_3
+	768, 	// USBIF_ISO_4
+	896, 	// USBIF_ISO_5
+	1023, 	// USBIF_ISO_6
 };
 
 #define FRAMES_PER_DESC    10
@@ -663,8 +663,7 @@ static int submit_urbs(struct camera_data *cam)
 		if (cam->sbuf[i].data)
 			continue;
 		cam->sbuf[i].data =
-		    kmalloc_array(FRAME_SIZE_PER_DESC, FRAMES_PER_DESC,
-				  GFP_KERNEL);
+		    kmalloc(FRAMES_PER_DESC * FRAME_SIZE_PER_DESC, GFP_KERNEL);
 		if (!cam->sbuf[i].data) {
 			while (--i >= 0) {
 				kfree(cam->sbuf[i].data);
@@ -685,10 +684,6 @@ static int submit_urbs(struct camera_data *cam)
 		if (!urb) {
 			for (j = 0; j < i; j++)
 				usb_free_urb(cam->sbuf[j].urb);
-			for (j = 0; j < NUM_SBUF; j++) {
-				kfree(cam->sbuf[j].data);
-				cam->sbuf[j].data = NULL;
-			}
 			return -ENOMEM;
 		}
 
@@ -906,6 +901,7 @@ static void cpia2_usb_disconnect(struct usb_interface *intf)
 	cpia2_unregister_camera(cam);
 	v4l2_device_disconnect(&cam->v4l2_dev);
 	mutex_unlock(&cam->v4l2_lock);
+	v4l2_device_put(&cam->v4l2_dev);
 
 	if(cam->buffers) {
 		DBG("Wakeup waiting processes\n");
@@ -914,7 +910,8 @@ static void cpia2_usb_disconnect(struct usb_interface *intf)
 		wake_up_interruptible(&cam->wq_stream);
 	}
 
-	v4l2_device_put(&cam->v4l2_dev);
+	DBG("Releasing interface\n");
+	usb_driver_release_interface(&cpia2_driver, intf);
 
 	LOG("CPiA2 camera disconnected.\n");
 }

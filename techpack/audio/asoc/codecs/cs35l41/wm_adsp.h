@@ -2,7 +2,7 @@
  * wm_adsp.h  --  Wolfson ADSP support
  *
  * Copyright 2012 Wolfson Microelectronics plc
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
  *
@@ -56,54 +56,25 @@ struct wm_adsp_alg_region {
 struct wm_adsp_compr;
 struct wm_adsp_compr_buf;
 
-struct wm_adsp_buffer_region_def {
-	unsigned int mem_type;
-	unsigned int base_offset;
-	unsigned int size_offset;
-};
-
-struct wm_adsp_fw_caps {
-	u32 id;
-	struct snd_codec_desc desc;
-	int num_regions;
-	struct wm_adsp_buffer_region_def *region_defs;
-};
-
-struct wm_adsp_fw_defs {
-	const char *file;
-	const char *binfile;
-	bool fullname;
-	int compr_direction;
-	int num_caps;
-	struct wm_adsp_fw_caps *caps;
-	bool voice_trigger;
-};
-
 struct wm_adsp {
 	const char *part;
-	const char *name;
-	const char *fwf_name;
 	int rev;
 	int num;
 	int type;
-	bool ao_dsp;
-	const char *suffix;
 	struct device *dev;
 	struct regmap *regmap;
-	struct snd_soc_component *component;
-
-	struct wm_adsp_ops *ops;
-
-	unsigned int base;
+	struct snd_soc_codec *codec;
 	int cal_z;
 	int ambient;
 	int cal_status;
 	int cal_chksum;
 	int block_bypass;
-	unsigned int base_sysinfo;
-	unsigned int sysclk_reg;
-	unsigned int sysclk_mask;
-	unsigned int sysclk_shift;
+	int block_bypass_in_enh;
+	int base;
+	int base_sysinfo;
+	int sysclk_reg;
+	int sysclk_mask;
+	int sysclk_shift;
 
 	struct list_head alg_regions;
 
@@ -117,15 +88,10 @@ struct wm_adsp {
 	int fw;
 	int fw_ver;
 
-	bool no_preloader;
 	bool preloaded;
 	bool booted;
 	bool running;
 
-	int num_firmwares;
-	struct wm_adsp_fw_defs *firmwares;
-	struct snd_kcontrol_new fw_ctrl;
-	struct soc_enum fw_enum;
 	struct list_head ctl_list;
 
 	struct work_struct boot_work;
@@ -138,11 +104,9 @@ struct wm_adsp {
 	unsigned int lock_regions;
 	bool unlock_all;
 
-	unsigned int n_rx_channels;
-	unsigned int n_tx_channels;
-	unsigned int chip_revid;
+	unsigned int n_rx_rates;
+	unsigned int n_tx_rates;
 
-	struct mutex *rate_lock;
 	u8 *rx_rate_cache;
 	u8 *tx_rate_cache;
 
@@ -186,14 +150,14 @@ extern const struct snd_kcontrol_new wm_adsp_fw_controls[];
 int wm_adsp1_init(struct wm_adsp *dsp);
 int wm_adsp2_init(struct wm_adsp *dsp);
 void wm_adsp2_remove(struct wm_adsp *dsp);
-int wm_adsp2_component_probe(struct wm_adsp *dsp, struct snd_soc_component *component);
-int wm_adsp2_component_remove(struct wm_adsp *dsp, struct snd_soc_component *component);
-void wm_adsp_queue_boot_work(struct wm_adsp *dsp);
-int wm_vpu_setup_algs(struct wm_adsp *vpu);
-int wm_vpu_init(struct wm_adsp *vpu);
-int wm_halo_init(struct wm_adsp *dsp, struct mutex *rate_lock);
+int wm_adsp2_codec_probe(struct wm_adsp *dsp, struct snd_soc_codec *codec);
+int wm_adsp2_codec_remove(struct wm_adsp *dsp, struct snd_soc_codec *codec);
+int wm_halo_init(struct wm_adsp *dsp);
 int wm_adsp1_event(struct snd_soc_dapm_widget *w,
 		   struct snd_kcontrol *kcontrol, int event);
+
+int wm_halo_set_clocking(struct wm_adsp *dsp, unsigned int freq,
+			 struct mutex *rate_lock);
 
 int wm_adsp2_early_event(struct snd_soc_dapm_widget *w,
 			 struct snd_kcontrol *kcontrol, int event,
@@ -215,10 +179,6 @@ int wm_adsp2_preloader_get(struct snd_kcontrol *kcontrol,
 			   struct snd_ctl_elem_value *ucontrol);
 int wm_adsp2_preloader_put(struct snd_kcontrol *kcontrol,
 			   struct snd_ctl_elem_value *ucontrol);
-int wm_adsp_fw_get(struct snd_kcontrol *kcontrol,
-		   struct snd_ctl_elem_value *ucontrol);
-int wm_adsp_fw_put(struct snd_kcontrol *kcontrol,
-		   struct snd_ctl_elem_value *ucontrol);
 
 int wm_adsp_compr_open(struct wm_adsp *dsp, struct snd_compr_stream *stream);
 int wm_adsp_compr_free(struct snd_compr_stream *stream);
@@ -232,9 +192,5 @@ int wm_adsp_compr_pointer(struct snd_compr_stream *stream,
 			  struct snd_compr_tstamp *tstamp);
 int wm_adsp_compr_copy(struct snd_compr_stream *stream,
 		       char __user *buf, size_t count);
-int wm_adsp_write_ctl(struct wm_adsp *dsp, const char *name, const void *buf,
-		      size_t len);
-int wm_adsp_read_ctl(struct wm_adsp *dsp, const char *name, void *buf,
-		     size_t len);
 
 #endif

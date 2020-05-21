@@ -1,13 +1,13 @@
-ccflags-y := -I$(src) -Wall -Wno-error
+ccflags-y := -I$(src)
 IO_MODULE := msm
 
 # EXTRA_CFLAGS += -DDEBUG
 
 # Need to add include paths:
 LINUXINCLUDE += \
-	-I$(srctree)techpack/audio/include/dsp \
-	-I$(srctree)techpack/audio/include/uapi \
-	-I$(srctree)techpack/audio/include 
+             -I$(srctree)techpack/audio/include/dsp \
+             -I$(srctree)techpack/audio/include/uapi \
+             -I$(srctree)techpack/audio/include
 
 obj-y += elliptic.o
 obj-y += elliptic_mixer_controls.o

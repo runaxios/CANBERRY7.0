@@ -17,6 +17,11 @@
 #include <linux/quotaops.h>
 #include <linux/backing-dev.h>
 #include "internal.h"
+#include <linux/module.h>
+
+#ifdef CONFIG_DYNAMIC_FSYNC
+#include <linux/dyn_sync_cntrl.h>
+#endif
 
 #define VALID_FLAGS (SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE| \
 			SYNC_FILE_RANGE_WAIT_AFTER)
@@ -95,6 +100,21 @@ static void fdatawait_one_bdev(struct block_device *bdev, void *arg)
 	filemap_fdatawait_keep_errors(bdev->bd_inode->i_mapping);
 }
 
+#ifdef CONFIG_DYNAMIC_FSYNC
+/*
+ * Sync all the data for all the filesystems (called by sys_sync() and
+ * emergency sync)
+ */
+void sync_filesystems(int wait)
+{
+	iterate_supers(sync_inodes_one_sb, NULL);
+	iterate_supers(sync_fs_one_sb, &wait);
+	iterate_supers(sync_fs_one_sb, &wait);
+	iterate_bdevs(fdatawrite_one_bdev, NULL);
+	iterate_bdevs(fdatawait_one_bdev, NULL);
+}
+#endif
+
 /*
  * Sync everything. We start by waking flusher threads so that most of
  * writeback runs on all devices in parallel. Then we sync all inodes reliably
@@ -105,11 +125,11 @@ static void fdatawait_one_bdev(struct block_device *bdev, void *arg)
  * just write metadata (such as inodes or bitmaps) to block device page cache
  * and do not sync it on their own in ->sync_fs().
  */
-void ksys_sync(void)
+SYSCALL_DEFINE0(sync)
 {
 	int nowait = 0, wait = 1;
 
-	wakeup_flusher_threads(WB_REASON_SYNC);
+	wakeup_flusher_threads(0, WB_REASON_SYNC);
 	iterate_supers(sync_inodes_one_sb, NULL);
 	iterate_supers(sync_fs_one_sb, &nowait);
 	iterate_supers(sync_fs_one_sb, &wait);
@@ -117,11 +137,6 @@ void ksys_sync(void)
 	iterate_bdevs(fdatawait_one_bdev, NULL);
 	if (unlikely(laptop_mode))
 		laptop_sync_completion();
-}
-
-SYSCALL_DEFINE0(sync)
-{
-	ksys_sync();
 	return 0;
 }
 
@@ -159,10 +174,16 @@ void emergency_sync(void)
  */
 SYSCALL_DEFINE1(syncfs, int, fd)
 {
-	struct fd f = fdget(fd);
+	struct fd f;
 	struct super_block *sb;
 	int ret;
+	
+	#ifdef CONFIG_DYNAMIC_FSYNC
+	if (likely(dyn_fsync_active && suspend_active))
+		return 0;
+	#endif
 
+	f = fdget(fd);
 	if (!f.file)
 		return -EBADF;
 	sb = f.file->f_path.dentry->d_sb;
@@ -189,11 +210,20 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
+	
+	#ifdef CONFIG_DYNAMIC_FSYNC
+	if (likely(dyn_fsync_active && suspend_active))
+		return 0;
+	#endif
 
 	if (!file->f_op->fsync)
 		return -EINVAL;
-	if (!datasync && (inode->i_state & I_DIRTY_TIME))
+	if (!datasync && (inode->i_state & I_DIRTY_TIME)) {
+		spin_lock(&inode->i_lock);
+		inode->i_state &= ~I_DIRTY_TIME;
+		spin_unlock(&inode->i_lock);
 		mark_inode_dirty_sync(inode);
+	}
 	return file->f_op->fsync(file, start, end, datasync);
 }
 EXPORT_SYMBOL(vfs_fsync_range);
@@ -214,9 +244,15 @@ EXPORT_SYMBOL(vfs_fsync);
 
 static int do_fsync(unsigned int fd, int datasync)
 {
-	struct fd f = fdget(fd);
+	struct fd f;
 	int ret = -EBADF;
-
+	
+	#ifdef CONFIG_DYNAMIC_FSYNC
+	if (likely(dyn_fsync_active && suspend_active))
+		return 0;
+	#endif
+	
+	f = fdget(fd);
 	if (f.file) {
 		ret = vfs_fsync(f.file, datasync);
 		fdput(f);
@@ -282,14 +318,19 @@ SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
  * already-instantiated disk blocks, there are no guarantees here that the data
  * will be available after a crash.
  */
-int ksys_sync_file_range(int fd, loff_t offset, loff_t nbytes,
-			 unsigned int flags)
+SYSCALL_DEFINE4(sync_file_range, int, fd, loff_t, offset, loff_t, nbytes,
+				unsigned int, flags)
 {
 	int ret;
 	struct fd f;
 	struct address_space *mapping;
 	loff_t endbyte;			/* inclusive */
 	umode_t i_mode;
+	
+	#ifdef CONFIG_DYNAMIC_FSYNC
+	if (likely(dyn_fsync_active && suspend_active))
+		return 0;
+	#endif
 
 	ret = -EINVAL;
 	if (flags & ~VALID_FLAGS)
@@ -361,16 +402,10 @@ out:
 	return ret;
 }
 
-SYSCALL_DEFINE4(sync_file_range, int, fd, loff_t, offset, loff_t, nbytes,
-				unsigned int, flags)
-{
-	return ksys_sync_file_range(fd, offset, nbytes, flags);
-}
-
 /* It would be nice if people remember that not all the world's an i386
    when they introduce new system calls */
 SYSCALL_DEFINE4(sync_file_range2, int, fd, unsigned int, flags,
 				 loff_t, offset, loff_t, nbytes)
 {
-	return ksys_sync_file_range(fd, offset, nbytes, flags);
+	return sys_sync_file_range(fd, offset, nbytes, flags);
 }

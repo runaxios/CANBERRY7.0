@@ -1,8 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/staging/android/ion/ion_carveout_heap.c
  *
  * Copyright (C) 2011 Google, Inc.
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 #include <linux/spinlock.h>
 #include <linux/dma-mapping.h>
@@ -118,9 +127,9 @@ static struct ion_heap_ops carveout_heap_ops = {
 	.unmap_kernel = ion_heap_unmap_kernel,
 };
 
-static struct ion_heap *
-__ion_carveout_heap_create(struct ion_platform_heap *heap_data,
-			   bool sync)
+static struct ion_heap *__ion_carveout_heap_create(
+					struct ion_platform_heap *heap_data,
+					bool sync)
 {
 	struct ion_carveout_heap *carveout_heap;
 	int ret;
@@ -324,8 +333,8 @@ static void ion_secure_carveout_heap_destroy(struct ion_heap *heap)
 	kfree(manager);
 }
 
-struct ion_heap *
-ion_secure_carveout_heap_create(struct ion_platform_heap *heap_data)
+struct ion_heap *ion_secure_carveout_heap_create(
+			struct ion_platform_heap *heap_data)
 {
 	struct device *dev = heap_data->priv;
 	int ret;

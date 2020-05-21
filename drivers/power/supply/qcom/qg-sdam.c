@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"QG-K: %s: " fmt, __func__
@@ -80,11 +87,6 @@ static struct qg_sdam_info sdam_info[] = {
 		.name	= "SDAM_ESR_DISCHARGE_SF_OFFSET",
 		.offset = QG_SDAM_ESR_DISCHARGE_SF_OFFSET,
 		.length = 2,
-	},
-	[SDAM_BATT_AGE_LEVEL] = {
-		.name   = "SDAM_BATT_AGE_LEVEL_OFFSET",
-		.offset = QG_SDAM_BATT_AGE_LEVEL_OFFSET,
-		.length = 1,
 	},
 	[SDAM_MAGIC] = {
 		.name	= "SDAM_MAGIC_OFFSET",

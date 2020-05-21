@@ -1,4 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
 /* Smart-Peripheral-Switch (SPS) API. */
 
 #ifndef _SPS_H_
@@ -353,7 +364,7 @@ struct sps_command_element {
 };
 
 /*
- * BAM device's security configuration
+ * BAM device's security configuation
  */
 struct sps_bam_pipe_sec_config_props {
 	u32 pipe_mask;
@@ -410,7 +421,7 @@ struct sps_bam_sec_config_props {
  * perform the configuration. The global (top-level) BAM interrupt will be
  * assigned to the EE of the processor that manages the BAM.
  *
- * @p_sec_config_props - BAM device's security configuration
+ * @p_sec_config_props - BAM device's security configuation
  *
  */
 struct sps_bam_props {
@@ -442,7 +453,7 @@ struct sps_bam_props {
 	u32 data_mem_id;
 
 	/* Feedback to BAM user */
-	void (*callback)(enum sps_callback_case, void *user);
+	void (*callback)(enum sps_callback_case, void *);
 	void *user;
 
 	/* Security properties */

@@ -9,6 +9,7 @@
 #include <trace/events/sched.h>
 
 #include "sched.h"
+#include "tune.h"
 
 bool schedtune_initialized = false;
 extern struct reciprocal_value schedtune_spc_rdiv;
@@ -18,64 +19,6 @@ extern struct reciprocal_value schedtune_spc_rdiv;
 
 /*
  * EAS scheduler tunables for task groups.
- *
- * When CGroup support is enabled, we have to synchronize two different
- * paths:
- *  - slow path: where CGroups are created/updated/removed
- *  - fast path: where tasks in a CGroups are accounted
- *
- * The slow path tracks (a limited number of) CGroups and maps each on a
- * "boost_group" index. The fastpath accounts tasks currently RUNNABLE on each
- * "boost_group".
- *
- * Once a new CGroup is created, a boost group idx is assigned and the
- * corresponding "boost_group" marked as valid on each CPU.
- * Once a CGroup is release, the corresponding "boost_group" is marked as
- * invalid on each CPU. The CPU boost value (boost_max) is aggregated by
- * considering only valid boost_groups with a non null tasks counter.
- *
- * .:: Locking strategy
- *
- * The fast path uses a spin lock for each CPU boost_group which protects the
- * tasks counter.
- *
- * The "valid" and "boost" values of each CPU boost_group is instead
- * protected by the RCU lock provided by the CGroups callbacks. Thus, only the
- * slow path can access and modify the boost_group attribtues of each CPU.
- * The fast path will catch up the most updated values at the next scheduling
- * event (i.e. enqueue/dequeue).
- *
- *                                                        |
- *                                             SLOW PATH  |   FAST PATH
- *                              CGroup add/update/remove  |   Scheduler enqueue/dequeue events
- *                                                        |
- *                                                        |
- *                                                        |     DEFINE_PER_CPU(struct boost_groups)
- *                                                        |     +--------------+----+---+----+----+
- *                                                        |     |  idle        |    |   |    |    |
- *                                                        |     |  boost_max   |    |   |    |    |
- *                                                        |  +---->lock        |    |   |    |    |
- *  struct schedtune                  allocated_groups    |  |  |  group[    ] |    |   |    |    |
- *  +------------------------------+         +-------+    |  |  +--+---------+-+----+---+----+----+
- *  | idx                          |         |       |    |  |     |  valid  |
- *  | boots / prefer_idle          |         |       |    |  |     |  boost  |
- *  | perf_{boost/constraints}_idx | <---------+(*)  |    |  |     |  tasks  | <------------+
- *  | css                          |         +-------+    |  |     +---------+              |
- *  +-+----------------------------+         |       |    |  |     |         |              |
- *    ^                                      |       |    |  |     |         |              |
- *    |                                      +-------+    |  |     +---------+              |
- *    |                                      |       |    |  |     |         |              |
- *    |                                      |       |    |  |     |         |              |
- *    |                                      +-------+    |  |     +---------+              |
- *    | zmalloc                              |       |    |  |     |         |              |
- *    |                                      |       |    |  |     |         |              |
- *    |                                      +-------+    |  |     +---------+              |
- *    +                              BOOSTGROUPS_COUNT    |  |     BOOSTGROUPS_COUNT        |
- *  schedtune_boostgroup_init()                           |  +                              |
- *                                                        |  schedtune_{en,de}queue_task()  |
- *                                                        |                                 +
- *                                                        |          schedtune_tasks_update()
- *                                                        |
  */
 
 /* SchdTune tunables for a group of tasks */
@@ -180,11 +123,10 @@ static struct schedtune *allocated_group[BOOSTGROUPS_COUNT] = {
  */
 struct boost_groups {
 	/* Maximum boost value for all RUNNABLE tasks on a CPU */
+	bool idle;
 	int boost_max;
 	u64 boost_ts;
 	struct {
-		/* True when this boost group maps an actual cgroup */
-		bool valid;
 		/* The boost for tasks on that boost group */
 		int boost;
 		/* Count of RUNNABLE tasks on that boost group */
@@ -242,20 +184,14 @@ void restore_cgroup_boost_settings(void)
 
 bool task_sched_boost(struct task_struct *p)
 {
-	struct schedtune *st;
-	bool sched_boost_enabled;
+	struct schedtune *st = task_schedtune(p);
 
-	rcu_read_lock();
-	st = task_schedtune(p);
-	sched_boost_enabled = st->sched_boost_enabled;
-	rcu_read_unlock();
-
-	return sched_boost_enabled;
+	return st->sched_boost_enabled;
 }
 
 static u64
 sched_boost_override_read(struct cgroup_subsys_state *css,
-					struct cftype *cft)
+			struct cftype *cft)
 {
 	struct schedtune *st = css_st(css);
 
@@ -263,7 +199,7 @@ sched_boost_override_read(struct cgroup_subsys_state *css,
 }
 
 static int sched_boost_override_write(struct cgroup_subsys_state *css,
-				struct cftype *cft, u64 override)
+			struct cftype *cft, u64 override)
 {
 	struct schedtune *st = css_st(css);
 
@@ -300,11 +236,6 @@ schedtune_cpu_update(int cpu, u64 now)
 	boost_max = bg->group[0].boost;
 	boost_ts = now;
 	for (idx = 1; idx < BOOSTGROUPS_COUNT; ++idx) {
-
-		/* Ignore non boostgroups not mapping a cgroup */
-		if (!bg->group[idx].valid)
-			continue;
-
 		/*
 		 * A boost group affects a CPU only if it has
 		 * RUNNABLE tasks on that CPU or it has hold
@@ -320,7 +251,6 @@ schedtune_cpu_update(int cpu, u64 now)
 		boost_max = bg->group[idx].boost;
 		boost_ts =  bg->group[idx].ts;
 	}
-
 	/* Ensures boost_max is non-negative when all cgroup boost values
 	 * are neagtive. Avoids under-accounting of cpu capacity which may cause
 	 * task stacking and frequency spikes.*/
@@ -341,9 +271,6 @@ schedtune_boostgroup_update(int idx, int boost)
 	/* Update per CPU boost groups */
 	for_each_possible_cpu(cpu) {
 		bg = &per_cpu(cpu_boost_groups, cpu);
-
-		/* CGroups are never associated to non active cgroups */
-		BUG_ON(!bg->group[idx].valid);
 
 		/*
 		 * Keep track of current boost values to compute the per CPU
@@ -526,7 +453,7 @@ int schedtune_can_attach(struct cgroup_taskset *tset)
 
 #ifdef CONFIG_SCHED_WALT
 static u64 sched_colocate_read(struct cgroup_subsys_state *css,
-						struct cftype *cft)
+			struct cftype *cft)
 {
 	struct schedtune *st = css_st(css);
 
@@ -534,7 +461,7 @@ static u64 sched_colocate_read(struct cgroup_subsys_state *css,
 }
 
 static int sched_colocate_write(struct cgroup_subsys_state *css,
-				struct cftype *cft, u64 colocate)
+			struct cftype *cft, u64 colocate)
 {
 	struct schedtune *st = css_st(css);
 
@@ -680,6 +607,7 @@ static void schedtune_attach(struct cgroup_taskset *tset)
 
 	cgroup_taskset_for_each(task, css, tset)
 		sync_cgroup_colocation(task, colocate);
+
 }
 #else
 static void schedtune_attach(struct cgroup_taskset *tset)
@@ -730,23 +658,24 @@ static struct cftype files[] = {
 	{ }	/* terminate */
 };
 
-static void
-schedtune_boostgroup_init(struct schedtune *st, int idx)
+static int
+schedtune_boostgroup_init(struct schedtune *st)
 {
 	struct boost_groups *bg;
 	int cpu;
 
-	/* Initialize per CPUs boost group support */
+	/* Keep track of allocated boost groups */
+	allocated_group[st->idx] = st;
+
+	/* Initialize the per CPU boost groups */
 	for_each_possible_cpu(cpu) {
 		bg = &per_cpu(cpu_boost_groups, cpu);
-		bg->group[idx].boost = 0;
-		bg->group[idx].valid = true;
-		bg->group[idx].ts = 0;
+		bg->group[st->idx].boost = 0;
+		bg->group[st->idx].tasks = 0;
+		bg->group[st->idx].ts = 0;
 	}
 
-	/* Keep track of allocated boost groups */
-	allocated_group[idx] = st;
-	st->idx = idx;
+	return 0;
 }
 
 static struct cgroup_subsys_state *
@@ -779,11 +708,15 @@ schedtune_css_alloc(struct cgroup_subsys_state *parent_css)
 		goto out;
 
 	/* Initialize per CPUs boost group support */
+	st->idx = idx;
 	init_sched_boost(st);
-	schedtune_boostgroup_init(st, idx);
+	if (schedtune_boostgroup_init(st))
+		goto release;
 
 	return &st->css;
 
+release:
+	kfree(st);
 out:
 	return ERR_PTR(-ENOMEM);
 }
@@ -791,15 +724,8 @@ out:
 static void
 schedtune_boostgroup_release(struct schedtune *st)
 {
-	struct boost_groups *bg;
-	int cpu;
-
-	/* Reset per CPUs boost group support */
-	for_each_possible_cpu(cpu) {
-		bg = &per_cpu(cpu_boost_groups, cpu);
-		bg->group[st->idx].valid = false;
-		bg->group[st->idx].boost = 0;
-	}
+	/* Reset this boost group */
+	schedtune_boostgroup_update(st->idx, 0);
 
 	/* Keep track of allocated boost groups */
 	allocated_group[st->idx] = NULL;
@@ -810,7 +736,6 @@ schedtune_css_free(struct cgroup_subsys_state *css)
 {
 	struct schedtune *st = css_st(css);
 
-	/* Release per CPUs boost group support */
 	schedtune_boostgroup_release(st);
 	kfree(st);
 }
@@ -835,7 +760,6 @@ schedtune_init_cgroups(void)
 	for_each_possible_cpu(cpu) {
 		bg = &per_cpu(cpu_boost_groups, cpu);
 		memset(bg, 0, sizeof(struct boost_groups));
-		bg->group[0].valid = true;
 		raw_spin_lock_init(&bg->lock);
 	}
 
@@ -843,6 +767,38 @@ schedtune_init_cgroups(void)
 		BOOSTGROUPS_COUNT);
 
 	schedtune_initialized = true;
+}
+
+static struct schedtune *getSchedtune(char *st_name)
+{
+	int idx;
+
+	for (idx = 0; idx < BOOSTGROUPS_COUNT; ++idx) {
+		char name_buf[NAME_MAX + 1];
+		struct schedtune *st = allocated_group[idx];
+
+		if (!st) {
+			pr_warn("SCHEDTUNE: Could not find %s\n", st_name);
+			break;
+		}
+
+		cgroup_name(st->css.cgroup, name_buf, sizeof(name_buf));
+		if (strncmp(name_buf, st_name, strlen(st_name)) == 0)
+			return st;
+	}
+
+	return NULL;
+}
+
+
+void set_stune_boost(char *st_name, int boost)
+{
+	struct schedtune *st = getSchedtune(st_name);
+
+	if (!st)
+		return;
+
+	boost_write(&st->css, NULL, boost);
 }
 
 /*

@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
 /* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  * Copyright (C) 2006-2007 Adam Belay <abelay@novell.com>
  * Copyright (C) 2009 Intel Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) "%s: " fmt, KBUILD_MODNAME
@@ -27,7 +35,6 @@
 #include <linux/sched.h>
 #include <linux/cpu_pm.h>
 #include <linux/cpuhotplug.h>
-#include <linux/regulator/machine.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/stat.h>
 #include <soc/qcom/pm.h>
@@ -47,6 +54,7 @@
 #define SCLK_HZ (32768)
 #define PSCI_POWER_STATE(reset) (reset << 30)
 #define PSCI_AFFINITY_LEVEL(lvl) ((lvl & 0x3) << 24)
+#define BIAS_HYST (bias_hyst * NSEC_PER_MSEC)
 
 enum {
 	MSM_LPM_LVL_DBG_SUSPEND_LIMITS = BIT(0),
@@ -82,6 +90,9 @@ struct lpm_cluster *lpm_root_node;
 static bool lpm_prediction = true;
 module_param_named(lpm_prediction, lpm_prediction, bool, 0664);
 
+static uint32_t bias_hyst;
+module_param_named(bias_hyst, bias_hyst, uint, 0664);
+
 struct lpm_history {
 	uint32_t resi[MAXSAMPLES];
 	int mode[MAXSAMPLES];
@@ -116,8 +127,8 @@ module_param_named(print_parsed_dt, print_parsed_dt, bool, 0664);
 static bool sleep_disabled;
 module_param_named(sleep_disabled, sleep_disabled, bool, 0664);
 
-static bool sleep_disabled_dev;
-module_param_named(sleep_disabled_dev, sleep_disabled_dev, bool, 0664);
+bool sleep_disabled_touch;
+module_param_named(sleep_disabled_touch, sleep_disabled_touch, bool, 0664);
 
 /**
  * msm_cpuidle_get_deep_idle_latency - Get deep idle latency value
@@ -140,36 +151,12 @@ uint32_t register_system_pm_ops(struct system_pm_ops *pm_ops)
 	return 0;
 }
 
-/**
- * device type for disable lpm
- *   type     event    bitmap
- *   input      0x1      bit0
- *  FrontCAM    0x2      bit1
- **/
-#define EVENT_INPUT 0x1
-#define EVENT_FCAM  0x2
-#define EVENT_SUM   0x2
-static unsigned long lpm_dev_bitmp = 0;
-
-void lpm_disable_for_dev(bool on, char event_dev)
+void lpm_disable_for_input(bool on)
 {
-	unsigned long mask = BIT_MASK(event_dev);
-
-	if (event_dev > EVENT_SUM) {
-		pr_err("No support device %d disable lpm\n", event_dev);
-		return;
-	}
-
-	if (on) {
-		lpm_dev_bitmp |= mask;
-		sleep_disabled_dev = !!on;
-	} else {
-		lpm_dev_bitmp &= ~mask;
-		if(lpm_dev_bitmp == 0)
-			sleep_disabled_dev = !!on;
-	}
+	sleep_disabled_touch = !!on;
+	return;
 }
-EXPORT_SYMBOL(lpm_disable_for_dev);
+EXPORT_SYMBOL(lpm_disable_for_input);
 
 static uint32_t least_cluster_latency(struct lpm_cluster *cluster,
 					struct latency_level *lat_level)
@@ -647,25 +634,20 @@ static void clear_predict_history(void)
 
 static void update_history(struct cpuidle_device *dev, int idx);
 
-static inline bool lpm_disallowed(s64 sleep_us, int cpu, struct lpm_cpu *pm_cpu)
+static inline bool is_cpu_biased(int cpu, uint64_t *bias_time)
 {
-	uint64_t bias_time = 0;
+	u64 now = sched_clock();
+	u64 last = sched_get_cpu_last_busy_time(cpu);
+	u64 diff = 0;
 
-	if (cpu_isolated(cpu))
-		goto out;
+	if (!last)
+		return false;
 
-	if (sleep_disabled)
-		return true;
-
-	bias_time = sched_lpm_disallowed_time(cpu);
-	if (bias_time) {
-		pm_cpu->bias = bias_time;
+	diff = now - last;
+	if (diff < BIAS_HYST) {
+		*bias_time = BIAS_HYST - diff;
 		return true;
 	}
-
-out:
-	if (sleep_us < 0)
-		return true;
 
 	return false;
 }
@@ -673,10 +655,10 @@ out:
 static int cpu_power_select(struct cpuidle_device *dev,
 		struct lpm_cpu *cpu)
 {
-	ktime_t delta_next;
 	int best_level = 0;
 	uint32_t latency_us = pm_qos_request_for_cpu(PM_QOS_CPU_DMA_LATENCY,
 							dev->cpu);
+	ktime_t delta_next;
 	s64 sleep_us = ktime_to_us(tick_nohz_get_sleep_length(&delta_next));
 	uint32_t modified_time_us = 0;
 	uint32_t next_event_us = 0;
@@ -687,15 +669,26 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	uint32_t next_wakeup_us = (uint32_t)sleep_us;
 	uint32_t min_residency, max_residency;
 	struct power_params *pwr_params;
+	uint64_t bias_time = 0;
 
-	if (lpm_disallowed(sleep_us, dev->cpu, cpu) || sleep_disabled_dev)
-		goto done_select;
+	if (((sleep_disabled || sleep_disabled_touch) && !cpu_isolated(dev->cpu)) || sleep_us < 0)
+		return best_level;
 
 	idx_restrict = cpu->nlevels + 1;
+
 	next_event_us = (uint32_t)(ktime_to_us(get_next_event_time(dev->cpu)));
 
+	if (is_cpu_biased(dev->cpu, &bias_time) && (!cpu_isolated(dev->cpu))) {
+		cpu->bias = bias_time;
+		goto done_select;
+	}
+
 	for (i = 0; i < cpu->nlevels; i++) {
-		if (!lpm_cpu_mode_allow(dev->cpu, i, true))
+		bool allow;
+
+		allow = i ? lpm_cpu_mode_allow(dev->cpu, i, true) : true;
+
+		if (!allow)
 			continue;
 
 		pwr_params = &cpu->levels[i].pwr;
@@ -710,7 +703,8 @@ static int cpu_power_select(struct cpuidle_device *dev,
 			if (next_event_us < lvl_latency_us)
 				break;
 
-			if (next_event_us < sleep_us)
+			if (((next_event_us - lvl_latency_us) < sleep_us) ||
+					(next_event_us < sleep_us))
 				next_wakeup_us = next_event_us - lvl_latency_us;
 		}
 
@@ -756,8 +750,8 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	min_residency = pwr_params->min_residency;
 	max_residency = pwr_params->max_residency;
 
-	if ((predicted || (idx_restrict != cpu->nlevels + 1)) &&
-	    (best_level < (cpu->nlevels-1))) {
+	if ((predicted || (idx_restrict != (cpu->nlevels + 1)))
+			&& (best_level < (cpu->nlevels-1))) {
 		htime = predicted + cpu->tmr_add;
 		if (htime == cpu->tmr_add)
 			htime = idx_restrict_time;
@@ -1078,6 +1072,15 @@ static int cluster_select(struct lpm_cluster *cluster, bool from_idle,
 	return best_level;
 }
 
+static void cluster_notify(struct lpm_cluster *cluster,
+		struct lpm_cluster_level *level, bool enter)
+{
+	if (level->is_reset && enter)
+		cpu_cluster_pm_enter(cluster->aff_level);
+	else if (level->is_reset && !enter)
+		cpu_cluster_pm_exit(cluster->aff_level);
+}
+
 static int cluster_configure(struct lpm_cluster *cluster, int idx,
 		bool from_idle, int predicted)
 {
@@ -1108,15 +1111,13 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 
 	if (level->notify_rpm) {
 		/*
-		 * Print the clocks and regulators which are enabled during
-		 * system suspend.  This debug information is useful to know
-		 * which resources are enabled and preventing the system level
-		 * LPMs (XO and Vmin).
+		 * Print the clocks which are enabled during system suspend
+		 * This debug information is useful to know which are the
+		 * clocks that are enabled and preventing the system level
+		 * LPMs(XO and Vmin).
 		 */
-		if (!from_idle) {
-			clock_debug_print_enabled();
-			regulator_debug_print_enabled();
-		}
+		if (!from_idle)
+			clock_debug_print_enabled(true);
 
 		cpu = get_next_online_cpu(from_idle);
 		cpumask_copy(&cpumask, cpumask_of(cpu));
@@ -1126,6 +1127,8 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 			if ((sys_pm_ops->enter(&cpumask)))
 				return -EBUSY;
 	}
+	/* Notify cluster enter event after successfully config completion */
+	cluster_notify(cluster, level, true);
 
 	cluster->last_level = idx;
 
@@ -1268,6 +1271,8 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 	last_level = cluster->last_level;
 	cluster->last_level = cluster->default_level;
 
+	cluster_notify(cluster, &cluster->levels[last_level], false);
+
 	if (from_idle)
 		update_cluster_history(&cluster->history, last_level);
 
@@ -1359,7 +1364,7 @@ static bool psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 		stop_critical_timings();
 		wfi();
 		start_critical_timings();
-		return true;
+		return 1;
 	}
 
 	if (from_idle && cpu->levels[idx].use_bc_timer) {
@@ -1506,6 +1511,7 @@ static int cpuidle_register_cpu(struct cpuidle_driver *drv,
 	struct cpuidle_device *device;
 	int cpu, ret;
 
+
 	if (!mask || !drv)
 		return -EINVAL;
 
@@ -1577,8 +1583,8 @@ static int cluster_cpuidle_register(struct lpm_cluster *cl)
 			struct lpm_cpu_level *cpu_level = &lpm_cpu->levels[i];
 
 			snprintf(st->name, CPUIDLE_NAME_LEN, "C%u\n", i);
-			strlcpy(st->desc, cpu_level->name, CPUIDLE_DESC_LEN);
-
+			snprintf(st->desc, CPUIDLE_DESC_LEN, "%s",
+					cpu_level->name);
 			st->flags = 0;
 			st->exit_latency = cpu_level->pwr.exit_latency;
 			st->target_residency = 0;
@@ -1676,6 +1682,7 @@ static void register_cluster_lpm_stats(struct lpm_cluster *cl,
 	kfree(level_name);
 
 	list_for_each_entry(cpu, &cl->cpu, list) {
+		pr_err("%s()\n", __func__);
 		register_cpu_lpm_stats(cpu, cl);
 	}
 	if (!list_empty(&cl->cpu))
@@ -1698,7 +1705,7 @@ static void lpm_suspend_wake(void)
 	suspend_in_progress = false;
 	lpm_stats_suspend_exit();
 }
-
+extern void gpio_debug_print(void);
 static int lpm_suspend_enter(suspend_state_t state)
 {
 	int cpu = raw_smp_processor_id();
@@ -1720,6 +1727,7 @@ static int lpm_suspend_enter(suspend_state_t state)
 	cluster_prepare(cluster, cpumask, idx, false, 0);
 
 	success = psci_enter_sleep(lpm_cpu, idx, false);
+	gpio_debug_print();
 
 	cluster_unprepare(cluster, cpumask, idx, false, 0, success);
 	cpu_unprepare(lpm_cpu, idx, false);
@@ -1833,6 +1841,7 @@ static struct platform_driver lpm_driver = {
 	.probe = lpm_probe,
 	.driver = {
 		.name = "lpm-levels",
+		.owner = THIS_MODULE,
 		.suppress_bind_attrs = true,
 		.of_match_table = lpm_mtch_tbl,
 	},

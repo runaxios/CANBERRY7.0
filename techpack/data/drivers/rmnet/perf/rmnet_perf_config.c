@@ -1,5 +1,4 @@
 /* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -398,7 +397,9 @@ static int rmnet_perf_config_notify_cb(struct notifier_block *nb,
 
 	switch (event) {
 	case NETDEV_UNREGISTER:
-		if (rmnet_is_real_dev_registered(dev) &&
+		pr_info("%s(): rmnet_perf netdevice unregister, name = %s\n",
+			__func__, dev->name);
+		if (perf && rmnet_is_real_dev_registered(dev) &&
 		    rmnet_perf_config_hook_registered() &&
 		    (!strncmp(dev->name, "rmnet_ipa0", 10) ||
 		     !strncmp(dev->name, "rmnet_mhi0", 10))) {
@@ -414,6 +415,7 @@ static int rmnet_perf_config_notify_cb(struct notifier_block *nb,
 			RCU_INIT_POINTER(rmnet_perf_deag_entry, NULL);
 			RCU_INIT_POINTER(rmnet_perf_desc_entry, NULL);
 			RCU_INIT_POINTER(rmnet_perf_chain_end, NULL);
+			perf = NULL;
 		}
 		break;
 	case NETDEV_REGISTER:
@@ -422,7 +424,7 @@ static int rmnet_perf_config_notify_cb(struct notifier_block *nb,
 		/* Check prevents us from allocating resources for every
 		 * interface
 		 */
-		if (!rmnet_perf_config_hook_registered() &&
+		if (!perf && !rmnet_perf_config_hook_registered() &&
 		    strncmp(dev->name, "rmnet_data", 10) == 0) {
 			struct rmnet_priv *priv = netdev_priv(dev);
 

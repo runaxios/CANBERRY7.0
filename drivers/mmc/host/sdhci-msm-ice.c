@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015, 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015, 2017-2018 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "sdhci-msm-ice.h"
@@ -9,7 +17,7 @@ static void sdhci_msm_ice_error_cb(void *host_ctrl, u32 error)
 {
 	struct sdhci_msm_host *msm_host = (struct sdhci_msm_host *)host_ctrl;
 
-	dev_err(&msm_host->pdev->dev, "%s: Error in ice operation 0x%x\n",
+	dev_err(&msm_host->pdev->dev, "%s: Error in ice operation 0x%x",
 		__func__, error);
 
 	if (msm_host->ice.state == SDHCI_MSM_ICE_STATE_ACTIVE)
@@ -148,7 +156,7 @@ int sdhci_msm_ice_pltfm_init(struct sdhci_msm_host *msm_host)
 	 * So map the cmdq mem for accessing ICE HCI registers.
 	 */
 	ice_memres = platform_get_resource_byname(pdev,
-						IORESOURCE_MEM, "cqhci_mem");
+						IORESOURCE_MEM, "cmdq_mem");
 	if (!ice_memres) {
 		dev_err(&pdev->dev, "Failed to get iomem resource for ice\n");
 		err = -EINVAL;
@@ -269,11 +277,11 @@ void sdhci_msm_ice_update_cfg(struct sdhci_host *host, u64 lba, u32 slot,
 }
 
 static inline
-void sdhci_msm_ice_hci_update_cqe_cfg(u64 dun, unsigned int bypass,
+void sdhci_msm_ice_hci_update_cmdq_cfg(u64 dun, unsigned int bypass,
 				short key_index, u64 *ice_ctx)
 {
 	/*
-	 *
+	 * The naming convention got changed between ICE2.0 and ICE3.0
 	 * registers fields. Below is the equivalent names for
 	 * ICE3.0 Vs ICE2.0:
 	 *   Data Unit Number(DUN) == Logical Base address(LBA)
@@ -374,7 +382,7 @@ int sdhci_msm_ice_cfg(struct sdhci_host *host, struct mmc_request *mrq,
 	return 0;
 }
 
-int sdhci_msm_ice_cqe_cfg(struct sdhci_host *host,
+int sdhci_msm_ice_cmdq_cfg(struct sdhci_host *host,
 			struct mmc_request *mrq, u32 slot, u64 *ice_ctx)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -418,14 +426,13 @@ int sdhci_msm_ice_cqe_cfg(struct sdhci_host *host,
 
 	if (msm_host->ice_hci_support) {
 		/* For ICE HCI / ICE3.0 */
-		sdhci_msm_ice_hci_update_cqe_cfg(dun, bypass, key_index,
+		sdhci_msm_ice_hci_update_cmdq_cfg(dun, bypass, key_index,
 						ice_ctx);
 	} else {
 		/* For ICE versions earlier to ICE3.0 */
 		sdhci_msm_ice_update_cfg(host, dun, slot, bypass, key_index,
 					cdu_sz);
 	}
-
 	return 0;
 }
 
@@ -448,8 +455,7 @@ int sdhci_msm_ice_cfg_end(struct sdhci_host *host, struct mmc_request *mrq)
 	req = mrq->req;
 	if (req) {
 		if (msm_host->ice.vops->config_end) {
-			err = msm_host->ice.vops->config_end(
-					msm_host->ice.pdev, req);
+			err = msm_host->ice.vops->config_end(req);
 			if (err) {
 				pr_err("%s: ice config end failed %d\n",
 						mmc_hostname(host->mmc), err);

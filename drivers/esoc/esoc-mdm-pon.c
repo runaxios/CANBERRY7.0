@@ -1,10 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2015, 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2015, 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "esoc-mdm.h"
-#include <linux/input/qpnp-power-on.h>
 
 /* This function can be called from atomic context. */
 static int mdm9x55_toggle_soft_reset(struct mdm_ctrl *mdm, bool atomic)
@@ -56,7 +62,7 @@ static int sdx50m_toggle_soft_reset(struct mdm_ctrl *mdm, bool atomic)
 	 * Allow PS hold assert to be detected
 	 */
 	if (!atomic)
-		usleep_range(80000, 180000);
+		usleep_range(120000, 180000);
 	else
 		/*
 		 * The flow falls through this path as a part of the
@@ -68,22 +74,6 @@ static int sdx50m_toggle_soft_reset(struct mdm_ctrl *mdm, bool atomic)
 				soft_reset_direction_de_assert);
 	gpio_direction_output(MDM_GPIO(mdm, AP2MDM_SOFT_RESET),
 			soft_reset_direction_de_assert);
-	return 0;
-}
-
-/* This function can be called from atomic context. */
-static int sdx55m_toggle_soft_reset(struct mdm_ctrl *mdm, bool atomic)
-{
-	int rc;
-
-	esoc_mdm_log("Doing a Warm reset using SPMI\n");
-	rc = qpnp_pon_modem_pwr_off(PON_POWER_OFF_WARM_RESET);
-	if (rc) {
-		dev_err(mdm->dev, "SPMI warm reset failed\n");
-		esoc_mdm_log("SPMI warm reset failed\n");
-		return rc;
-	}
-	esoc_mdm_log("Warm reset done using SPMI\n");
 	return 0;
 }
 
@@ -170,12 +160,6 @@ static int sdx50m_power_down(struct mdm_ctrl *mdm)
 	 */
 	msleep(300);
 	return 0;
-}
-
-static int sdx55m_power_down(struct mdm_ctrl *mdm)
-{
-	esoc_mdm_log("Performing warm reset as cold reset is not supported\n");
-	return sdx55m_toggle_soft_reset(mdm, false);
 }
 
 static void mdm9x55_cold_reset(struct mdm_ctrl *mdm)
@@ -285,10 +269,4 @@ struct mdm_pon_ops sdx50m_pon_ops = {
 	.cold_reset = sdx50m_cold_reset,
 	.dt_init = mdm4x_pon_dt_init,
 	.setup = mdm4x_pon_setup,
-};
-
-struct mdm_pon_ops sdx55m_pon_ops = {
-	.pon = mdm4x_do_first_power_on,
-	.soft_reset = sdx55m_toggle_soft_reset,
-	.poff_force = sdx55m_power_down,
 };

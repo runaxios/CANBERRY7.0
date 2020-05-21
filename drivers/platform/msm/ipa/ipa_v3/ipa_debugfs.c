@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifdef CONFIG_DEBUG_FS
@@ -36,7 +42,7 @@ struct ipa3_debugfs_file {
 };
 
 
-const char *ipa3_event_name[IPA_EVENT_MAX_NUM] = {
+const char *ipa3_event_name[] = {
 	__stringify(WLAN_CLIENT_CONNECT),
 	__stringify(WLAN_CLIENT_DISCONNECT),
 	__stringify(WLAN_CLIENT_POWER_SAVE_MODE),
@@ -76,15 +82,12 @@ const char *ipa3_event_name[IPA_EVENT_MAX_NUM] = {
 	__stringify(IPA_GSB_DISCONNECT),
 	__stringify(IPA_COALESCE_ENABLE),
 	__stringify(IPA_COALESCE_DISABLE),
-	__stringify_1(WIGIG_CLIENT_CONNECT),
-	__stringify_1(WIGIG_FST_SWITCH),
 };
 
 const char *ipa3_hdr_l2_type_name[] = {
 	__stringify(IPA_HDR_L2_NONE),
 	__stringify(IPA_HDR_L2_ETHERNET_II),
 	__stringify(IPA_HDR_L2_802_3),
-	__stringify(IPA_HDR_L2_802_1Q),
 };
 
 const char *ipa3_hdr_proc_type_name[] = {
@@ -95,11 +98,10 @@ const char *ipa3_hdr_proc_type_name[] = {
 	__stringify(IPA_HDR_PROC_802_3_TO_802_3),
 	__stringify(IPA_HDR_PROC_L2TP_HEADER_ADD),
 	__stringify(IPA_HDR_PROC_L2TP_HEADER_REMOVE),
-	__stringify(IPA_HDR_PROC_ETHII_TO_ETHII_EX),
 };
 
 static struct dentry *dent;
-static char dbg_buff[IPA_MAX_MSG_LEN + 1];
+static char dbg_buff[IPA_MAX_MSG_LEN];
 static char *active_clients_buf;
 
 static s8 ep_reg_idx;
@@ -150,10 +152,10 @@ static ssize_t ipa3_write_ep_holb(struct file *file,
 	unsigned long missing;
 	char *sptr, *token;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		return -EFAULT;
 
-	missing = copy_from_user(dbg_buff, buf, count);
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
 	if (missing)
 		return -EFAULT;
 
@@ -190,12 +192,19 @@ static ssize_t ipa3_write_ep_holb(struct file *file,
 static ssize_t ipa3_write_ep_reg(struct file *file, const char __user *buf,
 		size_t count, loff_t *ppos)
 {
-	s8 option;
-	int ret;
+	unsigned long missing;
+	s8 option = 0;
 
-	ret = kstrtos8_from_user(buf, count, 0, &option);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &option))
+		return -EFAULT;
 
 	if (option >= ipa3_ctx->ipa_num_pipes) {
 		IPAERR("bad pipe specified %u\n", option);
@@ -321,13 +330,20 @@ static ssize_t ipa3_read_ep_reg(struct file *file, char __user *ubuf,
 static ssize_t ipa3_write_keep_awake(struct file *file, const char __user *buf,
 	size_t count, loff_t *ppos)
 {
+	unsigned long missing;
 	s8 option = 0;
-	int ret;
 	uint32_t bw_mbps = 0;
 
-	ret = kstrtos8_from_user(buf, count, 0, &option);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &option))
+		return -EFAULT;
 
 	switch (option) {
 	case 0:
@@ -443,7 +459,7 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 	int i;
 
 	if (attrib->attrib_mask & IPA_FLT_IS_PURE_ACK)
-		pr_cont("is_pure_ack ");
+		pr_err("is_pure_ack ");
 
 	if (attrib->attrib_mask & IPA_FLT_TOS)
 		pr_cont("tos:%d ", attrib->u.v4.tos);
@@ -454,13 +470,13 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 	}
 
 	if (attrib->attrib_mask & IPA_FLT_PROTOCOL)
-		pr_cont("protocol:%d ", attrib->u.v4.protocol);
+		pr_err("protocol:%d ", attrib->u.v4.protocol);
 
 	if (attrib->attrib_mask & IPA_FLT_SRC_ADDR) {
 		if (ip == IPA_IP_v4) {
 			addr[0] = htonl(attrib->u.v4.src_addr);
 			mask[0] = htonl(attrib->u.v4.src_addr_mask);
-			pr_cont(
+			pr_err(
 					"src_addr:%pI4 src_addr_mask:%pI4 ",
 					addr + 0, mask + 0);
 		} else if (ip == IPA_IP_v6) {
@@ -468,7 +484,7 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 				addr[i] = htonl(attrib->u.v6.src_addr[i]);
 				mask[i] = htonl(attrib->u.v6.src_addr_mask[i]);
 			}
-			pr_cont(
+			pr_err(
 					   "src_addr:%pI6 src_addr_mask:%pI6 ",
 					   addr + 0, mask + 0);
 		}
@@ -477,7 +493,7 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 		if (ip == IPA_IP_v4) {
 			addr[0] = htonl(attrib->u.v4.dst_addr);
 			mask[0] = htonl(attrib->u.v4.dst_addr_mask);
-			pr_cont(
+			pr_err(
 					   "dst_addr:%pI4 dst_addr_mask:%pI4 ",
 					   addr + 0, mask + 0);
 		} else if (ip == IPA_IP_v6) {
@@ -485,84 +501,81 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 				addr[i] = htonl(attrib->u.v6.dst_addr[i]);
 				mask[i] = htonl(attrib->u.v6.dst_addr_mask[i]);
 			}
-			pr_cont(
+			pr_err(
 					   "dst_addr:%pI6 dst_addr_mask:%pI6 ",
 					   addr + 0, mask + 0);
 		}
 	}
 	if (attrib->attrib_mask & IPA_FLT_SRC_PORT_RANGE) {
-		pr_cont("src_port_range:%u %u ",
+		pr_err("src_port_range:%u %u ",
 				   attrib->src_port_lo,
 			     attrib->src_port_hi);
 	}
 	if (attrib->attrib_mask & IPA_FLT_DST_PORT_RANGE) {
-		pr_cont("dst_port_range:%u %u ",
+		pr_err("dst_port_range:%u %u ",
 				   attrib->dst_port_lo,
 			     attrib->dst_port_hi);
 	}
 	if (attrib->attrib_mask & IPA_FLT_TYPE)
-		pr_cont("type:%d ", attrib->type);
+		pr_err("type:%d ", attrib->type);
 
 	if (attrib->attrib_mask & IPA_FLT_CODE)
-		pr_cont("code:%d ", attrib->code);
+		pr_err("code:%d ", attrib->code);
 
 	if (attrib->attrib_mask & IPA_FLT_SPI)
-		pr_cont("spi:%x ", attrib->spi);
+		pr_err("spi:%x ", attrib->spi);
 
 	if (attrib->attrib_mask & IPA_FLT_SRC_PORT)
-		pr_cont("src_port:%u ", attrib->src_port);
+		pr_err("src_port:%u ", attrib->src_port);
 
 	if (attrib->attrib_mask & IPA_FLT_DST_PORT)
-		pr_cont("dst_port:%u ", attrib->dst_port);
+		pr_err("dst_port:%u ", attrib->dst_port);
 
 	if (attrib->attrib_mask & IPA_FLT_TC)
-		pr_cont("tc:%d ", attrib->u.v6.tc);
+		pr_err("tc:%d ", attrib->u.v6.tc);
 
 	if (attrib->attrib_mask & IPA_FLT_FLOW_LABEL)
-		pr_cont("flow_label:%x ", attrib->u.v6.flow_label);
+		pr_err("flow_label:%x ", attrib->u.v6.flow_label);
 
 	if (attrib->attrib_mask & IPA_FLT_NEXT_HDR)
-		pr_cont("next_hdr:%d ", attrib->u.v6.next_hdr);
+		pr_err("next_hdr:%d ", attrib->u.v6.next_hdr);
 
 	if (attrib->attrib_mask & IPA_FLT_META_DATA) {
-		pr_cont(
+		pr_err(
 				   "metadata:%x metadata_mask:%x ",
 				   attrib->meta_data, attrib->meta_data_mask);
 	}
 
 	if (attrib->attrib_mask & IPA_FLT_FRAGMENT)
-		pr_cont("frg ");
+		pr_err("frg ");
 
 	if ((attrib->attrib_mask & IPA_FLT_MAC_SRC_ADDR_ETHER_II) ||
 		(attrib->attrib_mask & IPA_FLT_MAC_SRC_ADDR_802_3)) {
-		pr_cont("src_mac_addr:%pM ", attrib->src_mac_addr);
+		pr_err("src_mac_addr:%pM ", attrib->src_mac_addr);
 	}
 
 	if ((attrib->attrib_mask & IPA_FLT_MAC_DST_ADDR_ETHER_II) ||
 		(attrib->attrib_mask & IPA_FLT_MAC_DST_ADDR_802_3) ||
 		(attrib->attrib_mask & IPA_FLT_MAC_DST_ADDR_L2TP)) {
-		pr_cont("dst_mac_addr:%pM ", attrib->dst_mac_addr);
+		pr_err("dst_mac_addr:%pM ", attrib->dst_mac_addr);
 	}
 
 	if (attrib->attrib_mask & IPA_FLT_MAC_ETHER_TYPE)
-		pr_cont("ether_type:%x ", attrib->ether_type);
-
-	if (attrib->attrib_mask & IPA_FLT_VLAN_ID)
-		pr_cont("vlan_id:%x ", attrib->vlan_id);
+		pr_err("ether_type:%x ", attrib->ether_type);
 
 	if (attrib->attrib_mask & IPA_FLT_TCP_SYN)
-		pr_cont("tcp syn ");
+		pr_err("tcp syn ");
 
 	if (attrib->attrib_mask & IPA_FLT_TCP_SYN_L2TP)
-		pr_cont("tcp syn l2tp ");
+		pr_err("tcp syn l2tp ");
 
 	if (attrib->attrib_mask & IPA_FLT_L2TP_INNER_IP_TYPE)
-		pr_cont("l2tp inner ip type: %d ", attrib->type);
+		pr_err("l2tp inner ip type: %d ", attrib->type);
 
 	if (attrib->attrib_mask & IPA_FLT_L2TP_INNER_IPV4_DST_ADDR) {
 		addr[0] = htonl(attrib->u.v4.dst_addr);
 		mask[0] = htonl(attrib->u.v4.dst_addr_mask);
-		pr_cont("dst_addr:%pI4 dst_addr_mask:%pI4 ", addr, mask);
+		pr_err("dst_addr:%pI4 dst_addr_mask:%pI4 ", addr, mask);
 	}
 
 	pr_err("\n");
@@ -740,7 +753,7 @@ static ssize_t ipa3_read_rt(struct file *file, char __user *ubuf, size_t count,
 				pr_err("rule_id:%u max_prio:%u prio:%u ",
 					entry->rule_id, entry->rule.max_prio,
 					entry->prio);
-				pr_err("enable_stats:%u counter_id:%u\n",
+				pr_err("enable_stats:%u counter_id:%u ",
 					entry->rule.enable_stats,
 					entry->rule.cnt_idx);
 				pr_err("hashable:%u retain_hdr:%u ",
@@ -765,7 +778,7 @@ static ssize_t ipa3_read_rt(struct file *file, char __user *ubuf, size_t count,
 				pr_err("rule_id:%u max_prio:%u prio:%u ",
 					entry->rule_id, entry->rule.max_prio,
 					entry->prio);
-				pr_err("enable_stats:%u counter_id:%u\n",
+				pr_err("enable_stats:%u counter_id:%u ",
 					entry->rule.enable_stats,
 					entry->rule.cnt_idx);
 				pr_err("hashable:%u retain_hdr:%u ",
@@ -803,7 +816,7 @@ static ssize_t ipa3_read_rt_hw(struct file *file, char __user *ubuf,
 	default:
 		IPAERR("ip type error %d\n", ip);
 		return -EINVAL;
-	}
+	};
 
 	IPADBG("Tring to parse %d H/W routing tables - IP=%d\n", tbls_num, ip);
 
@@ -842,7 +855,7 @@ static ssize_t ipa3_read_rt_hw(struct file *file, char __user *ubuf,
 					rules[rl].hdr_ofst,
 					rules[rl].eq_attrib.rule_eq_bitmap);
 
-			pr_err("rule_id:%u cnt_id:%hhu prio:%u retain_hdr:%u\n",
+			pr_err("rule_id:%u cnt_id:%hhu prio:%u retain_hdr:%u ",
 				rules[rl].id, rules[rl].cnt_idx,
 				rules[rl].priority, rules[rl].retain_hdr);
 			res = ipa3_attrib_dump_eq(&rules[rl].eq_attrib);
@@ -877,7 +890,7 @@ static ssize_t ipa3_read_rt_hw(struct file *file, char __user *ubuf,
 					rules[rl].hdr_ofst,
 					rules[rl].eq_attrib.rule_eq_bitmap);
 
-			pr_err("rule_id:%u cnt_id:%hhu prio:%u retain_hdr:%u\n",
+			pr_err("rule_id:%u cnt_id:%hhu prio:%u retain_hdr:%u ",
 				rules[rl].id, rules[rl].cnt_idx,
 				rules[rl].priority, rules[rl].retain_hdr);
 			res = ipa3_attrib_dump_eq(&rules[rl].eq_attrib);
@@ -991,7 +1004,7 @@ static ssize_t ipa3_read_flt(struct file *file, char __user *ubuf, size_t count,
 			pr_err("hashable:%u rule_id:%u max_prio:%u prio:%u ",
 				entry->rule.hashable, entry->rule_id,
 				entry->rule.max_prio, entry->prio);
-			pr_err("enable_stats:%u counter_id:%u\n",
+			pr_err("enable_stats:%u counter_id:%u ",
 					entry->rule.enable_stats,
 					entry->rule.cnt_idx);
 			if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0)
@@ -1061,7 +1074,7 @@ static ssize_t ipa3_read_flt_hw(struct file *file, char __user *ubuf,
 				pipe, rl, rules[rl].rule.action, rt_tbl_idx);
 			pr_err("attrib_mask:%08x retain_hdr:%d ",
 				bitmap, rules[rl].rule.retain_hdr);
-			pr_err("rule_id:%u cnt_id:%hhu prio:%u\n",
+			pr_err("rule_id:%u cnt_id:%hhu prio:%u ",
 				rules[rl].id, rules[rl].cnt_idx,
 				rules[rl].priority);
 			if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0)
@@ -1093,7 +1106,7 @@ static ssize_t ipa3_read_flt_hw(struct file *file, char __user *ubuf,
 				pipe, rl, rules[rl].rule.action, rt_tbl_idx);
 			pr_err("attrib_mask:%08x retain_hdr:%d ",
 				bitmap, rules[rl].rule.retain_hdr);
-			pr_err("rule_id:%u cnt_id:%hhu prio:%u\n",
+			pr_err("rule_id:%u cnt_id:%hhu prio:%u ",
 				rules[rl].id, rules[rl].cnt_idx,
 				rules[rl].priority);
 			if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0)
@@ -1195,26 +1208,6 @@ static ssize_t ipa3_read_odlstats(struct file *file, char __user *ubuf,
 	return simple_read_from_buffer(ubuf, count, ppos, dbg_buff, cnt);
 }
 
-static ssize_t ipa3_read_page_recycle_stats(struct file *file,
-		char __user *ubuf, size_t count, loff_t *ppos)
-{
-	int nbytes;
-	int cnt = 0;
-
-	nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
-			"COAL : Total number of packets replenished =%llu\n"
-			"COAL : Number of tmp alloc packets  =%llu\n"
-			"DEF  : Total number of packets replenished =%llu\n"
-			"DEF  : Number of tmp alloc packets  =%llu\n",
-			ipa3_ctx->stats.page_recycle_stats[0].total_replenished,
-			ipa3_ctx->stats.page_recycle_stats[0].tmp_alloc,
-			ipa3_ctx->stats.page_recycle_stats[1].total_replenished,
-			ipa3_ctx->stats.page_recycle_stats[1].tmp_alloc);
-
-	cnt += nbytes;
-
-	return simple_read_from_buffer(ubuf, count, ppos, dbg_buff, cnt);
-}
 static ssize_t ipa3_read_wstats(struct file *file, char __user *ubuf,
 		size_t count, loff_t *ppos)
 {
@@ -1561,18 +1554,25 @@ static ssize_t ipa3_read_wdi(struct file *file, char __user *ubuf,
 static ssize_t ipa3_write_dbg_cnt(struct file *file, const char __user *buf,
 		size_t count, loff_t *ppos)
 {
+	unsigned long missing;
 	u32 option = 0;
 	struct ipahal_reg_debug_cnt_ctrl dbg_cnt_ctrl;
-	int ret;
 
 	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0) {
 		IPAERR("IPA_DEBUG_CNT_CTRL is not supported in IPA 4.0\n");
 		return -EPERM;
 	}
 
-	ret = kstrtou32_from_user(buf, count, 0, &option);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtou32(dbg_buff, 0, &option))
+		return -EFAULT;
 
 	memset(&dbg_cnt_ctrl, 0, sizeof(dbg_cnt_ctrl));
 	dbg_cnt_ctrl.type = DBG_CNT_TYPE_GENERAL;
@@ -1798,9 +1798,9 @@ static void ipa3_read_pdn_table(void)
 			goto bail;
 		}
 		if (entry_valid)
-			pr_err("PDN %d:\n", i);
+			pr_err("PDN %d: ", i);
 		else
-			pr_err("PDN %d - Invalid:\n", i);
+			pr_err("PDN %d - Invalid: ", i);
 
 		ipahal_nat_stringify_entry(IPAHAL_NAT_IPV4_PDN,
 				pdn_entry, buff, buff_size);
@@ -1904,10 +1904,39 @@ bail:
 	return 0;
 }
 
+static ssize_t ipa3_rm_read_stats(struct file *file, char __user *ubuf,
+		size_t count, loff_t *ppos)
+{
+	int result, cnt = 0;
+
+	/* deprecate if IPA PM is used */
+	if (ipa3_ctx->use_ipa_pm) {
+		cnt += scnprintf(dbg_buff + cnt, IPA_MAX_MSG_LEN - cnt,
+			"IPA RM is disabled\n");
+		goto ret;
+	}
+
+	result = ipa_rm_stat(dbg_buff, IPA_MAX_MSG_LEN);
+	if (result < 0) {
+		cnt += scnprintf(dbg_buff + cnt, IPA_MAX_MSG_LEN - cnt,
+				"Error in printing RM stat %d\n", result);
+		goto ret;
+	}
+	cnt += result;
+ret:
+	return simple_read_from_buffer(ubuf, count, ppos, dbg_buff, cnt);
+}
+
 static ssize_t ipa3_pm_read_stats(struct file *file, char __user *ubuf,
 		size_t count, loff_t *ppos)
 {
 	int result, cnt = 0;
+
+	if (!ipa3_ctx->use_ipa_pm) {
+		cnt += scnprintf(dbg_buff + cnt, IPA_MAX_MSG_LEN - cnt,
+			"IPA PM is disabled\n");
+		goto ret;
+	}
 
 	result = ipa_pm_stat(dbg_buff, IPA_MAX_MSG_LEN);
 	if (result < 0) {
@@ -1924,6 +1953,12 @@ static ssize_t ipa3_pm_ex_read_stats(struct file *file, char __user *ubuf,
 		size_t count, loff_t *ppos)
 {
 	int result, cnt = 0;
+
+	if (!ipa3_ctx->use_ipa_pm) {
+		cnt += scnprintf(dbg_buff + cnt, IPA_MAX_MSG_LEN - cnt,
+			"IPA PM is disabled\n");
+		goto ret;
+	}
 
 	result = ipa_pm_exceptions_stat(dbg_buff, IPA_MAX_MSG_LEN);
 	if (result < 0) {
@@ -1949,11 +1984,13 @@ static ssize_t ipa3_read_ipahal_regs(struct file *file, char __user *ubuf,
 static ssize_t ipa3_read_wdi_gsi_stats(struct file *file,
 		char __user *ubuf, size_t count, loff_t *ppos)
 {
-	struct ipa_uc_dbg_ring_stats stats;
+	struct ipa3_uc_dbg_ring_stats stats;
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 				"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
@@ -1997,11 +2034,13 @@ done:
 static ssize_t ipa3_read_wdi3_gsi_stats(struct file *file,
 		char __user *ubuf, size_t count, loff_t *ppos)
 {
-	struct ipa_uc_dbg_ring_stats stats;
+	struct ipa3_uc_dbg_ring_stats stats;
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 				"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
@@ -2048,7 +2087,9 @@ static ssize_t ipa3_read_11ad_gsi_stats(struct file *file,
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 				"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
@@ -2062,46 +2103,18 @@ done:
 static ssize_t ipa3_read_aqc_gsi_stats(struct file *file,
 		char __user *ubuf, size_t count, loff_t *ppos)
 {
-	struct ipa_uc_dbg_ring_stats stats;
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 				"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
 		goto done;
 	}
-	if (!ipa3_get_aqc_gsi_stats(&stats)) {
-		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
-			"TX ringFull=%u\n"
-			"TX ringEmpty=%u\n"
-			"TX ringUsageHigh=%u\n"
-			"TX ringUsageLow=%u\n"
-			"TX RingUtilCount=%u\n",
-			stats.ring[1].ringFull,
-			stats.ring[1].ringEmpty,
-			stats.ring[1].ringUsageHigh,
-			stats.ring[1].ringUsageLow,
-			stats.ring[1].RingUtilCount);
-		cnt += nbytes;
-		nbytes = scnprintf(dbg_buff + cnt, IPA_MAX_MSG_LEN - cnt,
-			"RX ringFull=%u\n"
-			"RX ringEmpty=%u\n"
-			"RX ringUsageHigh=%u\n"
-			"RX ringUsageLow=%u\n"
-			"RX RingUtilCount=%u\n",
-			stats.ring[0].ringFull,
-			stats.ring[0].ringEmpty,
-			stats.ring[0].ringUsageHigh,
-			stats.ring[0].ringUsageLow,
-			stats.ring[0].RingUtilCount);
-		cnt += nbytes;
-	} else {
-		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
-			"Fail to read AQC GSI stats\n");
-		cnt += nbytes;
-	}
+	return 0;
 done:
 	return simple_read_from_buffer(ubuf, count, ppos, dbg_buff, cnt);
 }
@@ -2109,11 +2122,13 @@ done:
 static ssize_t ipa3_read_mhip_gsi_stats(struct file *file,
 	char __user *ubuf, size_t count, loff_t *ppos)
 {
-	struct ipa_uc_dbg_ring_stats stats;
+	struct ipa3_uc_dbg_ring_stats stats;
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 			"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
@@ -2181,11 +2196,13 @@ done:
 static ssize_t ipa3_read_usb_gsi_stats(struct file *file,
 	char __user *ubuf, size_t count, loff_t *ppos)
 {
-	struct ipa_uc_dbg_ring_stats stats;
+	struct ipa3_uc_dbg_ring_stats stats;
 	int nbytes;
 	int cnt = 0;
 
-	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5
+		&& (ipa3_ctx->ipa_hw_type != IPA_HW_v4_1
+		|| ipa3_ctx->platform_type != IPA_PLAT_TYPE_APQ)) {
 		nbytes = scnprintf(dbg_buff, IPA_MAX_MSG_LEN,
 			"This feature only support on IPA4.5+\n");
 		cnt += nbytes;
@@ -2313,6 +2330,20 @@ static ssize_t ipa3_print_active_clients_log(struct file *file,
 static ssize_t ipa3_clear_active_clients_log(struct file *file,
 		const char __user *ubuf, size_t count, loff_t *ppos)
 {
+	unsigned long missing;
+		s8 option = 0;
+
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &option))
+		return -EFAULT;
+
 	ipa3_active_clients_log_clear();
 
 	return count;
@@ -2321,12 +2352,19 @@ static ssize_t ipa3_clear_active_clients_log(struct file *file,
 static ssize_t ipa3_enable_ipc_low(struct file *file,
 	const char __user *ubuf, size_t count, loff_t *ppos)
 {
+	unsigned long missing;
 	s8 option = 0;
-	int ret;
 
-	ret = kstrtos8_from_user(ubuf, count, 0, &option);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &option))
+		return -EFAULT;
 
 	mutex_lock(&ipa3_ctx->lock);
 	if (option) {
@@ -2431,10 +2469,6 @@ static const struct ipa3_debugfs_file debugfs_files[] = {
 			.read = ipa3_read_odlstats,
 		}
 	}, {
-		"page_recycle_stats", IPA_READ_ONLY_MODE, NULL, {
-			.read = ipa3_read_page_recycle_stats,
-		}
-	}, {
 		"wdi", IPA_READ_ONLY_MODE, NULL, {
 			.read = ipa3_read_wdi,
 		}
@@ -2458,6 +2492,10 @@ static const struct ipa3_debugfs_file debugfs_files[] = {
 	}, {
 		"ipv6ct", IPA_READ_ONLY_MODE, NULL, {
 			.read = ipa3_read_ipv6ct,
+		}
+	}, {
+		"rm_stats", IPA_READ_ONLY_MODE, NULL, {
+			.read = ipa3_rm_read_stats,
 		}
 	}, {
 		"pm_stats", IPA_READ_ONLY_MODE, NULL, {
@@ -2506,16 +2544,24 @@ static const struct ipa3_debugfs_file debugfs_files[] = {
 	}
 };
 
-void ipa3_debugfs_init(void)
+void ipa3_debugfs_pre_init(void)
+{
+	dent = debugfs_create_dir("ipa", 0);
+	if (IS_ERR_OR_NULL(dent)) {
+		IPAERR("fail to create folder in debug_fs.\n");
+		dent = NULL;
+	}
+}
+
+void ipa3_debugfs_post_init(void)
 {
 	const size_t debugfs_files_num =
 		sizeof(debugfs_files) / sizeof(struct ipa3_debugfs_file);
 	size_t i;
 	struct dentry *file;
 
-	dent = debugfs_create_dir("ipa", 0);
-	if (IS_ERR(dent)) {
-		IPAERR("fail to create folder in debug_fs.\n");
+	if (IS_ERR_OR_NULL(dent)) {
+		IPAERR("debugs root not created\n");
 		return;
 	}
 
@@ -2584,8 +2630,6 @@ void ipa3_debugfs_init(void)
 
 	ipa_debugfs_init_stats(dent);
 
-	ipa3_wigig_init_debugfs_i(dent);
-
 	return;
 
 fail:
@@ -2594,7 +2638,7 @@ fail:
 
 void ipa3_debugfs_remove(void)
 {
-	if (IS_ERR(dent)) {
+	if (dent == NULL) {
 		IPAERR("Debugfs:folder was not created.\n");
 		return;
 	}
@@ -2612,6 +2656,7 @@ struct dentry *ipa_debugfs_get_root(void)
 EXPORT_SYMBOL(ipa_debugfs_get_root);
 
 #else /* !CONFIG_DEBUG_FS */
-void ipa3_debugfs_init(void) {}
+void ipa3_debugfs_pre_init(void) {}
+void ipa3_debugfs_post_init(void) {}
 void ipa3_debugfs_remove(void) {}
 #endif

@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -27,9 +34,9 @@
 #include <soc/qcom/watchdog.h>
 #include <linux/dma-mapping.h>
 #include <linux/sched/clock.h>
+#include <linux/sched/debug.h>
 #include <linux/cpumask.h>
 #include <uapi/linux/sched/types.h>
-#include <linux/sched/debug.h>
 
 #define MODULE_NAME "msm_watchdog"
 #define WDT0_ACCSCSSNBARK_INT 0
@@ -94,6 +101,10 @@ struct msm_watchdog_data {
 	unsigned long long thread_start;
 	unsigned long long ping_start[NR_CPUS];
 	unsigned long long ping_end[NR_CPUS];
+	unsigned int cpu_scandump_sizes[NR_CPUS];
+
+	/* When single buffer is used to collect Scandump */
+	unsigned int scandump_size;
 };
 
 /*
@@ -133,14 +144,14 @@ module_param(ipi_en, int, 0444);
 #ifdef CONFIG_FIRE_WATCHDOG
 static int wdog_fire;
 static int wdog_fire_set(const char *val, const struct kernel_param *kp);
-module_param_call(wdog_fire, wdog_fire_set, param_get_int,
-				&wdog_fire, 0644);
+module_param_call(wdog_fire, wdog_fire_set, param_get_int, &wdog_fire, 0644);
 
 static int wdog_fire_set(const char *val, const struct kernel_param *kp)
 {
-	printk(KERN_INFO "trigger wdog_fire_set\n");
 	local_irq_disable();
-	while (1);
+	while (1)
+		;
+
 	return 0;
 }
 #endif
@@ -214,6 +225,10 @@ static int panic_wdog_handler(struct notifier_block *this,
 				wdog_dd->base + WDT0_BITE_TIME);
 		__raw_writel(1, wdog_dd->base + WDT0_RST);
 	}
+#ifdef CONFIG_DUMP_ALL_STACKS
+	printk(KERN_INFO "D Status stack trace dump:\n");
+	show_state_filter(TASK_UNINTERRUPTIBLE);
+#endif
 	return NOTIFY_DONE;
 }
 
@@ -412,10 +427,10 @@ static void ping_other_cpus(struct msm_watchdog_data *wdog_dd)
 	}
 }
 
-static void pet_task_wakeup(struct timer_list *t)
+static void pet_task_wakeup(unsigned long data)
 {
 	struct msm_watchdog_data *wdog_dd =
-		from_timer(wdog_dd, t, pet_timer);
+		(struct msm_watchdog_data *)data;
 	wdog_dd->timer_expired = true;
 	wdog_dd->timer_fired = sched_clock();
 	wake_up(&wdog_dd->pet_complete);
@@ -528,15 +543,6 @@ void msm_trigger_wdog_bite(void)
 		__raw_readl(wdog_data->base + WDT0_EN),
 		__raw_readl(wdog_data->base + WDT0_BARK_TIME),
 		__raw_readl(wdog_data->base + WDT0_BITE_TIME));
-	/*
-	 * This function induces the non-secure bite and control
-	 * should not return to the calling function. Non-secure
-	 * bite interrupt is affined to all the cores and it may
-	 * not be handled by the same cores which configured
-	 * non-secure bite. So add forever loop here.
-	 */
-	while (1)
-		udelay(1);
 }
 
 static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
@@ -553,10 +559,12 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	dev_info(wdog_dd->dev, "Watchdog last pet at %lu.%06lu\n",
 			(unsigned long) wdog_dd->last_pet, nanosec_rem / 1000);
 	show_state_filter(TASK_UNINTERRUPTIBLE);
+
 	if (wdog_dd->do_ipi_ping)
 		dump_cpu_alive_mask(wdog_dd);
-
 	msm_trigger_wdog_bite();
+	panic("Failed to cause a watchdog bite! - Falling back to kernel panic!");
+
 	return IRQ_HANDLED;
 }
 
@@ -565,6 +573,132 @@ static irqreturn_t wdog_ppi_bark(int irq, void *dev_id)
 	struct msm_watchdog_data *wdog_dd =
 			*(struct msm_watchdog_data **)(dev_id);
 	return wdog_bark_handler(irq, wdog_dd);
+}
+
+static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
+{
+	int ret;
+	struct msm_dump_entry dump_entry;
+	struct msm_dump_data *cpu_data;
+	int cpu;
+	void *cpu_buf;
+
+	cpu_data = kcalloc(num_present_cpus(), sizeof(struct msm_dump_data),
+								GFP_KERNEL);
+	if (!cpu_data)
+		goto out0;
+
+	cpu_buf = kcalloc(num_present_cpus(), MAX_CPU_CTX_SIZE, GFP_KERNEL);
+	if (!cpu_buf)
+		goto out1;
+
+	for_each_cpu(cpu, cpu_present_mask) {
+		cpu_data[cpu].addr = virt_to_phys(cpu_buf +
+						cpu * MAX_CPU_CTX_SIZE);
+		cpu_data[cpu].len = MAX_CPU_CTX_SIZE;
+		snprintf(cpu_data[cpu].name, sizeof(cpu_data[cpu].name),
+			"KCPU_CTX%d", cpu);
+		dump_entry.id = MSM_DUMP_DATA_CPU_CTX + cpu;
+		dump_entry.addr = virt_to_phys(&cpu_data[cpu]);
+		ret = msm_dump_data_register(MSM_DUMP_TABLE_APPS,
+					     &dump_entry);
+		/*
+		 * Don't free the buffers in case of error since
+		 * registration may have succeeded for some cpus.
+		 */
+		if (ret)
+			pr_err("cpu %d reg dump setup failed\n", cpu);
+	}
+
+	return;
+out1:
+	kfree(cpu_data);
+out0:
+	return;
+}
+
+static void register_scan_dump(struct msm_watchdog_data *wdog_dd)
+{
+	static void *dump_addr;
+	int ret;
+	struct msm_dump_entry dump_entry;
+	struct msm_dump_data *dump_data;
+
+	dump_data = kzalloc(sizeof(struct msm_dump_data), GFP_KERNEL);
+	if (!dump_data)
+		return;
+	dump_addr = kzalloc(wdog_dd->scandump_size, GFP_KERNEL);
+	if (!dump_addr)
+		goto err0;
+
+	dump_data->addr = virt_to_phys(dump_addr);
+	dump_data->len = wdog_dd->scandump_size;
+	strlcpy(dump_data->name, "KSCANDUMP", sizeof(dump_data->name));
+
+	dump_entry.id = MSM_DUMP_DATA_SCANDUMP;
+	dump_entry.addr = virt_to_phys(dump_data);
+	ret = msm_dump_data_register(MSM_DUMP_TABLE_APPS, &dump_entry);
+	if (ret) {
+		pr_err("Registering scandump region failed\n");
+		goto err1;
+	}
+	return;
+err1:
+	kfree(dump_addr);
+err0:
+	kfree(dump_data);
+}
+
+static void configure_scandump(struct msm_watchdog_data *wdog_dd)
+{
+	int ret;
+	struct msm_dump_entry dump_entry;
+	struct msm_dump_data *cpu_data;
+	int cpu;
+	static dma_addr_t dump_addr;
+	static void *dump_vaddr;
+	unsigned int scandump_size;
+
+	if (wdog_dd->scandump_size) {
+		register_scan_dump(wdog_dd);
+		return;
+	}
+
+	for_each_cpu(cpu, cpu_present_mask) {
+		scandump_size = wdog_dd->cpu_scandump_sizes[cpu];
+		cpu_data = devm_kzalloc(wdog_dd->dev,
+					sizeof(struct msm_dump_data),
+					GFP_KERNEL);
+		if (!cpu_data)
+			continue;
+
+		dump_vaddr = (void *) dma_alloc_coherent(wdog_dd->dev,
+							 scandump_size,
+							 &dump_addr,
+							 GFP_KERNEL);
+		if (!dump_vaddr) {
+			dev_err(wdog_dd->dev, "Couldn't get memory for dump\n");
+			continue;
+		}
+		memset(dump_vaddr, 0x0, scandump_size);
+
+		cpu_data->addr = dump_addr;
+		cpu_data->len = scandump_size;
+		snprintf(cpu_data->name, sizeof(cpu_data->name),
+			"KSCANDUMP%d", cpu);
+		dump_entry.id = MSM_DUMP_DATA_SCANDUMP_PER_CPU + cpu;
+		dump_entry.addr = virt_to_phys(cpu_data);
+		ret = msm_dump_data_register(MSM_DUMP_TABLE_APPS,
+					     &dump_entry);
+		if (ret) {
+			dev_err(wdog_dd->dev, "Dump setup failed, id = %d\n",
+				MSM_DUMP_DATA_SCANDUMP_PER_CPU + cpu);
+			dma_free_coherent(wdog_dd->dev, scandump_size,
+					  dump_vaddr,
+					  dump_addr);
+			devm_kfree(wdog_dd->dev, cpu_data);
+		}
+	}
 }
 
 static int init_watchdog_sysfs(struct msm_watchdog_data *wdog_dd)
@@ -627,6 +761,8 @@ static void init_watchdog_data(struct msm_watchdog_data *wdog_dd)
 	delay_time = msecs_to_jiffies(wdog_dd->pet_time);
 	wdog_dd->min_slack_ticks = UINT_MAX;
 	wdog_dd->min_slack_ns = ULLONG_MAX;
+	configure_scandump(wdog_dd);
+	configure_bark_dump(wdog_dd);
 	timeout = (wdog_dd->bark_time * WDT_HZ)/1000;
 	__raw_writel(timeout, wdog_dd->base + WDT0_BARK_TIME);
 	__raw_writel(timeout + 10*WDT_HZ, wdog_dd->base + WDT0_BITE_TIME);
@@ -640,7 +776,9 @@ static void init_watchdog_data(struct msm_watchdog_data *wdog_dd)
 	wdog_dd->user_pet_complete = true;
 	wdog_dd->user_pet_enabled = false;
 	wake_up_process(wdog_dd->watchdog_task);
-	timer_setup(&wdog_dd->pet_timer, pet_task_wakeup, 0);
+	init_timer(&wdog_dd->pet_timer);
+	wdog_dd->pet_timer.data = (unsigned long)wdog_dd;
+	wdog_dd->pet_timer.function = pet_task_wakeup;
 	wdog_dd->pet_timer.expires = jiffies + delay_time;
 	add_timer(&wdog_dd->pet_timer);
 
@@ -680,7 +818,7 @@ static int msm_wdog_dt_to_pdata(struct platform_device *pdev,
 {
 	struct device_node *node = pdev->dev.of_node;
 	struct resource *res;
-	int ret;
+	int ret, cpu, num_scandump_sizes;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "wdt-base");
 	if (!res)
@@ -741,6 +879,26 @@ static int msm_wdog_dt_to_pdata(struct platform_device *pdev,
 	}
 	pdata->wakeup_irq_enable = of_property_read_bool(node,
 							 "qcom,wakeup-enable");
+
+	num_scandump_sizes = of_property_count_elems_of_size(node,
+							"qcom,scandump-sizes",
+							sizeof(u32));
+	if ((num_scandump_sizes < 0) || ((num_scandump_sizes != 1) &&
+				(num_scandump_sizes != NR_CPUS))) {
+		dev_info(&pdev->dev, "%s scandump sizes property not correct\n",
+			__func__);
+	} else if (num_scandump_sizes == 1) {
+		if (of_property_read_u32(node, "qcom,scandump-sizes",
+					 &pdata->scandump_size))
+			dev_info(&pdev->dev,
+				 "No need to allocate memory for scandumps\n");
+	} else {
+		for_each_cpu(cpu, cpu_present_mask)
+			of_property_read_u32_index(node, "qcom,scandump-sizes",
+						   cpu,
+					&pdata->cpu_scandump_sizes[cpu]);
+	}
+
 	pdata->irq_ppi = irq_is_percpu(pdata->bark_irq);
 	dump_pdata(pdata);
 	return 0;
@@ -788,8 +946,7 @@ err:
 }
 
 static const struct dev_pm_ops msm_watchdog_dev_pm_ops = {
-	.suspend_noirq = msm_watchdog_suspend,
-	.resume_noirq = msm_watchdog_resume,
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(msm_watchdog_suspend, msm_watchdog_resume)
 };
 
 static struct platform_driver msm_watchdog_driver = {

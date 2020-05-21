@@ -1,6 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
  * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _LINUX_QCOM_GENI_SE
@@ -26,7 +35,8 @@ enum se_protocol_types {
 	SPI,
 	UART,
 	I2C,
-	I3C
+	I3C,
+	SPI_SLAVE
 };
 
 /**
@@ -91,6 +101,9 @@ struct se_geni_rsc {
 #define GENI_FW_REVISION_RO		(0x68)
 #define GENI_FW_S_REVISION_RO		(0x6C)
 #define SE_GENI_CLK_SEL			(0x7C)
+#define SE_GENI_CFG_SEQ_START			(0x84)
+#define SE_GENI_CFG_REG		(0x200)
+#define GENI_CFG_REG80			(0x240)
 #define SE_GENI_BYTE_GRAN		(0x254)
 #define SE_GENI_DMA_MODE_EN		(0x258)
 #define SE_GENI_TX_PACKING_CFG0		(0x260)
@@ -123,10 +136,19 @@ struct se_geni_rsc {
 #define SE_HW_PARAM_1			(0xE28)
 #define SE_DMA_GENERAL_CFG		(0xE30)
 #define SE_DMA_DEBUG_REG0		(0xE40)
+#define SLAVE_MODE_EN			(BIT(3))
+#define START_TRIGGER			(BIT(0))
 #define QUPV3_HW_VER			(0x4)
 
 /* GENI_OUTPUT_CTRL fields */
 #define DEFAULT_IO_OUTPUT_CTRL_MSK	(GENMASK(6, 0))
+#define GENI_IO_MUX_0_EN			BIT(1)
+#define GENI_IO_MUX_1_EN			BIT(2)
+
+/* GENI_CFG_REG80 fields */
+#define IO1_SEL_TX			BIT(2)
+#define IO2_DATA_IN_SEL_PAD2	(GENMASK(11, 10))
+#define IO3_DATA_IN_SEL_PAD2	BIT(15)
 
 /* GENI_FORCE_DEFAULT_REG fields */
 #define FORCE_DEFAULT	(BIT(0))
@@ -276,7 +298,6 @@ struct se_geni_rsc {
 #define TX_FIFO_WIDTH_SHFT	(24)
 #define TX_FIFO_DEPTH_MSK	(GENMASK(21, 16))
 #define TX_FIFO_DEPTH_SHFT	(16)
-#define GEN_I3C_IBI_CTRL	(BIT(7))
 
 /* SE_HW_PARAM_1 fields */
 #define RX_FIFO_WIDTH_MSK	(GENMASK(29, 24))
@@ -413,18 +434,18 @@ void geni_write_reg(unsigned int value, void __iomem *base, int offset);
 int get_se_proto(void __iomem *base);
 
 /**
- * get_se_m_fw() - Read the Firmware ver for the Main sequencer engine
+ * get_se_m_fw() - Read the Firmware ver for the Main seqeuncer engine
  * @base:	Base address of the serial engine's register block.
  *
- * Return:	Firmware version for the Main sequencer engine
+ * Return:	Firmware version for the Main seqeuncer engine
  */
 int get_se_m_fw(void __iomem *base);
 
 /**
- * get_se_s_fw() - Read the Firmware ver for the Secondry sequencer engine
+ * get_se_s_fw() - Read the Firmware ver for the Secondry seqeuncer engine
  * @base:	Base address of the serial engine's register block.
  *
- * Return:	Firmware version for the Secondry sequencer engine
+ * Return:	Firmware version for the Secondry seqeuncer engine
  */
 int get_se_s_fw(void __iomem *base);
 

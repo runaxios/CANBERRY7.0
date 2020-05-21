@@ -1,12 +1,16 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #ifndef __MACH_SCM_H
 #define __MACH_SCM_H
-
-#include <soc/qcom/qtee_shmbridge.h>
 
 #define SCM_SVC_BOOT			0x1
 #define SCM_SVC_PIL			0x2
@@ -26,7 +30,6 @@
 #define SCM_SVC_SMMU_PROGRAM		0x15
 #define SCM_SVC_QDSS			0x16
 #define SCM_SVC_RTIC			0x19
-#define SCM_SVC_TSENS			0x1E
 #define SCM_SVC_TZSCHEDULER		0xFC
 
 #define SCM_FUSE_READ			0x7
@@ -88,11 +91,11 @@ struct scm_desc {
 	u64 ret[MAX_SCM_RETS];
 
 	/* private */
-	struct qtee_shm shm;
+	void *extra_arg_buf;
 	u64 x5;
 };
 
-#ifdef CONFIG_QCOM_SCM
+#if defined(CONFIG_QCOM_SCM) || defined(CONFIG_QCOM_SCM_QCPE)
 
 #define SCM_VERSION(major, minor) (((major) << 16) | ((minor) & 0xFF))
 extern int scm_call2(u32 cmd_id, struct scm_desc *desc);

@@ -308,6 +308,7 @@ static int fts_open(struct inode *inode, struct file *file)
 /** @addtogroup proc_file_code
  * @{
  */
+
 /**
  * Receive the OP code and the inputs from shell when the file node is called, parse it and then execute the corresponding function
  * echo cmd+parameters > /proc/fts/driver_test to execute the select command
@@ -323,7 +324,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 	int numberParam = 0;
 	struct fts_ts_info *info = dev_get_drvdata(getDev());
 	char *p = NULL;
-	char *pbuf = NULL;
+	char pbuf[count];
 	char path[100] = { 0 };
 	int res = -1, j, index = 0;
 	int size = 6;
@@ -332,7 +333,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 	u32 fileSize = 0;
 	u8 *readData = NULL;
 	u8 *cmd = NULL;
-	u32 *funcToTest = NULL;
+	u32 funcToTest[((count + 1) / 3)];
 	u64 addr = 0;
 	MutualSenseFrame frameMS;
 	SelfSenseFrame frameSS;
@@ -350,31 +351,15 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 	Firmware fw;
 	LimitFile lim;
 
-	const char *limit_file_name = NULL;
-	limit_file_name = fts_get_limit(info);
-
 	mess.dummy = 0;
 	mess.action = 0;
 	mess.msg_size = 0;
 
 	cmd = (u8 *)kzalloc(sizeof(u8) * count, GFP_KERNEL);
 	if (!cmd) {
-		res = -ENOMEM;
+		res = ERROR_ALLOC;
 		goto END;
 	}
-
-	pbuf = (u8 *)kzalloc(sizeof(u8) * count, GFP_KERNEL);
-	if (!pbuf) {
-		res = -ENOMEM;
-		goto END;
-	}
-
-	funcToTest = (u32 *)kzalloc(sizeof(u32) * ((count + 1) / 3), GFP_KERNEL);
-	if (!funcToTest) {
-		res = -ENOMEM;
-		goto END;
-	}
-
 	if (access_ok(VERIFY_READ, buf, count) < OK
 	    || copy_from_user(pbuf, buf, count) != 0) {
 		res = ERROR_ALLOC;
@@ -1435,31 +1420,20 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 			break;
 
 		case CMD_FLASHERASEPAGE:
-			if (numberParam == 2) {	/* need to pass: keep_cx */
-				logError(1, "%s Reading FW File...\n", tag);
-				res = readFwFile(info->board->default_fw_name, &fw,
-						 funcToTest[1]);
-				if (res < OK)
-					logError(1,
-						 "%s Error reading FW File ERROR %08X\n",
-						 tag, res);
-				else
-					logError(1,
-						 "%s Read FW File Finished!\n",
-						 tag);
-				logError(1,
+			if (numberParam == 2) {
+				logError(0,
 					 "%s Starting Flashing Page Erase... \n",
 					 tag);
-				res = flash_erase_page_by_page(cmd[1], &fw);
-				if (res < OK)
-					logError(1,
+				res = flash_erase_page_by_page(cmd[1]);
+				if (res < OK) {
+					logError(0,
 						 "%s Error during flash page erase... ERROR %08X\n",
 						 tag, res);
-				else
-					logError(1,
+				} else {
+					logError(0,
 						 "%s Flash Page Erase Finished! \n",
 						 tag);
-				kfree(fw.data);
+				}
 			} else {
 				logError(1, "%s Wrong number of parameters! \n",
 					 tag);
@@ -1467,10 +1441,9 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 			}
 			break;
 
-
 			/*ITO TEST */
 		case CMD_ITOTEST:
-			res = production_test_ito(limit_file_name, &tests);
+			res = production_test_ito(LIMITS_FILE, &tests);
 			break;
 
 			/*Initialization */
@@ -1488,7 +1461,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_MSRAWTEST:
 			if (numberParam == 2)
 				res =
-				    production_test_ms_raw(limit_file_name, cmd[1],
+				    production_test_ms_raw(LIMITS_FILE, cmd[1],
 							   &tests);
 			else {
 				logError(1, "%s Wrong number of parameters! \n",
@@ -1500,7 +1473,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_MSINITDATATEST:
 			if (numberParam == 2)
 				res =
-				    production_test_ms_cx(limit_file_name, cmd[1],
+				    production_test_ms_cx(LIMITS_FILE, cmd[1],
 							  &tests);
 			else {
 				logError(1, "%s Wrong number of parameters! \n",
@@ -1512,7 +1485,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_SSRAWTEST:
 			if (numberParam == 2)
 				res =
-				    production_test_ss_raw(limit_file_name, cmd[1],
+				    production_test_ss_raw(LIMITS_FILE, cmd[1],
 							   &tests);
 			else {
 				logError(1, "%s Wrong number of parameters! \n",
@@ -1524,7 +1497,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_SSINITDATATEST:
 			if (numberParam == 2)
 				res =
-				    production_test_ss_ix_cx(limit_file_name,
+				    production_test_ss_ix_cx(LIMITS_FILE,
 							     cmd[1], &tests);
 			else {
 				logError(1, "%s Wrong number of parameters! \n",
@@ -1537,7 +1510,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 		case CMD_MAINTEST:
 			if (numberParam == 3)
 				res =
-				    production_test_main(limit_file_name, cmd[1],
+				    production_test_main(LIMITS_FILE, cmd[1],
 							 cmd[2], &tests);
 			else {
 				logError(1, "%s Wrong number of parameters! \n",
@@ -1559,7 +1532,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 				lim.data = NULL;
 				lim.size = 0;
 				if (numberParam == 1)
-					res = getLimitsFile(limit_file_name, &lim);
+					res = getLimitsFile(LIMITS_FILE, &lim);
 				else
 					res = getLimitsFile(path, &lim);
 				readData = lim.data;
@@ -1582,7 +1555,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 				u8ToU16_be(&cmd[1], &byteToRead);
 				addr = ((u64) byteToRead) * 4;
 
-				res = getLimitsFile(limit_file_name, &lim);
+				res = getLimitsFile(LIMITS_FILE, &lim);
 
 				readData = lim.data;
 				fileSize = lim.size;
@@ -2414,14 +2387,6 @@ ERROR:
 		kfree(readData);
 	if (cmd)
 		kfree(cmd);
-	if (pbuf)
-		kfree(pbuf);
-	if (funcToTest)
-		kfree(funcToTest);
-	readData = NULL;
-	cmd = NULL;
-	pbuf = NULL;
-	funcToTest = NULL;
 	return count;
 }
 

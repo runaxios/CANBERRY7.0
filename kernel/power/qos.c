@@ -192,6 +192,7 @@ static inline void pm_qos_set_value(struct pm_qos_constraints *c, s32 value)
 	c->target_value = value;
 }
 
+static inline int pm_qos_get_value(struct pm_qos_constraints *c);
 static int pm_qos_dbg_show_requests(struct seq_file *s, void *unused)
 {
 	struct pm_qos_object *qos = (struct pm_qos_object *)s->private;
@@ -266,20 +267,12 @@ static const struct file_operations pm_qos_debug_fops = {
 	.release        = single_release,
 };
 
-static inline int pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
+static inline void pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 		struct cpumask *cpus)
 {
 	struct pm_qos_request *req = NULL;
 	int cpu;
 	s32 qos_val[NR_CPUS] = { [0 ... (NR_CPUS - 1)] = c->default_value };
-
-	/*
-	 * pm_qos_constraints can be from different classes,
-	 * Update cpumask only only for CPU_DMA_LATENCY classes
-	 */
-
-	if (c != pm_qos_array[PM_QOS_CPU_DMA_LATENCY]->constraints)
-		return -EINVAL;
 
 	plist_for_each_entry(req, &c->list, node) {
 		for_each_cpu(cpu, &req->cpus_affine) {
@@ -292,6 +285,9 @@ static inline int pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 				if (req->node.prio > qos_val[cpu])
 					qos_val[cpu] = req->node.prio;
 				break;
+			case PM_QOS_SUM:
+					qos_val[cpu] += req->node.prio;
+				break;
 			default:
 				break;
 			}
@@ -303,8 +299,6 @@ static inline int pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 			cpumask_set_cpu(cpu, cpus);
 		c->target_per_cpu[cpu] = qos_val[cpu];
 	}
-
-	return 0;
 }
 
 /**
@@ -344,7 +338,6 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 		 * changed
 		 */
 		plist_del(node, &c->list);
-		/* fall through */
 	case PM_QOS_ADD_REQ:
 		plist_node_init(node, new_value);
 		plist_add(node, &c->list);
@@ -357,7 +350,7 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 	curr_value = pm_qos_get_value(c);
 	cpumask_clear(&cpus);
 	pm_qos_set_value(c, curr_value);
-	ret = pm_qos_set_value_for_cpus(c, &cpus);
+	pm_qos_set_value_for_cpus(c, &cpus);
 
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
@@ -368,8 +361,7 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 	 * to update the new qos restriction for the cores
 	 */
 
-	if (!cpumask_empty(&cpus) ||
-	   (ret && prev_value != curr_value)) {
+	if (!cpumask_empty(&cpus)) {
 		ret = 1;
 		if (c->notifiers)
 			blocking_notifier_call_chain(c->notifiers,
@@ -425,7 +417,6 @@ bool pm_qos_update_flags(struct pm_qos_flags *pqf,
 		break;
 	case PM_QOS_UPDATE_REQ:
 		pm_qos_flags_remove_req(pqf, req);
-		/* fall through */
 	case PM_QOS_ADD_REQ:
 		req->flags = val;
 		INIT_LIST_HEAD(&req->node);
@@ -924,8 +915,8 @@ static int __init pm_qos_power_init(void)
 	for (i = PM_QOS_CPU_DMA_LATENCY; i < PM_QOS_NUM_CLASSES; i++) {
 		ret = register_pm_qos_misc(pm_qos_array[i], d);
 		if (ret < 0) {
-			pr_err("%s: %s setup failed\n",
-			       __func__, pm_qos_array[i]->name);
+			printk(KERN_ERR "pm_qos_param: %s setup failed\n",
+			       pm_qos_array[i]->name);
 			return ret;
 		}
 	}

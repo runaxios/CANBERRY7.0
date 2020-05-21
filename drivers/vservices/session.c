@@ -1706,7 +1706,8 @@ fail_add_idr:
 	return ERR_PTR(ret);
 
 fail_copy_name:
-    kfree(service->protocol);
+	if (service->protocol)
+		kfree(service->protocol);
 fail_copy_protocol:
 	kfree(service);
 fail:
@@ -2521,6 +2522,7 @@ int vs_service_bus_remove(struct device *dev)
 {
 	struct vs_service_device *service = to_vs_service_device(dev);
 	struct vs_service_driver *vsdrv = to_vs_service_driver(dev->driver);
+	int err = 0;
 
 	reset_service(service);
 
@@ -2551,7 +2553,7 @@ int vs_service_bus_remove(struct device *dev)
 
 	module_put(vsdrv->driver.owner);
 
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL_GPL(vs_service_bus_remove);
 

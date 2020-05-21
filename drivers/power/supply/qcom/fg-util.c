@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/of.h>
@@ -45,23 +52,6 @@ int fg_decode_voltage_15b(struct fg_sram_param *sp,
 	sp[id].value = div_u64((u64)value * sp[id].denmtr, sp[id].numrtr);
 	pr_debug("id: %d raw value: %x decoded value: %x\n", id, value,
 		sp[id].value);
-	return sp[id].value;
-}
-
-#define CURRENT_24BIT_MSB_MASK	GENMASK(27, 16)
-#define CURRENT_24BIT_LSB_MASK	GENMASK(11, 0)
-int fg_decode_current_24b(struct fg_sram_param *sp,
-	enum fg_sram_param_id id, int value)
-{
-	int msb, lsb, val;
-
-	msb = value & CURRENT_24BIT_MSB_MASK;
-	lsb = value & CURRENT_24BIT_LSB_MASK;
-	val = (msb >> 4) | lsb;
-	val = sign_extend32(val, 23);
-	sp[id].value = div_s64((s64)val * sp[id].denmtr, sp[id].numrtr);
-	pr_debug("id: %d raw value: %x decoded value: %x\n", id, value,
-			sp[id].value);
 	return sp[id].value;
 }
 
@@ -401,7 +391,9 @@ void fg_notify_charger(struct fg_dev *fg)
 		}
 	}
 
-	if (fg->bp.fastchg_curr_ma > 0) {
+	fg_dbg(fg, FG_STATUS, "Notified charger on float voltage and FCC\n");
+
+	/*if (fg->bp.fastchg_curr_ma > 0) {
 		prop.intval = fg->bp.fastchg_curr_ma * 1000;
 		rc = power_supply_set_property(fg->batt_psy,
 				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
@@ -411,7 +403,7 @@ void fg_notify_charger(struct fg_dev *fg)
 				rc);
 			return;
 		}
-	}
+	}*/
 }
 
 bool batt_psy_initialized(struct fg_dev *fg)
@@ -861,6 +853,8 @@ wait:
 		goto out;
 	}
 out:
+	if (fg->empty_restart_fg)
+		fg->empty_restart_fg = false;
 	fg->fg_restarting = false;
 	return rc;
 }
@@ -1651,7 +1645,6 @@ static const struct file_operations fg_alg_flags_fops = {
 int fg_debugfs_create(struct fg_dev *fg)
 {
 	int rc;
-	struct dentry *file;
 
 	pr_debug("Creating debugfs file-system\n");
 	fg->dfs_root = debugfs_create_dir("fg", NULL);
@@ -1662,13 +1655,6 @@ int fg_debugfs_create(struct fg_dev *fg)
 			pr_err("error creating fg dfs root rc=%ld\n",
 			       (long)fg->dfs_root);
 		return -ENODEV;
-	}
-
-	file = debugfs_create_u32("debug_mask", 0600, fg->dfs_root,
-			fg->debug_mask);
-	if (IS_ERR_OR_NULL(file)) {
-		pr_err("failed to create debug_mask\n");
-		goto err_remove_fs;
 	}
 
 	rc = fg_sram_debugfs_create(fg);

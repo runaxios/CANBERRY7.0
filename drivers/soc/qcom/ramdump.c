@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -407,7 +413,7 @@ void destroy_ramdump_device(void *dev)
 EXPORT_SYMBOL(destroy_ramdump_device);
 
 static int _do_ramdump(void *handle, struct ramdump_segment *segments,
-		int nsegments, bool use_elf, bool complete_ramdump)
+		int nsegments, bool use_elf)
 {
 	int ret, i;
 	struct ramdump_device *rd_dev = (struct ramdump_device *)handle;
@@ -425,7 +431,7 @@ static int _do_ramdump(void *handle, struct ramdump_segment *segments,
 	 * the current list of readers has been awoken, new readers that add
 	 * themselves to the reader list will not participate in the current
 	 * ramdump session. This allows for the lock to be free while the
-	 * ramdump is occurring, which prevents stalling readers who want to
+	 * ramdump is occuring, which prevents stalling readers who want to
 	 * close the ramdump node or new readers that want to open it.
 	 */
 	mutex_lock(&rd_dev->consumer_lock);
@@ -435,7 +441,7 @@ static int _do_ramdump(void *handle, struct ramdump_segment *segments,
 		return -EPIPE;
 	}
 
-	if (complete_ramdump) {
+	if (rd_dev->complete_ramdump) {
 		for (i = 0; i < nsegments-1; i++)
 			segments[i].size =
 				segments[i + 1].address - segments[i].address;
@@ -508,19 +514,19 @@ static int _do_ramdump(void *handle, struct ramdump_segment *segments,
 }
 
 static inline unsigned int set_section_name(const char *name,
-					    struct elfhdr *ehdr)
+					    struct elfhdr *ehdr,
+					    int *strtable_idx)
 {
 	char *strtab = elf_str_table(ehdr);
-	static int strtable_idx = 1;
 	int idx, ret = 0;
 
-	idx = strtable_idx;
+	idx = *strtable_idx;
 	if ((strtab == NULL) || (name == NULL))
 		return 0;
 
 	ret = idx;
 	idx += strlcpy((strtab + idx), name, MAX_NAME_LENGTH);
-	strtable_idx = idx + 1;
+	*strtable_idx = idx + 1;
 
 	return ret;
 }
@@ -534,6 +540,7 @@ static int _do_minidump(void *handle, struct ramdump_segment *segments,
 	struct elfhdr *ehdr;
 	struct elf_shdr *shdr;
 	unsigned long offset, strtbl_off;
+	int strtable_idx = 1;
 
 	/*
 	 * Acquire the consumer lock here, and hold the lock until we are done
@@ -544,7 +551,7 @@ static int _do_minidump(void *handle, struct ramdump_segment *segments,
 	 * the current list of readers has been awoken, new readers that add
 	 * themselves to the reader list will not participate in the current
 	 * ramdump session. This allows for the lock to be free while the
-	 * ramdump is occurring, which prevents stalling readers who want to
+	 * ramdump is occuring, which prevents stalling readers who want to
 	 * close the ramdump node or new readers that want to open it.
 	 */
 	mutex_lock(&rd_dev->consumer_lock);
@@ -589,13 +596,14 @@ static int _do_minidump(void *handle, struct ramdump_segment *segments,
 	shdr->sh_size = MAX_STRTBL_SIZE;
 	shdr->sh_entsize = 0;
 	shdr->sh_flags = 0;
-	shdr->sh_name = set_section_name("STR_TBL", ehdr);
+	shdr->sh_name = set_section_name("STR_TBL", ehdr, &strtable_idx);
 	shdr++;
 
 	for (i = 0; i < nsegments; i++, shdr++) {
 		/* Update elf header */
 		shdr->sh_type = SHT_PROGBITS;
-		shdr->sh_name = set_section_name(segments[i].name, ehdr);
+		shdr->sh_name = set_section_name(segments[i].name, ehdr,
+							&strtable_idx);
 		shdr->sh_addr = (elf_addr_t)segments[i].address;
 		shdr->sh_size = segments[i].size;
 		shdr->sh_flags = SHF_WRITE;
@@ -636,10 +644,7 @@ static int _do_minidump(void *handle, struct ramdump_segment *segments,
 
 int do_ramdump(void *handle, struct ramdump_segment *segments, int nsegments)
 {
-	struct ramdump_device *rd_dev = (struct ramdump_device *)handle;
-
-	return _do_ramdump(handle, segments, nsegments, false,
-				rd_dev->complete_ramdump);
+	return _do_ramdump(handle, segments, nsegments, false);
 }
 EXPORT_SYMBOL(do_ramdump);
 
@@ -649,19 +654,9 @@ int do_minidump(void *handle, struct ramdump_segment *segments, int nsegments)
 }
 EXPORT_SYMBOL(do_minidump);
 
-int do_minidump_elf32(void *handle, struct ramdump_segment *segments,
-		      int nsegments)
-{
-	return _do_ramdump(handle, segments, nsegments, true, false);
-}
-EXPORT_SYMBOL(do_minidump_elf32);
-
 int
 do_elf_ramdump(void *handle, struct ramdump_segment *segments, int nsegments)
 {
-	struct ramdump_device *rd_dev = (struct ramdump_device *)handle;
-
-	return _do_ramdump(handle, segments, nsegments, true,
-				rd_dev->complete_ramdump);
+	return _do_ramdump(handle, segments, nsegments, true);
 }
 EXPORT_SYMBOL(do_elf_ramdump);

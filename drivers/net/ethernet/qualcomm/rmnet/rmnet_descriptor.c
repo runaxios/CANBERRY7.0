@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * RMNET Packet Descriptor Framework
  *
@@ -34,9 +42,8 @@ rmnet_get_frag_descriptor(struct rmnet_port *port)
 {
 	struct rmnet_frag_descriptor_pool *pool = port->frag_desc_pool;
 	struct rmnet_frag_descriptor *frag_desc;
-	unsigned long flags;
 
-	spin_lock_irqsave(&port->desc_pool_lock, flags);
+	spin_lock(&port->desc_pool_lock);
 	if (!list_empty(&pool->free_list)) {
 		frag_desc = list_first_entry(&pool->free_list,
 					     struct rmnet_frag_descriptor,
@@ -53,7 +60,7 @@ rmnet_get_frag_descriptor(struct rmnet_port *port)
 	}
 
 out:
-	spin_unlock_irqrestore(&port->desc_pool_lock, flags);
+	spin_unlock(&port->desc_pool_lock);
 	return frag_desc;
 }
 EXPORT_SYMBOL(rmnet_get_frag_descriptor);
@@ -63,7 +70,6 @@ void rmnet_recycle_frag_descriptor(struct rmnet_frag_descriptor *frag_desc,
 {
 	struct rmnet_frag_descriptor_pool *pool = port->frag_desc_pool;
 	struct page *page = skb_frag_page(&frag_desc->frag);
-	unsigned long flags;
 
 	list_del(&frag_desc->list);
 	if (page)
@@ -72,9 +78,9 @@ void rmnet_recycle_frag_descriptor(struct rmnet_frag_descriptor *frag_desc,
 	memset(frag_desc, 0, sizeof(*frag_desc));
 	INIT_LIST_HEAD(&frag_desc->list);
 	INIT_LIST_HEAD(&frag_desc->sub_frags);
-	spin_lock_irqsave(&port->desc_pool_lock, flags);
+	spin_lock(&port->desc_pool_lock);
 	list_add_tail(&frag_desc->list, &pool->free_list);
-	spin_unlock_irqrestore(&port->desc_pool_lock, flags);
+	spin_unlock(&port->desc_pool_lock);
 }
 EXPORT_SYMBOL(rmnet_recycle_frag_descriptor);
 
@@ -377,29 +383,12 @@ static void rmnet_frag_gso_stamp(struct sk_buff *skb,
 				 struct rmnet_frag_descriptor *frag_desc)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
-
-	if (frag_desc->trans_proto == IPPROTO_TCP)
-		shinfo->gso_type = (frag_desc->ip_proto == 4) ?
-				   SKB_GSO_TCPV4 : SKB_GSO_TCPV6;
-	else
-		shinfo->gso_type = SKB_GSO_UDP_L4;
-
-	shinfo->gso_size = frag_desc->gso_size;
-	shinfo->gso_segs = frag_desc->gso_segs;
-}
-
-/* Set the partial checksum information. Sets the transport checksum tot he
- * pseudoheader checksum and sets the offload metadata.
- */
-static void rmnet_frag_partial_csum(struct sk_buff *skb,
-				    struct rmnet_frag_descriptor *frag_desc)
-{
 	struct iphdr *iph = (struct iphdr *)skb->data;
 	__sum16 pseudo;
 	u16 pkt_len = skb->len - frag_desc->ip_len;
+	bool ipv4 = frag_desc->ip_proto == 4;
 
-	if (frag_desc->ip_proto == 4) {
-		iph->tot_len = htons(skb->len);
+	if (ipv4) {
 		iph->check = 0;
 		iph->check = ip_fast_csum(iph, iph->ihl);
 		pseudo = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
@@ -408,8 +397,6 @@ static void rmnet_frag_partial_csum(struct sk_buff *skb,
 	} else {
 		struct ipv6hdr *ip6h = (struct ipv6hdr *)iph;
 
-		/* Payload length includes any extension headers */
-		ip6h->payload_len = htons(skb->len - sizeof(*ip6h));
 		pseudo = ~csum_ipv6_magic(&ip6h->saddr, &ip6h->daddr,
 					  pkt_len, frag_desc->trans_proto, 0);
 	}
@@ -419,18 +406,21 @@ static void rmnet_frag_partial_csum(struct sk_buff *skb,
 				    ((u8 *)iph + frag_desc->ip_len);
 
 		tp->check = pseudo;
+		shinfo->gso_type = (ipv4) ? SKB_GSO_TCPV4 : SKB_GSO_TCPV6;
 		skb->csum_offset = offsetof(struct tcphdr, check);
 	} else {
 		struct udphdr *up = (struct udphdr *)
 				    ((u8 *)iph + frag_desc->ip_len);
 
-		up->len = htons(pkt_len);
 		up->check = pseudo;
+		shinfo->gso_type = SKB_GSO_UDP_L4;
 		skb->csum_offset = offsetof(struct udphdr, check);
 	}
 
 	skb->ip_summed = CHECKSUM_PARTIAL;
 	skb->csum_start = (u8 *)iph + frag_desc->ip_len - skb->head;
+	shinfo->gso_size = frag_desc->gso_size;
+	shinfo->gso_segs = frag_desc->gso_segs;
 }
 
 /* Allocate and populate an skb to contain the packet represented by the
@@ -446,6 +436,7 @@ static struct sk_buff *rmnet_alloc_skb(struct rmnet_frag_descriptor *frag_desc,
 	/* Use the exact sizes if we know them (i.e. RSB/RSC, rmnet_perf) */
 	if (frag_desc->hdrs_valid) {
 		u16 hdr_len = frag_desc->ip_len + frag_desc->trans_len;
+		u16 data_len = frag_desc->gso_size * frag_desc->gso_segs;
 
 		head_skb = alloc_skb(hdr_len + RMNET_MAP_DEAGGR_HEADROOM,
 				     GFP_ATOMIC);
@@ -456,17 +447,38 @@ static struct sk_buff *rmnet_alloc_skb(struct rmnet_frag_descriptor *frag_desc,
 		skb_put_data(head_skb, frag_desc->hdr_ptr, hdr_len);
 		skb_reset_network_header(head_skb);
 
-		if (frag_desc->trans_len)
+		/* Update header lengths after RSB/RSC/perf */
+		if (frag_desc->ip_proto == 4) {
+			struct iphdr *iph = ip_hdr(head_skb);
+			__be16 tot_len = htons(hdr_len + data_len);
+
+			csum_replace2(&iph->check, iph->tot_len, tot_len);
+			iph->tot_len = tot_len;
+		} else {
+			struct ipv6hdr *ip6h = ipv6_hdr(head_skb);
+
+			ip6h->payload_len = htons(hdr_len + data_len -
+						  sizeof(*ip6h));
+		}
+
+		if (frag_desc->trans_len) {
 			skb_set_transport_header(head_skb, frag_desc->ip_len);
+
+			if (frag_desc->trans_proto == IPPROTO_UDP) {
+				struct udphdr *uh = udp_hdr(head_skb);
+
+				uh->len = htons(data_len + sizeof(*uh));
+			}
+		}
+
+		/* Packets that have no data portion don't need any frags */
+		if (hdr_len == skb_frag_size(&frag_desc->frag))
+			goto skip_frags;
 
 		/* If the headers we added are the start of the page,
 		 * we don't want to add them twice
 		 */
 		if (frag_desc->hdr_ptr == rmnet_frag_data_ptr(frag_desc)) {
-			/* "Header only" packets can be fast-forwarded */
-			if (hdr_len == skb_frag_size(&frag_desc->frag))
-				goto skip_frags;
-
 			if (!rmnet_frag_pull(frag_desc, port, hdr_len)) {
 				kfree_skb(head_skb);
 				return NULL;
@@ -555,11 +567,7 @@ skip_frags:
 	}
 
 	/* Handle csum offloading */
-	if (frag_desc->csum_valid && frag_desc->hdrs_valid) {
-		/* Set the partial checksum information */
-		rmnet_frag_partial_csum(head_skb, frag_desc);
-	} else if (frag_desc->csum_valid) {
-		/* Non-RSB/RSC/perf packet. The current checksum is fine */
+	if (frag_desc->csum_valid) {
 		head_skb->ip_summed = CHECKSUM_UNNECESSARY;
 	} else if (frag_desc->hdrs_valid &&
 		   (frag_desc->trans_proto == IPPROTO_TCP ||
@@ -574,13 +582,10 @@ skip_frags:
 		unsigned int offset = skb_transport_offset(head_skb);
 		__sum16 pseudo;
 
-		/* Calculate pseudo header and update header fields */
+		/* Calculate pseudo header */
 		if (frag_desc->ip_proto == 4) {
 			struct iphdr *iph = ip_hdr(head_skb);
-			__be16 tot_len = htons(head_skb->len);
 
-			csum_replace2(&iph->check, iph->tot_len, tot_len);
-			iph->tot_len = tot_len;
 			pseudo = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
 						    head_skb->len -
 						    frag_desc->ip_len,
@@ -588,21 +593,16 @@ skip_frags:
 		} else {
 			struct ipv6hdr *ip6h = ipv6_hdr(head_skb);
 
-			ip6h->payload_len = htons(head_skb->len -
-						  sizeof(*ip6h));
 			pseudo = ~csum_ipv6_magic(&ip6h->saddr, &ip6h->daddr,
 						  head_skb->len -
 						  frag_desc->ip_len,
 						  frag_desc->trans_proto, 0);
 		}
 
-		if (frag_desc->trans_proto == IPPROTO_TCP) {
+		if (frag_desc->trans_proto == IPPROTO_TCP)
 			check = &tcp_hdr(head_skb)->check;
-		} else {
-			udp_hdr(head_skb)->len = htons(head_skb->len -
-						       frag_desc->ip_len);
+		else
 			check = &udp_hdr(head_skb)->check;
-		}
 
 		*check = pseudo;
 		csum = skb_checksum(head_skb, offset, head_skb->len - offset,
@@ -675,12 +675,6 @@ static void __rmnet_frag_segment_data(struct rmnet_frag_descriptor *coal_desc,
 		new_frag->tcp_seq_set = 1;
 		new_frag->tcp_seq = htonl(ntohl(th->seq) +
 					  coal_desc->data_offset);
-	} else if (coal_desc->trans_proto == IPPROTO_UDP) {
-		struct udphdr *uh;
-
-		uh = (struct udphdr *)(hdr_start + coal_desc->ip_len);
-		if (coal_desc->ip_proto == 4 && !uh->check)
-			csum_valid = true;
 	}
 
 	if (coal_desc->ip_proto == 4) {
@@ -745,7 +739,6 @@ rmnet_frag_segment_coal_data(struct rmnet_frag_descriptor *coal_desc,
 	u8 pkt, total_pkt = 0;
 	u8 nlo;
 	bool gro = coal_desc->dev->features & NETIF_F_GRO_HW;
-	bool zero_csum = false;
 
 	/* Pull off the headers we no longer need */
 	if (!rmnet_frag_pull(coal_desc, port, sizeof(struct rmnet_map_header)))
@@ -768,28 +761,24 @@ rmnet_frag_segment_coal_data(struct rmnet_frag_descriptor *coal_desc,
 			gro = false;
 	} else if (iph->version == 6) {
 		struct ipv6hdr *ip6h = (struct ipv6hdr *)iph;
-		int ip_len;
 		__be16 frag_off;
 		u8 protocol = ip6h->nexthdr;
 
 		coal_desc->ip_proto = 6;
-		ip_len = rmnet_frag_ipv6_skip_exthdr(coal_desc,
-						     sizeof(*ip6h),
-						     &protocol,
-						     &frag_off);
+		coal_desc->ip_len = rmnet_frag_ipv6_skip_exthdr(coal_desc,
+								sizeof(*ip6h),
+								&protocol,
+								&frag_off);
 		coal_desc->trans_proto = protocol;
 
 		/* If we run into a problem, or this has a fragment header
 		 * (which should technically not be possible, if the HW
 		 * works as intended...), bail.
 		 */
-		if (ip_len < 0 || frag_off) {
+		if (coal_desc->ip_len < 0 || frag_off) {
 			priv->stats.coal.coal_ip_invalid++;
 			return;
-		}
-
-		coal_desc->ip_len = (u16)ip_len;
-		if (coal_desc->ip_len > sizeof(*ip6h)) {
+		} else if (coal_desc->ip_len > sizeof(*ip6h)) {
 			/* Don't allow coalescing of any packets with IPv6
 			 * extension headers.
 			 */
@@ -806,12 +795,7 @@ rmnet_frag_segment_coal_data(struct rmnet_frag_descriptor *coal_desc,
 		th = (struct tcphdr *)((u8 *)iph + coal_desc->ip_len);
 		coal_desc->trans_len = th->doff * 4;
 	} else if (coal_desc->trans_proto == IPPROTO_UDP) {
-		struct udphdr *uh;
-
-		uh = (struct udphdr *)((u8 *)iph + coal_desc->ip_len);
-		coal_desc->trans_len = sizeof(*uh);
-		if (coal_desc->ip_proto == 4 && !uh->check)
-			zero_csum = true;
+		coal_desc->trans_len = sizeof(struct udphdr);
 	} else {
 		priv->stats.coal.coal_trans_invalid++;
 		return;
@@ -819,7 +803,7 @@ rmnet_frag_segment_coal_data(struct rmnet_frag_descriptor *coal_desc,
 
 	coal_desc->hdrs_valid = 1;
 
-	if (rmnet_map_v5_csum_buggy(coal_hdr) && !zero_csum) {
+	if (rmnet_map_v5_csum_buggy(coal_hdr)) {
 		/* Mark the checksum as valid if it checks out */
 		if (rmnet_frag_validate_csum(coal_desc))
 			coal_desc->csum_valid = true;

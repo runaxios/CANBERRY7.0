@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menu "Qualcomm Technologies, Inc Per File Encryption security device drivers"
 	depends on ARCH_QCOM
 
@@ -37,6 +36,4 @@ config PFK_WRAPPED_KEY_SUPPORTED
 		Adds wrapped key support in PFK driver. Instead of setting
 		the key directly in ICE, it unwraps the key and sets the key
 		in ICE.
-		It ensures the key is protected within a secure environment
-		and only the wrapped key is present in the kernel.
 endmenu

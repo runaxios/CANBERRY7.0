@@ -1,20 +1,57 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2002,2008-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2008-2017, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#include <linux/module.h>
 #include <linux/debugfs.h>
-#include <linux/io.h>
 
-#include "kgsl_debugfs.h"
+#include "kgsl.h"
 #include "kgsl_device.h"
 #include "kgsl_sharedmem.h"
+#include "kgsl_debugfs.h"
 
 /*default log levels is error for everything*/
 #define KGSL_LOG_LEVEL_MAX     7
 
 struct dentry *kgsl_debugfs_dir;
 static struct dentry *proc_d_debugfs;
+
+static inline int kgsl_log_set(unsigned int *log_val, void *data, u64 val)
+{
+	*log_val = min_t(unsigned int, val, KGSL_LOG_LEVEL_MAX);
+	return 0;
+}
+
+#define KGSL_DEBUGFS_LOG(__log)                         \
+static int __log ## _set(void *data, u64 val)           \
+{                                                       \
+	struct kgsl_device *device = data;              \
+	return kgsl_log_set(&device->__log, data, val); \
+}                                                       \
+static int __log ## _get(void *data, u64 *val)	        \
+{                                                       \
+	struct kgsl_device *device = data;              \
+	*val = device->__log;                           \
+	return 0;                                       \
+}                                                       \
+DEFINE_SIMPLE_ATTRIBUTE(__log ## _fops,                 \
+__log ## _get, __log ## _set, "%llu\n")                 \
+
+KGSL_DEBUGFS_LOG(drv_log);
+KGSL_DEBUGFS_LOG(cmd_log);
+KGSL_DEBUGFS_LOG(ctxt_log);
+KGSL_DEBUGFS_LOG(mem_log);
+KGSL_DEBUGFS_LOG(pwr_log);
 
 static int _strict_set(void *data, u64 val)
 {
@@ -28,58 +65,27 @@ static int _strict_get(void *data, u64 *val)
 	return 0;
 }
 
-DEFINE_DEBUGFS_ATTRIBUTE(_strict_fops, _strict_get, _strict_set, "%llu\n");
-
-static void kgsl_qdss_gfx_register_probe(struct kgsl_device *device)
-{
-	struct resource *res;
-
-	res = platform_get_resource_byname(device->pdev, IORESOURCE_MEM,
-							"qdss_gfx");
-
-	if (res == NULL)
-		return;
-
-	device->qdss_gfx_virt = devm_ioremap(device->dev, res->start,
-							resource_size(res));
-
-	if (device->qdss_gfx_virt == NULL)
-		dev_warn(device->dev, "qdss_gfx ioremap failed\n");
-}
-
-static int _isdb_set(void *data, u64 val)
-{
-	struct kgsl_device *device = data;
-
-	if (device->qdss_gfx_virt == NULL)
-		kgsl_qdss_gfx_register_probe(device);
-
-	device->set_isdb_breakpoint = val ? true : false;
-	return 0;
-}
-
-static int _isdb_get(void *data, u64 *val)
-{
-	struct kgsl_device *device = data;
-
-	*val = device->set_isdb_breakpoint ? 1 : 0;
-	return 0;
-}
-
-DEFINE_DEBUGFS_ATTRIBUTE(_isdb_fops, _isdb_get, _isdb_set, "%llu\n");
+DEFINE_SIMPLE_ATTRIBUTE(_strict_fops, _strict_get, _strict_set, "%llu\n");
 
 void kgsl_device_debugfs_init(struct kgsl_device *device)
 {
-	struct dentry *snapshot_dir;
+	if (kgsl_debugfs_dir && !IS_ERR(kgsl_debugfs_dir))
+		device->d_debugfs = debugfs_create_dir(device->name,
+						       kgsl_debugfs_dir);
 
-	if (IS_ERR_OR_NULL(kgsl_debugfs_dir))
+	if (!device->d_debugfs || IS_ERR(device->d_debugfs))
 		return;
 
-	device->d_debugfs = debugfs_create_dir(device->name,
-						       kgsl_debugfs_dir);
-	snapshot_dir = debugfs_create_dir("snapshot", kgsl_debugfs_dir);
-	debugfs_create_file("break_isdb", 0644, snapshot_dir, device,
-		&_isdb_fops);
+	debugfs_create_file("log_level_cmd", 0644, device->d_debugfs, device,
+			    &cmd_log_fops);
+	debugfs_create_file("log_level_ctxt", 0644, device->d_debugfs, device,
+			    &ctxt_log_fops);
+	debugfs_create_file("log_level_drv", 0644, device->d_debugfs, device,
+			    &drv_log_fops);
+	debugfs_create_file("log_level_mem", 0644, device->d_debugfs, device,
+				&mem_log_fops);
+	debugfs_create_file("log_level_pwr", 0644, device->d_debugfs, device,
+				&pwr_log_fops);
 }
 
 void kgsl_device_debugfs_close(struct kgsl_device *device)
@@ -405,8 +411,11 @@ void kgsl_process_init_debugfs(struct kgsl_process_private *private)
 	 */
 
 	if (IS_ERR_OR_NULL(private->debug_root)) {
+		/*
 		WARN((private->debug_root == NULL),
 			"Unable to create debugfs dir for %s\n", name);
+		*/
+		pr_warn("Unable to create debugfs dir for %s\n", name);
 		private->debug_root = NULL;
 		return;
 	}
@@ -433,8 +442,6 @@ void kgsl_core_debugfs_init(void)
 	struct dentry *debug_dir;
 
 	kgsl_debugfs_dir = debugfs_create_dir("kgsl", NULL);
-	if (IS_ERR_OR_NULL(kgsl_debugfs_dir))
-		return;
 
 	debugfs_create_file("globals", 0444, kgsl_debugfs_dir, NULL,
 		&global_fops);

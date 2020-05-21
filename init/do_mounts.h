@@ -8,6 +8,8 @@
 #include <linux/mount.h>
 #include <linux/major.h>
 #include <linux/root_dev.h>
+#include "uapi/linux/dm-ioctl.h"
+#include <linux/device-mapper.h>
 
 void  change_floppy(char *fmt, ...);
 void  mount_block_root(char *name, int flags);
@@ -16,8 +18,8 @@ extern int root_mountflags;
 
 static inline int create_dev(char *name, dev_t dev)
 {
-	ksys_unlink(name);
-	return ksys_mknod(name, S_IFBLK|0600, new_encode_dev(dev));
+	sys_unlink(name);
+	return sys_mknod(name, S_IFBLK|0600, new_encode_dev(dev));
 }
 
 static inline u32 bstat(char *name)
@@ -69,5 +71,17 @@ void dm_run_setup(void);
 #else
 
 static inline void dm_run_setup(void) {}
+
+#endif
+
+#ifdef CONFIG_BLK_DEV_DM
+
+void dm_verity_setup(void);
+extern int dm_ioctrl(uint cmd, struct dm_ioctl *param);
+extern void dm_table_destroy(struct dm_table *t);
+
+#else
+
+static inline void dm_verity_setup(void) {}
 
 #endif

@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/debugfs.h>
@@ -167,7 +174,7 @@ static int get_client_id(struct votable *votable, const char *client_str)
 
 static char *get_client_str(struct votable *votable, int client_id)
 {
-	if (!votable || (client_id == -EINVAL))
+	if (client_id == -EINVAL)
 		return NULL;
 
 	return votable->client_strs[client_id];
@@ -184,38 +191,6 @@ void unlock_votable(struct votable *votable)
 }
 
 /**
- * is_override_vote_enabled() -
- * is_override_vote_enabled_locked() -
- *		The unlocked and locked variants of getting whether override
-		vote is enabled.
- * @votable:	the votable object
- *
- * Returns:
- *	True if the client's vote is enabled; false otherwise.
- */
-bool is_override_vote_enabled_locked(struct votable *votable)
-{
-	if (!votable)
-		return false;
-
-	return votable->override_result != -EINVAL;
-}
-
-bool is_override_vote_enabled(struct votable *votable)
-{
-	bool enable;
-
-	if (!votable)
-		return false;
-
-	lock_votable(votable);
-	enable = is_override_vote_enabled_locked(votable);
-	unlock_votable(votable);
-
-	return enable;
-}
-
-/**
  * is_client_vote_enabled() -
  * is_client_vote_enabled_locked() -
  *		The unlocked and locked variants of getting whether a client's
@@ -229,13 +204,8 @@ bool is_override_vote_enabled(struct votable *votable)
 bool is_client_vote_enabled_locked(struct votable *votable,
 							const char *client_str)
 {
+	int client_id = get_client_id(votable, client_str);
 
-	int client_id;
-
-	if (!votable || !client_str)
-		return false;
-
-	client_id = get_client_id(votable, client_str);
 	if (client_id < 0)
 		return false;
 
@@ -245,9 +215,6 @@ bool is_client_vote_enabled_locked(struct votable *votable,
 bool is_client_vote_enabled(struct votable *votable, const char *client_str)
 {
 	bool enabled;
-
-	if (!votable || !client_str)
-		return false;
 
 	lock_votable(votable);
 	enabled = is_client_vote_enabled_locked(votable, client_str);
@@ -269,12 +236,8 @@ bool is_client_vote_enabled(struct votable *votable, const char *client_str)
  */
 int get_client_vote_locked(struct votable *votable, const char *client_str)
 {
-	int client_id;
+	int client_id = get_client_id(votable, client_str);
 
-	if (!votable || !client_str)
-		return -EINVAL;
-
-	client_id = get_client_id(votable, client_str);
 	if (client_id < 0)
 		return -EINVAL;
 
@@ -288,9 +251,6 @@ int get_client_vote_locked(struct votable *votable, const char *client_str)
 int get_client_vote(struct votable *votable, const char *client_str)
 {
 	int value;
-
-	if (!votable || !client_str)
-		return -EINVAL;
 
 	lock_votable(votable);
 	value = get_client_vote_locked(votable, client_str);
@@ -317,9 +277,6 @@ int get_client_vote(struct votable *votable, const char *client_str)
  */
 int get_effective_result_locked(struct votable *votable)
 {
-	if (!votable)
-		return -EINVAL;
-
 	if (votable->force_active)
 		return votable->force_val;
 
@@ -332,9 +289,6 @@ int get_effective_result_locked(struct votable *votable)
 int get_effective_result(struct votable *votable)
 {
 	int value;
-
-	if (!votable)
-		return -EINVAL;
 
 	lock_votable(votable);
 	value = get_effective_result_locked(votable);
@@ -362,9 +316,6 @@ int get_effective_result(struct votable *votable)
  */
 const char *get_effective_client_locked(struct votable *votable)
 {
-	if (!votable)
-		return NULL;
-
 	if (votable->force_active)
 		return DEBUG_FORCE_CLIENT;
 
@@ -377,9 +328,6 @@ const char *get_effective_client_locked(struct votable *votable)
 const char *get_effective_client(struct votable *votable)
 {
 	const char *client_str;
-
-	if (!votable)
-		return NULL;
 
 	lock_votable(votable);
 	client_str = get_effective_client_locked(votable);
@@ -417,9 +365,6 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 	int client_id;
 	int rc = 0;
 	bool similar_vote = false;
-
-	if (!votable || !client_str)
-		return -EINVAL;
 
 	lock_votable(votable);
 
@@ -482,13 +427,14 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 	if (!votable->voted_on
 			|| (effective_result != votable->effective_result)) {
 		if (strcmp(votable->name, "FG_WS") != 0) {
-				pr_info("%s: current vote is now %d voted by %s,%d, previous voted %d\n",
-						votable->name, effective_result,
-						get_client_str(votable, effective_id),
-						effective_id, votable->effective_result);
+		pr_info("%s: current vote is now %d voted by %s,%d, previous voted %d\n",
+				votable->name, effective_result,
+				get_client_str(votable, effective_id),
+				effective_id, votable->effective_result);
 		}
 		votable->effective_client_id = effective_id;
 		votable->effective_result = effective_result;
+
 		pr_debug("%s: effective vote is now %d voted by %s,%d\n",
 			votable->name, effective_result,
 			get_client_str(votable, effective_id),
@@ -532,9 +478,6 @@ int vote_override(struct votable *votable, const char *override_client,
 {
 	int rc = 0;
 
-	if (!votable || !override_client)
-		return -EINVAL;
-
 	lock_votable(votable);
 	if (votable->force_active) {
 		votable->override_result = enabled ? val : -EINVAL;
@@ -565,9 +508,6 @@ int rerun_election(struct votable *votable)
 	int rc = 0;
 	int effective_result;
 
-	if (!votable)
-		return -EINVAL;
-
 	lock_votable(votable);
 	effective_result = get_effective_result_locked(votable);
 	if (votable->callback)
@@ -584,9 +524,6 @@ struct votable *find_votable(const char *name)
 	unsigned long flags;
 	struct votable *v;
 	bool found = false;
-
-	if (!name)
-		return NULL;
 
 	spin_lock_irqsave(&votable_list_slock, flags);
 	if (list_empty(&votable_list))
@@ -649,7 +586,7 @@ out:
 	unlock_votable(votable);
 	return rc;
 }
-DEFINE_DEBUGFS_ATTRIBUTE(votable_force_ops, force_active_get, force_active_set,
+DEFINE_SIMPLE_ATTRIBUTE(votable_force_ops, force_active_get, force_active_set,
 		"%lld\n");
 
 static int show_votable_clients(struct seq_file *m, void *data)
@@ -719,9 +656,6 @@ struct votable *create_votable(const char *name,
 {
 	struct votable *votable;
 	unsigned long flags;
-
-	if (!name)
-		return ERR_PTR(-EINVAL);
 
 	votable = find_votable(name);
 	if (votable)

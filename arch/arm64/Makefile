@@ -26,7 +26,16 @@ ifeq ($(CONFIG_ARM64_ERRATUM_843419),y)
   ifeq ($(call ld-option, --fix-cortex-a53-843419),)
 $(warning ld does not support --fix-cortex-a53-843419; kernel may be susceptible to erratum)
   else
+    ifeq ($(call gold-ifversion, -lt, 114000000, y), y)
+$(warning This version of GNU gold may generate incorrect code with --fix-cortex-a53-843419;\
+	see https://sourceware.org/bugzilla/show_bug.cgi?id=21491)
+    endif
 LDFLAGS_vmlinux	+= --fix-cortex-a53-843419
+  endif
+else
+  ifeq ($(ld-name),gold)
+# Pass --no-fix-cortex-a53-843419 to ensure the erratum fix is disabled
+LDFLAGS	+= --no-fix-cortex-a53-843419
   endif
 endif
 
@@ -50,13 +59,16 @@ $(warning Detected assembler with broken .inst; disassembly will be unreliable)
 endif
 
 ifeq ($(cc-name),clang)
+# This is a workaround for https://bugs.llvm.org/show_bug.cgi?id=30792.
+# TODO: revert when this is fixed in LLVM.
 KBUILD_CFLAGS	+= -mno-implicit-float
 else
 KBUILD_CFLAGS	+= -mgeneral-regs-only
 endif
 KBUILD_CFLAGS	+= $(lseinstr) $(brokengasinst)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
-KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
+KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
+KBUILD_CFLAGS	+= -fno-pic
 KBUILD_AFLAGS	+= $(lseinstr) $(brokengasinst)
 
 KBUILD_CFLAGS	+= $(call cc-option,-mabi=lp64)
@@ -66,20 +78,35 @@ ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
 KBUILD_CPPFLAGS	+= -mbig-endian
 CHECKFLAGS	+= -D__AARCH64EB__
 AS		+= -EB
-# Prefer the baremetal ELF build target, but not all toolchains include
-# it so fall back to the standard linux version if needed.
-KBUILD_LDFLAGS	+= -EB $(call ld-option, -maarch64elfb, -maarch64linuxb)
+LD		+= -EB
+ifeq ($(ld-name),gold)
+LDFLAGS		+= -maarch64_elf64_be_vec
+else
+LDFLAGS		+= -maarch64elfb
+endif
 UTS_MACHINE	:= aarch64_be
 else
 KBUILD_CPPFLAGS	+= -mlittle-endian
 CHECKFLAGS	+= -D__AARCH64EL__
 AS		+= -EL
-# Same as above, prefer ELF but fall back to linux target if needed.
-KBUILD_LDFLAGS	+= -EL $(call ld-option, -maarch64elf, -maarch64linux)
+LD		+= -EL
+ifeq ($(ld-name),gold)
+LDFLAGS		+= -maarch64_elf64_le_vec
+else
+LDFLAGS		+= -maarch64elf
+endif
 UTS_MACHINE	:= aarch64
 endif
 
-CHECKFLAGS	+= -D__aarch64__
+CHECKFLAGS	+= -D__aarch64__ -m64
+
+ifeq ($(CONFIG_ARM64_MODULE_CMODEL_LARGE), y)
+KBUILD_CFLAGS_MODULE	+= -mcmodel=large
+ifeq ($(CONFIG_LTO_CLANG), y)
+# Code model is not stored in LLVM IR, so we need to pass it also to LLVMgold
+KBUILD_LDFLAGS_MODULE	+= -plugin-opt=-code-model=large
+endif
+endif
 
 ifeq ($(CONFIG_ARM64_MODULE_PLTS),y)
 KBUILD_LDFLAGS_MODULE	+= -T $(srctree)/arch/arm64/kernel/module.lds
@@ -97,14 +124,16 @@ else
 TEXT_OFFSET := 0x00080000
 endif
 
-# KASAN_SHADOW_OFFSET = VA_START + (1 << (VA_BITS - KASAN_SHADOW_SCALE_SHIFT))
-#				 - (1 << (64 - KASAN_SHADOW_SCALE_SHIFT))
+ifeq ($(cc-name),clang)
+KBUILD_CFLAGS += $(call cc-disable-warning, asm-operand-widths)
+endif
+
+# KASAN_SHADOW_OFFSET = VA_START + (1 << (VA_BITS - 3)) - (1 << 61)
 # in 32-bit arithmetic
-KASAN_SHADOW_SCALE_SHIFT := 3
 KASAN_SHADOW_OFFSET := $(shell printf "0x%08x00000000\n" $$(( \
-	(0xffffffff & (-1 << ($(CONFIG_ARM64_VA_BITS) - 32))) \
-	+ (1 << ($(CONFIG_ARM64_VA_BITS) - 32 - $(KASAN_SHADOW_SCALE_SHIFT))) \
-	- (1 << (64 - 32 - $(KASAN_SHADOW_SCALE_SHIFT))) )) )
+			(0xffffffff & (-1 << ($(CONFIG_ARM64_VA_BITS) - 32))) \
+			+ (1 << ($(CONFIG_ARM64_VA_BITS) - 32 - 3)) \
+			- (1 << (64 - 32 - 3)) )) )
 
 export	TEXT_OFFSET GZFLAGS
 
@@ -124,7 +153,6 @@ endif
 
 # Default target when executing plain make
 boot		:= arch/arm64/boot
-
 ifeq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
 KBUILD_TARGET  := $(addsuffix -dtb,$(KBUILD_IMAGE))
 KBUILD_IMAGE	:= $(boot)/$(addsuffix -dtb,$(KBUILD_IMAGE))

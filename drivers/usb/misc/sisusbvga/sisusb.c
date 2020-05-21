@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
 /*
  * sisusb - usb kernel driver for SiS315(E) based USB2VGA dongles
  *
@@ -1750,7 +1749,7 @@ static int sisusb_setup_screen(struct sisusb_usb_data *sisusb,
 static int sisusb_set_default_mode(struct sisusb_usb_data *sisusb,
 		int touchengines)
 {
-	int ret = 0, i, j, modex, bpp, du;
+	int ret = 0, i, j, modex, modey, bpp, du;
 	u8 sr31, cr63, tmp8;
 	static const char attrdata[] = {
 		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -1773,7 +1772,7 @@ static int sisusb_set_default_mode(struct sisusb_usb_data *sisusb,
 		0x00
 	};
 
-	modex = 640; bpp = 2;
+	modex = 640; modey = 480; bpp = 2;
 
 	GETIREG(SISSR, 0x31, &sr31);
 	GETIREG(SISCR, 0x63, &cr63);
@@ -2107,7 +2106,7 @@ static void sisusb_get_ramconfig(struct sisusb_usb_data *sisusb)
 		bw = busSDR[(tmp8 & 0x03)];
 		break;
 	case 2:
-		ramtypetext1 = "asymmetric";
+		ramtypetext1 = "asymmeric";
 		sisusb->vramsize += sisusb->vramsize/2;
 		bw = busDDRA[(tmp8 & 0x03)];
 		break;
@@ -3029,13 +3028,6 @@ static int sisusb_probe(struct usb_interface *intf,
 
 	mutex_init(&(sisusb->lock));
 
-	sisusb->sisusb_dev = dev;
-	sisusb->vrambase   = SISUSB_PCI_MEMBASE;
-	sisusb->mmiobase   = SISUSB_PCI_MMIOBASE;
-	sisusb->mmiosize   = SISUSB_PCI_MMIOSIZE;
-	sisusb->ioportbase = SISUSB_PCI_IOPORTBASE;
-	/* Everything else is zero */
-
 	/* Register device */
 	retval = usb_register_dev(intf, &usb_sisusb_class);
 	if (retval) {
@@ -3046,7 +3038,13 @@ static int sisusb_probe(struct usb_interface *intf,
 		goto error_1;
 	}
 
-	sisusb->minor = intf->minor;
+	sisusb->sisusb_dev = dev;
+	sisusb->minor      = intf->minor;
+	sisusb->vrambase   = SISUSB_PCI_MEMBASE;
+	sisusb->mmiobase   = SISUSB_PCI_MMIOBASE;
+	sisusb->mmiosize   = SISUSB_PCI_MMIOSIZE;
+	sisusb->ioportbase = SISUSB_PCI_IOPORTBASE;
+	/* Everything else is zero */
 
 	/* Allocate buffers */
 	sisusb->ibufsize = SISUSB_IBUF_SIZE;

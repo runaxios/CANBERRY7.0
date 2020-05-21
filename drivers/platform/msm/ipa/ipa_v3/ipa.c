@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -35,7 +41,6 @@
 #include <asm/cacheflush.h>
 #include <linux/soc/qcom/smem_state.h>
 #include <linux/of_irq.h>
-#include <linux/ctype.h>
 
 #ifdef CONFIG_ARM64
 
@@ -56,8 +61,6 @@
 #define CREATE_TRACE_POINTS
 #include "ipa_trace.h"
 #include "ipa_odl.h"
-
-#define IPA_SUSPEND_BUSY_TIMEOUT (msecs_to_jiffies(10))
 
 /*
  * The following for adding code (ie. for EMULATION) not found on x86.
@@ -122,19 +125,8 @@ static void ipa3_load_ipa_fw(struct work_struct *work);
 static DECLARE_WORK(ipa3_fw_loading_work, ipa3_load_ipa_fw);
 
 static void ipa_dec_clients_disable_clks_on_wq(struct work_struct *work);
-static DECLARE_DELAYED_WORK(ipa_dec_clients_disable_clks_on_wq_work,
+static DECLARE_WORK(ipa_dec_clients_disable_clks_on_wq_work,
 	ipa_dec_clients_disable_clks_on_wq);
-
-static int ipa3_ioctl_add_rt_rule_v2(unsigned long arg);
-static int ipa3_ioctl_add_rt_rule_ext_v2(unsigned long arg);
-static int ipa3_ioctl_add_rt_rule_after_v2(unsigned long arg);
-static int ipa3_ioctl_mdfy_rt_rule_v2(unsigned long arg);
-static int ipa3_ioctl_add_flt_rule_v2(unsigned long arg);
-static int ipa3_ioctl_add_flt_rule_after_v2(unsigned long arg);
-static int ipa3_ioctl_mdfy_flt_rule_v2(unsigned long arg);
-static int ipa3_ioctl_fnr_counter_alloc(unsigned long arg);
-static int ipa3_ioctl_fnr_counter_query(unsigned long arg);
-static int ipa3_ioctl_fnr_counter_set(unsigned long arg);
 
 static struct ipa3_plat_drv_res ipa3_res = {0, };
 
@@ -145,6 +137,8 @@ struct ipa3_context *ipa3_ctx;
 static struct {
 	bool present[IPA_SMMU_CB_MAX];
 	bool arm_smmu;
+	bool fast_map;
+	bool s1_bypass_arr[IPA_SMMU_CB_MAX];
 	bool use_64_bit_dma_mask;
 	u32 ipa_base;
 	u32 ipa_size;
@@ -336,7 +330,7 @@ static int ipa3_active_clients_log_init(void)
 	active_clients_table_buf = kzalloc(sizeof(
 			char[IPA3_ACTIVE_CLIENTS_TABLE_BUF_SIZE]), GFP_KERNEL);
 	if (ipa3_ctx->ipa3_active_clients_logging.log_buffer == NULL) {
-		pr_err("Active Clients Logging memory allocation failed\n");
+		pr_err("Active Clients Logging memory allocation failed");
 		goto bail;
 	}
 	for (i = 0; i < IPA3_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES; i++) {
@@ -350,7 +344,7 @@ static int ipa3_active_clients_log_init(void)
 	hash_init(ipa3_ctx->ipa3_active_clients_logging.htable);
 	atomic_notifier_chain_register(&panic_notifier_list,
 			&ipa3_active_clients_panic_blk);
-	ipa3_ctx->ipa3_active_clients_logging.log_rdy = true;
+	ipa3_ctx->ipa3_active_clients_logging.log_rdy = 1;
 
 	return 0;
 
@@ -375,7 +369,7 @@ static void ipa3_active_clients_log_destroy(void)
 	unsigned long flags;
 
 	spin_lock_irqsave(&ipa3_ctx->ipa3_active_clients_logging.lock, flags);
-	ipa3_ctx->ipa3_active_clients_logging.log_rdy = false;
+	ipa3_ctx->ipa3_active_clients_logging.log_rdy = 0;
 	kfree(active_clients_table_buf);
 	active_clients_table_buf = NULL;
 	kfree(ipa3_ctx->ipa3_active_clients_logging.log_buffer[0]);
@@ -388,34 +382,48 @@ static void ipa3_active_clients_log_destroy(void)
 
 static struct ipa_smmu_cb_ctx smmu_cb[IPA_SMMU_CB_MAX];
 
-struct iommu_domain *ipa3_get_smmu_domain_by_type(enum ipa_smmu_cb_type cb_type)
+struct iommu_domain *ipa3_get_smmu_domain(void)
 {
-	if (VALID_IPA_SMMU_CB_TYPE(cb_type) && smmu_cb[cb_type].valid)
-		return smmu_cb[cb_type].iommu_domain;
+	if (smmu_cb[IPA_SMMU_CB_AP].valid)
+		return smmu_cb[IPA_SMMU_CB_AP].mapping->domain;
 
-	IPAERR("cb_type(%d) not valid\n", cb_type);
+	IPAERR("CB not valid\n");
 
 	return NULL;
 }
 
-struct iommu_domain *ipa3_get_smmu_domain(void)
-{
-	return ipa3_get_smmu_domain_by_type(IPA_SMMU_CB_AP);
-}
-
 struct iommu_domain *ipa3_get_uc_smmu_domain(void)
 {
-	return ipa3_get_smmu_domain_by_type(IPA_SMMU_CB_UC);
+	if (smmu_cb[IPA_SMMU_CB_UC].valid)
+		return smmu_cb[IPA_SMMU_CB_UC].mapping->domain;
+
+	IPAERR("CB not valid\n");
+
+	return NULL;
 }
 
 struct iommu_domain *ipa3_get_wlan_smmu_domain(void)
 {
-	return ipa3_get_smmu_domain_by_type(IPA_SMMU_CB_WLAN);
+	if (smmu_cb[IPA_SMMU_CB_WLAN].valid)
+		return smmu_cb[IPA_SMMU_CB_WLAN].iommu;
+
+	IPAERR("CB not valid\n");
+
+	return NULL;
 }
 
-struct iommu_domain *ipa3_get_11ad_smmu_domain(void)
+struct iommu_domain *ipa3_get_smmu_domain_by_type(enum ipa_smmu_cb_type cb_type)
 {
-	return ipa3_get_smmu_domain_by_type(IPA_SMMU_CB_11AD);
+
+	if (cb_type == IPA_SMMU_CB_WLAN && smmu_cb[IPA_SMMU_CB_WLAN].valid)
+		return smmu_cb[IPA_SMMU_CB_WLAN].iommu;
+
+	if (smmu_cb[cb_type].valid)
+		return smmu_cb[cb_type].mapping->domain;
+
+	IPAERR("CB#%d not valid\n", cb_type);
+
+	return NULL;
 }
 
 struct device *ipa3_get_dma_dev(void)
@@ -684,848 +692,16 @@ static int ipa3_send_gsb_msg(unsigned long usr_param, uint8_t msg_type)
 	return 0;
 }
 
-static int ipa3_ioctl_add_rt_rule_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_add_rt_rule_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_add_rt_rule_v2 *)header)->num_rules;
-	if (unlikely(((struct ipa_ioc_add_rt_rule_v2 *)
-		header)->rule_add_size >
-		sizeof(struct ipa_rt_rule_add_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_add_rt_rule_v2 *)
-		header)->rule_add_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_v2 *)
-		header)->rule_add_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_rt_rule_add_i) * pre_entry;
-	uptr = ((struct ipa_ioc_add_rt_rule_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_rt_rule_add_i),
-			(void *)param + i *
-			((struct ipa_ioc_add_rt_rule_v2 *)
-			header)->rule_add_size,
-			((struct ipa_ioc_add_rt_rule_v2 *)
-			header)->rule_add_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_add_rt_rule_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_add_rt_rule_usr_v2(
-		(struct ipa_ioc_add_rt_rule_v2 *)header, true)) {
-		IPAERR_RL("ipa3_add_rt_rule_usr_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_add_rt_rule_v2 *)
-			header)->rule_add_size,
-			kptr + i * sizeof(struct ipa_rt_rule_add_i),
-			((struct ipa_ioc_add_rt_rule_v2 *)
-			header)->rule_add_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_add_rt_rule_ext_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header,
-			(const void __user *)arg,
-			sizeof(struct ipa_ioc_add_rt_rule_ext_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_add_rt_rule_ext_v2 *)
-		header)->num_rules;
-	if (unlikely(((struct ipa_ioc_add_rt_rule_ext_v2 *)
-		header)->rule_add_ext_size >
-		sizeof(struct ipa_rt_rule_add_ext_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_add_rt_rule_ext_v2 *)
-		header)->rule_add_ext_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_ext_v2 *)
-		header)->rule_add_ext_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_rt_rule_add_ext_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_add_rt_rule_ext_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i *
-			sizeof(struct ipa_rt_rule_add_ext_i),
-			(void *)param + i *
-			((struct ipa_ioc_add_rt_rule_ext_v2 *)
-			header)->rule_add_ext_size,
-			((struct ipa_ioc_add_rt_rule_ext_v2 *)
-			header)->rule_add_ext_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_add_rt_rule_ext_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_add_rt_rule_ext_v2(
-		(struct ipa_ioc_add_rt_rule_ext_v2 *)header)) {
-		IPAERR_RL("ipa3_add_rt_rule_ext_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_add_rt_rule_ext_v2 *)
-			header)->rule_add_ext_size,
-			kptr + i *
-			sizeof(struct ipa_rt_rule_add_ext_i),
-			((struct ipa_ioc_add_rt_rule_ext_v2 *)
-			header)->rule_add_ext_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_add_rt_rule_after_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_add_rt_rule_after_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_add_rt_rule_after_v2 *)
-		header)->num_rules;
-	if (unlikely(((struct ipa_ioc_add_rt_rule_after_v2 *)
-		header)->rule_add_size >
-		sizeof(struct ipa_rt_rule_add_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_add_rt_rule_after_v2 *)
-		header)->rule_add_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_after_v2 *)
-		header)->rule_add_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_rt_rule_add_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_add_rt_rule_after_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_rt_rule_add_i),
-			(void *)param + i *
-			((struct ipa_ioc_add_rt_rule_after_v2 *)
-			header)->rule_add_size,
-			((struct ipa_ioc_add_rt_rule_after_v2 *)
-			header)->rule_add_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_add_rt_rule_after_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_add_rt_rule_after_v2(
-		(struct ipa_ioc_add_rt_rule_after_v2 *)header)) {
-		IPAERR_RL("ipa3_add_rt_rule_after_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_add_rt_rule_after_v2 *)
-			header)->rule_add_size,
-			kptr + i * sizeof(struct ipa_rt_rule_add_i),
-			((struct ipa_ioc_add_rt_rule_after_v2 *)
-			header)->rule_add_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_mdfy_rt_rule_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_mdfy_rt_rule_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)->num_rules;
-	if (unlikely(((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)->rule_mdfy_size >
-		sizeof(struct ipa_rt_rule_mdfy_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)->rule_mdfy_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)->rule_mdfy_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_rt_rule_mdfy_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_rt_rule_mdfy_i),
-			(void *)param + i *
-			((struct ipa_ioc_mdfy_rt_rule_v2 *)
-			header)->rule_mdfy_size,
-			((struct ipa_ioc_mdfy_rt_rule_v2 *)
-			header)->rule_mdfy_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_mdfy_rt_rule_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_mdfy_rt_rule_v2((struct ipa_ioc_mdfy_rt_rule_v2 *)
-		header)) {
-		IPAERR_RL("ipa3_mdfy_rt_rule_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_mdfy_rt_rule_v2 *)
-			header)->rule_mdfy_size,
-			kptr + i * sizeof(struct ipa_rt_rule_mdfy_i),
-			((struct ipa_ioc_mdfy_rt_rule_v2 *)
-			header)->rule_mdfy_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_add_flt_rule_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_add_flt_rule_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_add_flt_rule_v2 *)header)->num_rules;
-	if (unlikely(((struct ipa_ioc_add_flt_rule_v2 *)
-		header)->flt_rule_size >
-		sizeof(struct ipa_flt_rule_add_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_add_flt_rule_v2 *)
-		header)->flt_rule_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_add_flt_rule_v2 *)
-		header)->flt_rule_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_flt_rule_add_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_add_flt_rule_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_flt_rule_add_i),
-			(void *)param + i *
-			((struct ipa_ioc_add_flt_rule_v2 *)
-			header)->flt_rule_size,
-			((struct ipa_ioc_add_flt_rule_v2 *)
-			header)->flt_rule_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_add_flt_rule_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_add_flt_rule_usr_v2((struct ipa_ioc_add_flt_rule_v2 *)
-			header, true)) {
-		IPAERR_RL("ipa3_add_flt_rule_usr_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_add_flt_rule_v2 *)
-			header)->flt_rule_size,
-			kptr + i * sizeof(struct ipa_flt_rule_add_i),
-			((struct ipa_ioc_add_flt_rule_v2 *)
-			header)->flt_rule_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_add_flt_rule_after_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_add_flt_rule_after_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_add_flt_rule_after_v2 *)
-		 header)->num_rules;
-	if (unlikely(((struct ipa_ioc_add_flt_rule_after_v2 *)
-		header)->flt_rule_size >
-		sizeof(struct ipa_flt_rule_add_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_add_flt_rule_after_v2 *)
-		header)->flt_rule_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_add_flt_rule_after_v2 *)
-		header)->flt_rule_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_flt_rule_add_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_add_flt_rule_after_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_flt_rule_add_i),
-			(void *)param + i *
-			((struct ipa_ioc_add_flt_rule_after_v2 *)
-			header)->flt_rule_size,
-			((struct ipa_ioc_add_flt_rule_after_v2 *)
-			header)->flt_rule_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_add_flt_rule_after_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_add_flt_rule_after_v2(
-		(struct ipa_ioc_add_flt_rule_after_v2 *)header)) {
-		IPAERR_RL("ipa3_add_flt_rule_after_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_add_flt_rule_after_v2 *)
-			header)->flt_rule_size,
-			kptr + i * sizeof(struct ipa_flt_rule_add_i),
-			((struct ipa_ioc_add_flt_rule_after_v2 *)
-			header)->flt_rule_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_mdfy_flt_rule_v2(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_mdfy_flt_rule_v2))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_mdfy_flt_rule_v2 *)
-		 header)->num_rules;
-	if (unlikely(((struct ipa_ioc_mdfy_flt_rule_v2 *)
-		header)->rule_mdfy_size >
-		sizeof(struct ipa_flt_rule_mdfy_i))) {
-		IPAERR_RL("unexpected rule_add_size %d\n",
-		((struct ipa_ioc_mdfy_flt_rule_v2 *)
-		header)->rule_mdfy_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_mdfy_flt_rule_v2 *)
-		header)->rule_mdfy_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_flt_rule_mdfy_i)
-		* pre_entry;
-	uptr = ((struct ipa_ioc_mdfy_flt_rule_v2 *)
-		header)->rules;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_flt_rule_mdfy_i),
-			(void *)param + i *
-			((struct ipa_ioc_mdfy_flt_rule_v2 *)
-			header)->rule_mdfy_size,
-			((struct ipa_ioc_mdfy_flt_rule_v2 *)
-			header)->rule_mdfy_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_mdfy_flt_rule_v2 *)header)->rules =
-		(u64)kptr;
-	if (ipa3_mdfy_flt_rule_v2
-		((struct ipa_ioc_mdfy_flt_rule_v2 *)header)) {
-		IPAERR_RL("ipa3_mdfy_flt_rule_v2 fails\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_mdfy_flt_rule_v2 *)
-			header)->rule_mdfy_size,
-			kptr + i * sizeof(struct ipa_flt_rule_mdfy_i),
-			((struct ipa_ioc_mdfy_flt_rule_v2 *)
-			header)->rule_mdfy_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_fnr_counter_alloc(unsigned long arg)
-{
-	int retval = 0;
-	u8 header[128] = { 0 };
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_flt_rt_counter_alloc))) {
-		IPAERR("copy_from_user fails\n");
-		return -EFAULT;
-	}
-	if (((struct ipa_ioc_flt_rt_counter_alloc *)
-		header)->hw_counter.num_counters >
-		IPA_FLT_RT_HW_COUNTER ||
-		((struct ipa_ioc_flt_rt_counter_alloc *)
-		header)->sw_counter.num_counters >
-		IPA_FLT_RT_SW_COUNTER) {
-		IPAERR("failed: wrong sw/hw num_counters\n");
-		return -EPERM;
-	}
-	if (((struct ipa_ioc_flt_rt_counter_alloc *)
-		header)->hw_counter.num_counters == 0 &&
-		((struct ipa_ioc_flt_rt_counter_alloc *)
-		header)->sw_counter.num_counters == 0) {
-		IPAERR("failed: both sw/hw num_counters 0\n");
-		return -EPERM;
-	}
-	retval = ipa3_alloc_counter_id
-		((struct ipa_ioc_flt_rt_counter_alloc *)header);
-	if (retval < 0) {
-		IPAERR("ipa3_alloc_counter_id failed\n");
-		return retval;
-	}
-	if (copy_to_user((void __user *)arg, header,
-		sizeof(struct ipa_ioc_flt_rt_counter_alloc))) {
-		IPAERR("copy_to_user fails\n");
-		ipa3_counter_remove_hdl(
-		((struct ipa_ioc_flt_rt_counter_alloc *)
-		header)->hdl);
-		return -EFAULT;
-	}
-	return 0;
-}
-
-static int ipa3_ioctl_fnr_counter_query(unsigned long arg)
-{
-	int retval = 0;
-	int i;
-	u8 header[128] = { 0 };
-	int pre_entry;
-	u32 usr_pyld_sz;
-	u32 pyld_sz;
-	u64 uptr = 0;
-	u8 *param = NULL;
-	u8 *kptr = NULL;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_flt_rt_query))) {
-		IPAERR_RL("copy_from_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	pre_entry =
-		((struct ipa_ioc_flt_rt_query *)
-		header)->end_id - ((struct ipa_ioc_flt_rt_query *)
-		header)->start_id + 1;
-	if (pre_entry <= 0 || pre_entry > IPA_MAX_FLT_RT_CNT_INDEX) {
-		IPAERR("IPA_IOC_FNR_COUNTER_QUERY failed: num %d\n",
-			pre_entry);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	if (((struct ipa_ioc_flt_rt_query *)header)->stats_size
-		> sizeof(struct ipa_flt_rt_stats)) {
-		IPAERR_RL("unexpected stats_size %d\n",
-		((struct ipa_ioc_flt_rt_query *)header)->stats_size);
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* user payload size */
-	usr_pyld_sz = ((struct ipa_ioc_flt_rt_query *)
-		header)->stats_size * pre_entry;
-	/* actual payload structure size in kernel */
-	pyld_sz = sizeof(struct ipa_flt_rt_stats) * pre_entry;
-	uptr = ((struct ipa_ioc_flt_rt_query *)
-		header)->stats;
-	if (unlikely(!uptr)) {
-		IPAERR_RL("unexpected NULL rules\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	/* alloc param with same payload size as user payload */
-	param = memdup_user((const void __user *)uptr,
-		usr_pyld_sz);
-	if (IS_ERR(param)) {
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-	/* alloc kernel pointer with actual payload size */
-	kptr = kzalloc(pyld_sz, GFP_KERNEL);
-	if (!kptr) {
-		retval = -ENOMEM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy(kptr + i * sizeof(struct ipa_flt_rt_stats),
-			(void *)param + i *
-			((struct ipa_ioc_flt_rt_query *)
-			header)->stats_size,
-			((struct ipa_ioc_flt_rt_query *)
-			header)->stats_size);
-	/* modify the rule pointer to the kernel pointer */
-	((struct ipa_ioc_flt_rt_query *)
-		header)->stats = (u64)kptr;
-	retval = ipa_get_flt_rt_stats
-		((struct ipa_ioc_flt_rt_query *)header);
-	if (retval < 0) {
-		IPAERR("ipa_get_flt_rt_stats failed\n");
-		retval = -EPERM;
-		goto free_param_kptr;
-	}
-	for (i = 0; i < pre_entry; i++)
-		memcpy((void *)param + i *
-			((struct ipa_ioc_flt_rt_query *)
-			header)->stats_size,
-			kptr + i * sizeof(struct ipa_flt_rt_stats),
-			((struct ipa_ioc_flt_rt_query *)
-			header)->stats_size);
-	if (copy_to_user((void __user *)uptr, param,
-		usr_pyld_sz)) {
-		IPAERR_RL("copy_to_user fails\n");
-		retval = -EFAULT;
-		goto free_param_kptr;
-	}
-
-free_param_kptr:
-	if (!IS_ERR(param))
-		kfree(param);
-	kfree(kptr);
-
-	return retval;
-}
-
-static int ipa3_ioctl_fnr_counter_set(unsigned long arg)
-{
-	u8 header[128] = { 0 };
-	uint8_t value;
-
-	if (copy_from_user(header, (const void __user *)arg,
-		sizeof(struct ipa_ioc_fnr_index_info))) {
-		IPAERR_RL("copy_from_user fails\n");
-		return -EFAULT;
-	}
-
-	value = ((struct ipa_ioc_fnr_index_info *)
-		header)->hw_counter_offset;
-	if (value <= 0 || value > IPA_MAX_FLT_RT_CNT_INDEX) {
-		IPAERR("hw_counter_offset failed: num %d\n",
-			value);
-		return -EPERM;
-	}
-
-	ipa3_ctx->fnr_info.hw_counter_offset = value;
-
-	value = ((struct ipa_ioc_fnr_index_info *)
-		header)->sw_counter_offset;
-	if (value <= 0 || value > IPA_MAX_FLT_RT_CNT_INDEX) {
-		IPAERR("sw_counter_offset failed: num %d\n",
-			value);
-		return -EPERM;
-	}
-	ipa3_ctx->fnr_info.sw_counter_offset = value;
-	/* reset when ipacm-cleanup */
-	ipa3_ctx->fnr_info.valid = true;
-	IPADBG("fnr_info hw=%d, hw=%d\n",
-		ipa3_ctx->fnr_info.hw_counter_offset,
-		ipa3_ctx->fnr_info.sw_counter_offset);
-	return 0;
-}
-
 static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int retval = 0;
+	int i;
+	u32 usr_pyld_sz;
 	u32 pyld_sz;
 	u8 header[128] = { 0 };
 	u8 *param = NULL;
+	u8 *kptr = NULL;
+	unsigned long uptr = 0;
 	bool is_vlan_mode;
 	struct ipa_ioc_nat_alloc_mem nat_mem;
 	struct ipa_ioc_nat_ipv6ct_table_alloc table_alloc;
@@ -1534,6 +710,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct ipa_ioc_v4_nat_del nat_del;
 	struct ipa_ioc_nat_ipv6ct_table_del table_del;
 	struct ipa_ioc_nat_pdn_entry mdfy_pdn;
+	struct ipa_ioc_rm_dependency rm_depend;
 	struct ipa_ioc_nat_dma_cmd *table_dma_cmd;
 	struct ipa_ioc_get_vlan_mode vlan_mode;
 	struct ipa_ioc_wigig_fst_switch fst_switch;
@@ -1645,12 +822,18 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pre_entry = table_dma_cmd->entries;
 		pyld_sz = sizeof(struct ipa_ioc_nat_dma_cmd) +
 			pre_entry * sizeof(struct ipa_ioc_nat_dma_one);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		table_dma_cmd = (struct ipa_ioc_nat_dma_cmd *)param;
+
 		/* add check in case user-space module compromised */
 		if (unlikely(table_dma_cmd->entries != pre_entry)) {
 			IPAERR_RL("current %d pre %d\n",
@@ -1723,9 +906,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_hdr) +
 		   pre_entry * sizeof(struct ipa_hdr_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1759,9 +946,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_del_hdr) +
 		   pre_entry * sizeof(struct ipa_hdr_del);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1795,9 +986,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_rt_rule) +
 		   pre_entry * sizeof(struct ipa_rt_rule_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1833,9 +1028,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_rt_rule_ext) +
 		   pre_entry * sizeof(struct ipa_rt_rule_add_ext);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1859,7 +1058,6 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			break;
 		}
 		break;
-
 	case IPA_IOC_ADD_RT_RULE_AFTER:
 		if (copy_from_user(header, (const void __user *)arg,
 			sizeof(struct ipa_ioc_add_rt_rule_after))) {
@@ -1872,9 +1070,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_rt_rule_after) +
 		   pre_entry * sizeof(struct ipa_rt_rule_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1910,9 +1112,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_mdfy_rt_rule) +
 		   pre_entry * sizeof(struct ipa_rt_rule_mdfy);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1946,9 +1152,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_del_rt_rule) +
 		   pre_entry * sizeof(struct ipa_rt_rule_del);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -1981,9 +1191,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_flt_rule) +
 		   pre_entry * sizeof(struct ipa_flt_rule_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2020,9 +1234,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_flt_rule_after) +
 		   pre_entry * sizeof(struct ipa_flt_rule_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2057,9 +1275,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_del_flt_rule) +
 		   pre_entry * sizeof(struct ipa_flt_rule_del);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2093,9 +1315,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_mdfy_flt_rule) +
 		   pre_entry * sizeof(struct ipa_flt_rule_mdfy);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2226,9 +1452,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			header)->num_tx_props;
 		pyld_sz = sz + pre_entry *
 			sizeof(struct ipa_ioc_tx_intf_prop);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2268,9 +1498,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			header)->num_rx_props;
 		pyld_sz = sz + pre_entry *
 			sizeof(struct ipa_ioc_rx_intf_prop);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2309,9 +1543,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			header)->num_ext_props;
 		pyld_sz = sz + pre_entry *
 			sizeof(struct ipa_ioc_ext_intf_prop);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2343,9 +1581,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		   ((struct ipa_msg_meta *)header)->msg_len;
 		pyld_sz = sizeof(struct ipa_msg_meta) +
 		   pre_entry;
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2370,15 +1612,31 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		break;
 	case IPA_IOC_RM_ADD_DEPENDENCY:
-		/* IPA RM is deprecate because IPA PM is used */
-		IPAERR("using obselete command: IPA_IOC_RM_ADD_DEPENDENCY");
-		return -EINVAL;
+		/* deprecate if IPA PM is used */
+		if (ipa3_ctx->use_ipa_pm)
+			return 0;
 
+		if (copy_from_user(&rm_depend, (const void __user *)arg,
+			sizeof(struct ipa_ioc_rm_dependency))) {
+			retval = -EFAULT;
+			break;
+		}
+		retval = ipa_rm_add_dependency_from_ioctl(
+			rm_depend.resource_name, rm_depend.depends_on_name);
+		break;
 	case IPA_IOC_RM_DEL_DEPENDENCY:
-		/* IPA RM is deprecate because IPA PM is used */
-		IPAERR("using obselete command: IPA_IOC_RM_DEL_DEPENDENCY");
-		return -EINVAL;
+		/* deprecate if IPA PM is used */
+		if (ipa3_ctx->use_ipa_pm)
+			return 0;
 
+		if (copy_from_user(&rm_depend, (const void __user *)arg,
+			sizeof(struct ipa_ioc_rm_dependency))) {
+			retval = -EFAULT;
+			break;
+		}
+		retval = ipa_rm_delete_dependency_from_ioctl(
+			rm_depend.resource_name, rm_depend.depends_on_name);
+		break;
 	case IPA_IOC_GENERATE_FLT_EQ:
 		{
 			struct ipa_ioc_generate_flt_eq flt_eq;
@@ -2471,9 +1729,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_add_hdr_proc_ctx) +
 		   pre_entry * sizeof(struct ipa_hdr_proc_ctx_add);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2506,9 +1768,13 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pyld_sz =
 		   sizeof(struct ipa_ioc_del_hdr_proc_ctx) +
 		   pre_entry * sizeof(struct ipa_hdr_proc_ctx_del);
-		param = memdup_user((const void __user *)arg, pyld_sz);
-		if (IS_ERR(param)) {
-			retval = PTR_ERR(param);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg, pyld_sz)) {
+			retval = -EFAULT;
 			break;
 		}
 		/* add check in case user-space module compromised */
@@ -2534,11 +1800,12 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	case IPA_IOC_GET_HW_VERSION:
 		pyld_sz = sizeof(enum ipa_hw_type);
-		param = kmemdup(&ipa3_ctx->ipa_hw_type, pyld_sz, GFP_KERNEL);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
 		if (!param) {
 			retval = -ENOMEM;
 			break;
 		}
+		memcpy(param, &ipa3_ctx->ipa_hw_type, pyld_sz);
 		if (copy_to_user((void __user *)arg, param, pyld_sz)) {
 			retval = -EFAULT;
 			break;
@@ -2640,80 +1907,720 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			break;
 		}
 		break;
-
 	case IPA_IOC_ADD_RT_RULE_V2:
-		retval = ipa3_ioctl_add_rt_rule_v2(arg);
-		break;
-
-	case IPA_IOC_ADD_RT_RULE_EXT_V2:
-		retval = ipa3_ioctl_add_rt_rule_ext_v2(arg);
-		break;
-
-	case IPA_IOC_ADD_RT_RULE_AFTER_V2:
-		retval = ipa3_ioctl_add_rt_rule_after_v2(arg);
-		break;
-
-	case IPA_IOC_MDFY_RT_RULE_V2:
-		retval = ipa3_ioctl_mdfy_rt_rule_v2(arg);
-		break;
-
-	case IPA_IOC_ADD_FLT_RULE_V2:
-		retval = ipa3_ioctl_add_flt_rule_v2(arg);
-		break;
-
-	case IPA_IOC_ADD_FLT_RULE_AFTER_V2:
-		retval = ipa3_ioctl_add_flt_rule_after_v2(arg);
-		break;
-
-	case IPA_IOC_MDFY_FLT_RULE_V2:
-		retval = ipa3_ioctl_mdfy_flt_rule_v2(arg);
-		break;
-
-	case IPA_IOC_FNR_COUNTER_ALLOC:
-		if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
-			IPAERR("FNR stats not supported on IPA ver %d",
-				ipa3_ctx->ipa_hw_type);
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_add_rt_rule_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
 			retval = -EFAULT;
 			break;
 		}
-		retval = ipa3_ioctl_fnr_counter_alloc(arg);
+		pre_entry =
+			((struct ipa_ioc_add_rt_rule_v2 *)header)->num_rules;
+		if (unlikely(((struct ipa_ioc_add_rt_rule_v2 *)
+			header)->rule_add_size >
+			sizeof(struct ipa_rt_rule_add_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_add_rt_rule_v2 *)
+			header)->rule_add_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_v2 *)
+			header)->rule_add_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_rt_rule_add_i) * pre_entry;
+		uptr = ((struct ipa_ioc_add_rt_rule_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_rt_rule_add_i),
+				(void *)param + i *
+				((struct ipa_ioc_add_rt_rule_v2 *)
+				header)->rule_add_size,
+				((struct ipa_ioc_add_rt_rule_v2 *)
+				header)->rule_add_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_rt_rule_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_add_rt_rule_usr_v2(
+			(struct ipa_ioc_add_rt_rule_v2 *)header, true)) {
+			IPAERR_RL("ipa3_add_rt_rule_usr_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_add_rt_rule_v2 *)
+				header)->rule_add_size,
+				kptr + i * sizeof(struct ipa_rt_rule_add_i),
+				((struct ipa_ioc_add_rt_rule_v2 *)
+				header)->rule_add_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_ADD_RT_RULE_EXT_V2:
+		if (copy_from_user(header,
+				(const void __user *)arg,
+				sizeof(struct ipa_ioc_add_rt_rule_ext_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_add_rt_rule_ext_v2 *)
+			header)->num_rules;
+		if (unlikely(((struct ipa_ioc_add_rt_rule_ext_v2 *)
+			header)->rule_add_ext_size >
+			sizeof(struct ipa_rt_rule_add_ext_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_add_rt_rule_ext_v2 *)
+			header)->rule_add_ext_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_ext_v2 *)
+			header)->rule_add_ext_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_rt_rule_add_ext_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_add_rt_rule_ext_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i *
+				sizeof(struct ipa_rt_rule_add_ext_i),
+				(void *)param + i *
+				((struct ipa_ioc_add_rt_rule_ext_v2 *)
+				header)->rule_add_ext_size,
+				((struct ipa_ioc_add_rt_rule_ext_v2 *)
+				header)->rule_add_ext_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_rt_rule_ext_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_add_rt_rule_ext_v2(
+			(struct ipa_ioc_add_rt_rule_ext_v2 *)header)) {
+			IPAERR_RL("ipa3_add_rt_rule_ext_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_add_rt_rule_ext_v2 *)
+				header)->rule_add_ext_size,
+				kptr + i *
+				sizeof(struct ipa_rt_rule_add_ext_i),
+				((struct ipa_ioc_add_rt_rule_ext_v2 *)
+				header)->rule_add_ext_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_ADD_RT_RULE_AFTER_V2:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_add_rt_rule_after_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_add_rt_rule_after_v2 *)
+			header)->num_rules;
+		if (unlikely(((struct ipa_ioc_add_rt_rule_after_v2 *)
+			header)->rule_add_size >
+			sizeof(struct ipa_rt_rule_add_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_add_rt_rule_after_v2 *)
+			header)->rule_add_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_add_rt_rule_after_v2 *)
+			header)->rule_add_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_rt_rule_add_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_add_rt_rule_after_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_rt_rule_add_i),
+				(void *)param + i *
+				((struct ipa_ioc_add_rt_rule_after_v2 *)
+				header)->rule_add_size,
+				((struct ipa_ioc_add_rt_rule_after_v2 *)
+				header)->rule_add_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_rt_rule_after_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_add_rt_rule_after_v2(
+			(struct ipa_ioc_add_rt_rule_after_v2 *)header)) {
+			IPAERR_RL("ipa3_add_rt_rule_after_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_add_rt_rule_after_v2 *)
+				header)->rule_add_size,
+				kptr + i * sizeof(struct ipa_rt_rule_add_i),
+				((struct ipa_ioc_add_rt_rule_after_v2 *)
+				header)->rule_add_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_MDFY_RT_RULE_V2:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_mdfy_rt_rule_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)->num_rules;
+		if (unlikely(((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)->rule_mdfy_size >
+			sizeof(struct ipa_rt_rule_mdfy_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)->rule_mdfy_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)->rule_mdfy_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_rt_rule_mdfy_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_rt_rule_mdfy_i),
+				(void *)param + i *
+				((struct ipa_ioc_mdfy_rt_rule_v2 *)
+				header)->rule_mdfy_size,
+				((struct ipa_ioc_mdfy_rt_rule_v2 *)
+				header)->rule_mdfy_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_mdfy_rt_rule_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_mdfy_rt_rule_v2((struct ipa_ioc_mdfy_rt_rule_v2 *)
+			header)) {
+			IPAERR_RL("ipa3_mdfy_rt_rule_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_mdfy_rt_rule_v2 *)
+				header)->rule_mdfy_size,
+				kptr + i * sizeof(struct ipa_rt_rule_mdfy_i),
+				((struct ipa_ioc_mdfy_rt_rule_v2 *)
+				header)->rule_mdfy_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_ADD_FLT_RULE_V2:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_add_flt_rule_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_add_flt_rule_v2 *)header)->num_rules;
+		if (unlikely(((struct ipa_ioc_add_flt_rule_v2 *)
+			header)->flt_rule_size >
+			sizeof(struct ipa_flt_rule_add_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_add_flt_rule_v2 *)
+			header)->flt_rule_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_add_flt_rule_v2 *)
+			header)->flt_rule_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_flt_rule_add_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_add_flt_rule_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_flt_rule_add_i),
+				(void *)param + i *
+				((struct ipa_ioc_add_flt_rule_v2 *)
+				header)->flt_rule_size,
+				((struct ipa_ioc_add_flt_rule_v2 *)
+				header)->flt_rule_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_flt_rule_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_add_flt_rule_usr_v2((struct ipa_ioc_add_flt_rule_v2 *)
+				header, true)) {
+			IPAERR_RL("ipa3_add_flt_rule_usr_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_add_flt_rule_v2 *)
+				header)->flt_rule_size,
+				kptr + i * sizeof(struct ipa_flt_rule_add_i),
+				((struct ipa_ioc_add_flt_rule_v2 *)
+				header)->flt_rule_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_ADD_FLT_RULE_AFTER_V2:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_add_flt_rule_after_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_add_flt_rule_after_v2 *)
+			 header)->num_rules;
+		if (unlikely(((struct ipa_ioc_add_flt_rule_after_v2 *)
+			header)->flt_rule_size >
+			sizeof(struct ipa_flt_rule_add_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_add_flt_rule_after_v2 *)
+			header)->flt_rule_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_add_flt_rule_after_v2 *)
+			header)->flt_rule_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_flt_rule_add_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_add_flt_rule_after_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_flt_rule_add_i),
+				(void *)param + i *
+				((struct ipa_ioc_add_flt_rule_after_v2 *)
+				header)->flt_rule_size,
+				((struct ipa_ioc_add_flt_rule_after_v2 *)
+				header)->flt_rule_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_flt_rule_after_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_add_flt_rule_after_v2(
+			(struct ipa_ioc_add_flt_rule_after_v2 *)header)) {
+			IPAERR_RL("ipa3_add_flt_rule_after_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_add_flt_rule_after_v2 *)
+				header)->flt_rule_size,
+				kptr + i * sizeof(struct ipa_flt_rule_add_i),
+				((struct ipa_ioc_add_flt_rule_after_v2 *)
+				header)->flt_rule_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_MDFY_FLT_RULE_V2:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_mdfy_flt_rule_v2))) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_mdfy_flt_rule_v2 *)
+			 header)->num_rules;
+		if (unlikely(((struct ipa_ioc_mdfy_flt_rule_v2 *)
+			header)->rule_mdfy_size >
+			sizeof(struct ipa_flt_rule_mdfy_i))) {
+			IPAERR_RL("unexpected rule_add_size %d\n",
+			((struct ipa_ioc_mdfy_flt_rule_v2 *)
+			header)->rule_mdfy_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_mdfy_flt_rule_v2 *)
+			header)->rule_mdfy_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_flt_rule_mdfy_i)
+			* pre_entry;
+		uptr = ((struct ipa_ioc_mdfy_flt_rule_v2 *)
+			header)->rules;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_flt_rule_mdfy_i),
+				(void *)param + i *
+				((struct ipa_ioc_mdfy_flt_rule_v2 *)
+				header)->rule_mdfy_size,
+				((struct ipa_ioc_mdfy_flt_rule_v2 *)
+				header)->rule_mdfy_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_add_flt_rule_after_v2 *)header)->rules =
+			(uintptr_t)kptr;
+		if (ipa3_mdfy_flt_rule_v2
+			((struct ipa_ioc_mdfy_flt_rule_v2 *)header)) {
+			IPAERR_RL("ipa3_mdfy_flt_rule_v2 fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_mdfy_flt_rule_v2 *)
+				header)->rule_mdfy_size,
+				kptr + i * sizeof(struct ipa_flt_rule_mdfy_i),
+				((struct ipa_ioc_mdfy_flt_rule_v2 *)
+				header)->rule_mdfy_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+	case IPA_IOC_FNR_COUNTER_ALLOC:
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_flt_rt_counter_alloc))) {
+			IPAERR("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		if (((struct ipa_ioc_flt_rt_counter_alloc *)
+			header)->hw_counter.num_counters >
+			IPA_FLT_RT_HW_COUNTER ||
+			((struct ipa_ioc_flt_rt_counter_alloc *)
+			header)->sw_counter.num_counters >
+			IPA_FLT_RT_SW_COUNTER) {
+			IPAERR("failed: wrong sw/hw num_counters\n");
+			retval = -EFAULT;
+			break;
+		}
+		if (((struct ipa_ioc_flt_rt_counter_alloc *)
+			header)->hw_counter.num_counters == 0 &&
+			((struct ipa_ioc_flt_rt_counter_alloc *)
+			header)->sw_counter.num_counters == 0) {
+			IPAERR("failed: both sw/hw num_counters 0\n");
+			retval = -EFAULT;
+			break;
+		}
+		retval = ipa3_alloc_counter_id
+			((struct ipa_ioc_flt_rt_counter_alloc *)header);
+		if (retval < 0) {
+			IPAERR("ipa3_alloc_counter_id failed\n");
+			retval = -EFAULT;
+			break;
+		}
+		if (copy_to_user((void __user *)arg, header,
+			sizeof(struct ipa_ioc_flt_rt_counter_alloc))) {
+			IPAERR("copy_to_user fails\n");
+			retval = -EFAULT;
+			ipa3_counter_remove_hdl(
+			((struct ipa_ioc_flt_rt_counter_alloc *)
+			header)->hdl);
+			break;
+		}
 		break;
 
 	case IPA_IOC_FNR_COUNTER_DEALLOC:
-		if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
-			IPAERR("FNR stats not supported on IPA ver %d",
-				 ipa3_ctx->ipa_hw_type);
-			retval = -EFAULT;
-			break;
-		}
 		hdl = (int)arg;
 		if (hdl < 0) {
 			IPAERR("IPA_FNR_COUNTER_DEALLOC failed: hdl %d\n",
 				hdl);
-			retval = -EPERM;
+			retval = -EFAULT;
 			break;
 		}
 		ipa3_counter_remove_hdl(hdl);
 		break;
 
 	case IPA_IOC_FNR_COUNTER_QUERY:
-		if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
-			IPAERR("FNR stats not supported on IPA ver %d",
-				ipa3_ctx->ipa_hw_type);
+		if (copy_from_user(header, (const void __user *)arg,
+			sizeof(struct ipa_ioc_flt_rt_query))) {
+			IPAERR_RL("copy_from_user fails\n");
 			retval = -EFAULT;
 			break;
 		}
-		retval = ipa3_ioctl_fnr_counter_query(arg);
-		break;
-
-	case IPA_IOC_SET_FNR_COUNTER_INFO:
-		if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
-			IPAERR("FNR stats not supported on IPA ver %d",
-				ipa3_ctx->ipa_hw_type);
+		pre_entry =
+			((struct ipa_ioc_flt_rt_query *)
+			header)->end_id - ((struct ipa_ioc_flt_rt_query *)
+			header)->start_id + 1;
+		if (pre_entry <= 0 || pre_entry > IPA_MAX_FLT_RT_CNT_INDEX) {
+			IPAERR("IPA_IOC_FNR_COUNTER_QUERY failed: num %d\n",
+				pre_entry);
 			retval = -EFAULT;
 			break;
 		}
-		retval = ipa3_ioctl_fnr_counter_set(arg);
+		if (((struct ipa_ioc_flt_rt_query *)header)->stats_size
+			> sizeof(struct ipa_flt_rt_stats)) {
+			IPAERR_RL("unexpected stats_size %d\n",
+			((struct ipa_ioc_flt_rt_query *)header)->stats_size);
+			retval = -EFAULT;
+			break;
+		};
+		/* user payload size */
+		usr_pyld_sz = ((struct ipa_ioc_flt_rt_query *)
+			header)->stats_size * pre_entry;
+		/* actual payload structure size in kernel */
+		pyld_sz = sizeof(struct ipa_flt_rt_stats) * pre_entry;
+		uptr = ((struct ipa_ioc_flt_rt_query *)
+			header)->stats;
+		if (unlikely(!uptr)) {
+			IPAERR_RL("unexpected NULL rules\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc param with same payload size as user payload */
+		param = kzalloc(usr_pyld_sz, GFP_KERNEL);
+		if (!param) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)uptr,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_from_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
+		/* alloc kernel pointer with actual payload size */
+		kptr = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!kptr) {
+			IPAERR_RL("kzalloc fails\n");
+			retval = -ENOMEM;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy(kptr + i * sizeof(struct ipa_flt_rt_stats),
+				(void *)param + i *
+				((struct ipa_ioc_flt_rt_query *)
+				header)->stats_size,
+				((struct ipa_ioc_flt_rt_query *)
+				header)->stats_size);
+		/* modify the rule pointer to the kernel pointer */
+		((struct ipa_ioc_flt_rt_query *)
+			header)->stats = (uintptr_t)kptr;
+		retval = ipa_get_flt_rt_stats
+			((struct ipa_ioc_flt_rt_query *)header);
+		if (retval < 0) {
+			IPAERR("ipa_get_flt_rt_stats failed\n");
+			retval = -EFAULT;
+			break;
+		}
+		for (i = 0; i < pre_entry; i++)
+			memcpy((void *)param + i *
+				((struct ipa_ioc_flt_rt_query *)
+				header)->stats_size,
+				kptr + i * sizeof(struct ipa_flt_rt_stats),
+				((struct ipa_ioc_flt_rt_query *)
+				header)->stats_size);
+		if (copy_to_user((void __user *)uptr, param,
+			usr_pyld_sz)) {
+			IPAERR_RL("copy_to_user fails\n");
+			retval = -EFAULT;
+			break;
+		}
 		break;
 
 	case IPA_IOC_WIGIG_FST_SWITCH:
@@ -2723,10 +2630,6 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			retval = -EFAULT;
 			break;
 		}
-
-		/* null terminate the string */
-		fst_switch.netdev_name[IPA_RESOURCE_NAME_MAX - 1] = '\0';
-
 		retval = ipa_wigig_send_msg(WIGIG_FST_SWITCH,
 			fst_switch.netdev_name,
 			fst_switch.client_mac_addr,
@@ -2737,8 +2640,8 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return -ENOTTY;
 	}
-	if (!IS_ERR(param))
-		kfree(param);
+	kfree(kptr);
+	kfree(param);
 	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return retval;
@@ -2875,13 +2778,14 @@ static int ipa3_init_smem_region(int memory_region_size,
 	memset(&mem, 0, sizeof(mem));
 
 	mem.size = memory_region_size;
-	mem.base = dma_zalloc_coherent(ipa3_ctx->pdev, mem.size,
+	mem.base = dma_alloc_coherent(ipa3_ctx->pdev, mem.size,
 		&mem.phys_base, GFP_KERNEL);
 	if (!mem.base) {
 		IPAERR("failed to alloc DMA buff of size %d\n", mem.size);
 		return -ENOMEM;
 	}
 
+	memset(mem.base, 0, mem.size);
 	cmd.is_read = false;
 	cmd.skip_pipeline_clear = false;
 	cmd.pipeline_clear_options = IPAHAL_HPS_CLEAR;
@@ -3101,14 +3005,11 @@ static int ipa3_q6_clean_q6_flt_tbls(enum ipa_ip_type ip,
 	int retval = 0;
 	int pipe_idx;
 	int flt_idx = 0;
-	int num_cmds = 0, count = 0;
+	int num_cmds = 0;
 	int index;
 	u32 lcl_addr_mem_part;
 	u32 lcl_hdr_sz;
 	struct ipa_mem_buffer mem;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int coal_ep = IPA_EP_NOT_ALLOCATED;
 
 	IPADBG("Entry\n");
 
@@ -3126,13 +3027,13 @@ static int ipa3_q6_clean_q6_flt_tbls(enum ipa_ip_type ip,
 		return retval;
 	}
 
-	/* Up to filtering pipes we have filtering tables + 1 for coal close */
-	desc = kcalloc(ipa3_ctx->ep_flt_num + 1, sizeof(struct ipa3_desc),
+	/* Up to filtering pipes we have filtering tables */
+	desc = kcalloc(ipa3_ctx->ep_flt_num, sizeof(struct ipa3_desc),
 		GFP_KERNEL);
 	if (!desc)
 		return -ENOMEM;
 
-	cmd_pyld = kcalloc(ipa3_ctx->ep_flt_num + 1,
+	cmd_pyld = kcalloc(ipa3_ctx->ep_flt_num,
 		sizeof(struct ipahal_imm_cmd_pyld *), GFP_KERNEL);
 	if (!cmd_pyld) {
 		retval = -ENOMEM;
@@ -3164,28 +3065,6 @@ static int ipa3_q6_clean_q6_flt_tbls(enum ipa_ip_type ip,
 		goto free_cmd_pyld;
 	}
 
-	coal_ep = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (coal_ep != IPA_EP_NOT_ALLOCATED) {
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(coal_ep, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmds]) {
-			IPAERR("failed to construct coal close IC\n");
-			retval = -ENOMEM;
-			goto free_empty_img;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmds], cmd_pyld[num_cmds]);
-		++num_cmds;
-	}
-
 	for (pipe_idx = 0; pipe_idx < ipa3_ctx->ipa_num_pipes; pipe_idx++) {
 		if (!ipa_is_ep_support_flt(pipe_idx))
 			continue;
@@ -3197,12 +3076,7 @@ static int ipa3_q6_clean_q6_flt_tbls(enum ipa_ip_type ip,
 		if (!ipa3_ctx->ep[pipe_idx].valid ||
 		    ipa3_ctx->ep[pipe_idx].skip_ep_cfg) {
 
-			/*
-			 * When coal pipe is valid send close coalescing frame
-			 * command and increment the ep_flt_num accordingly.
-			 */
-			count = (coal_ep != IPA_EP_NOT_ALLOCATED) ? 1 : 0;
-			if (num_cmds >= (ipa3_ctx->ep_flt_num + count)) {
+			if (num_cmds >= ipa3_ctx->ep_flt_num) {
 				IPAERR("number of commands is out of range\n");
 				retval = -ENOBUFS;
 				goto free_empty_img;
@@ -3256,17 +3130,13 @@ static int ipa3_q6_clean_q6_rt_tbls(enum ipa_ip_type ip,
 {
 	struct ipa3_desc *desc;
 	struct ipahal_imm_cmd_dma_shared_mem cmd = {0};
-	struct ipahal_imm_cmd_pyld **cmd_pyld;
+	struct ipahal_imm_cmd_pyld *cmd_pyld = NULL;
 	int retval = 0;
-	int num_cmds = 0;
 	u32 modem_rt_index_lo;
 	u32 modem_rt_index_hi;
 	u32 lcl_addr_mem_part;
 	u32 lcl_hdr_sz;
 	struct ipa_mem_buffer mem;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int i;
 
 	IPADBG("Entry\n");
 
@@ -3314,38 +3184,10 @@ static int ipa3_q6_clean_q6_rt_tbls(enum ipa_ip_type ip,
 		return -ENOMEM;
 	}
 
-	desc = kcalloc(2, sizeof(struct ipa3_desc), GFP_KERNEL);
+	desc = kzalloc(sizeof(struct ipa3_desc), GFP_KERNEL);
 	if (!desc) {
-		retval = -ENOMEM;
+		IPAERR("failed to allocate memory\n");
 		goto free_empty_img;
-	}
-
-	cmd_pyld = kcalloc(2, sizeof(struct ipahal_imm_cmd_pyld *), GFP_KERNEL);
-	if (!cmd_pyld) {
-		retval = -ENOMEM;
-		goto free_desc;
-	}
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmds]) {
-			IPAERR("failed to construct coal close IC\n");
-			retval = -ENOMEM;
-			goto free_cmd_pyld;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmds], cmd_pyld[num_cmds]);
-		++num_cmds;
 	}
 
 	cmd.is_read = false;
@@ -3356,27 +3198,23 @@ static int ipa3_q6_clean_q6_rt_tbls(enum ipa_ip_type ip,
 	cmd.local_addr = ipa3_ctx->smem_restricted_bytes +
 		lcl_addr_mem_part +
 		modem_rt_index_lo * ipahal_get_hw_tbl_hdr_width();
-	cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
+	cmd_pyld = ipahal_construct_imm_cmd(
 			IPA_IMM_CMD_DMA_SHARED_MEM, &cmd, false);
-	if (!cmd_pyld[num_cmds]) {
+	if (!cmd_pyld) {
 		IPAERR("failed to construct dma_shared_mem imm cmd\n");
 		retval = -ENOMEM;
-		goto free_cmd_pyld;
+		goto free_desc;
 	}
-	ipa3_init_imm_cmd_desc(&desc[num_cmds], cmd_pyld[num_cmds]);
-	++num_cmds;
+	ipa3_init_imm_cmd_desc(desc, cmd_pyld);
 
 	IPADBG("Sending 1 descriptor for rt tbl clearing\n");
-	retval = ipa3_send_cmd(num_cmds, desc);
+	retval = ipa3_send_cmd(1, desc);
 	if (retval) {
 		IPAERR("failed to send immediate command (err %d)\n", retval);
 		retval = -EFAULT;
 	}
 
-free_cmd_pyld:
-	for (i = 0; i < num_cmds; i++)
-		ipahal_destroy_imm_cmd(cmd_pyld[i]);
-	kfree(cmd_pyld);
+	ipahal_destroy_imm_cmd(cmd_pyld);
 free_desc:
 	kfree(desc);
 free_empty_img:
@@ -3387,14 +3225,11 @@ free_empty_img:
 static int ipa3_q6_clean_q6_tables(void)
 {
 	struct ipa3_desc *desc;
-	struct ipahal_imm_cmd_pyld **cmd_pyld;
+	struct ipahal_imm_cmd_pyld *cmd_pyld = NULL;
 	struct ipahal_imm_cmd_register_write reg_write_cmd = {0};
 	int retval = 0;
-	int num_cmds = 0;
 	struct ipahal_reg_fltrt_hash_flush flush;
 	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int i;
 
 	IPADBG("Entry\n");
 
@@ -3440,37 +3275,9 @@ static int ipa3_q6_clean_q6_tables(void)
 	if (ipa3_ctx->ipa_fltrt_not_hashable)
 		return retval;
 	/* Flush rules cache */
-	desc = kcalloc(2, sizeof(struct ipa3_desc), GFP_KERNEL);
+	desc = kzalloc(sizeof(struct ipa3_desc), GFP_KERNEL);
 	if (!desc)
 		return -ENOMEM;
-
-	cmd_pyld = kcalloc(2, sizeof(struct ipahal_imm_cmd_pyld *), GFP_KERNEL);
-	if (!cmd_pyld) {
-		retval = -ENOMEM;
-		goto bail_desc;
-	}
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmds]) {
-			IPAERR("failed to construct coal close IC\n");
-			retval = -ENOMEM;
-			goto free_cmd_pyld;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmds], cmd_pyld[num_cmds]);
-		++num_cmds;
-	}
 
 	flush.v4_flt = true;
 	flush.v4_rt = true;
@@ -3482,27 +3289,24 @@ static int ipa3_q6_clean_q6_tables(void)
 	reg_write_cmd.offset = ipahal_get_reg_ofst(IPA_FILT_ROUT_HASH_FLUSH);
 	reg_write_cmd.value = valmask.val;
 	reg_write_cmd.value_mask = valmask.mask;
-	cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
-		IPA_IMM_CMD_REGISTER_WRITE, &reg_write_cmd, false);
-	if (!cmd_pyld[num_cmds]) {
+	cmd_pyld = ipahal_construct_imm_cmd(IPA_IMM_CMD_REGISTER_WRITE,
+		&reg_write_cmd, false);
+	if (!cmd_pyld) {
 		IPAERR("fail construct register_write imm cmd\n");
 		retval = -EFAULT;
-		goto free_cmd_pyld;
+		goto bail_desc;
 	}
-	ipa3_init_imm_cmd_desc(&desc[num_cmds], cmd_pyld[num_cmds]);
-	++num_cmds;
+	ipa3_init_imm_cmd_desc(desc, cmd_pyld);
 
 	IPADBG("Sending 1 descriptor for tbls flush\n");
-	retval = ipa3_send_cmd(num_cmds, desc);
+	retval = ipa3_send_cmd(1, desc);
 	if (retval) {
 		IPAERR("failed to send immediate command (err %d)\n", retval);
 		retval = -EFAULT;
 	}
 
-free_cmd_pyld:
-	for (i = 0; i < num_cmds; i++)
-		ipahal_destroy_imm_cmd(cmd_pyld[i]);
-	kfree(cmd_pyld);
+	ipahal_destroy_imm_cmd(cmd_pyld);
+
 bail_desc:
 	kfree(desc);
 	IPADBG("Done - retval = %d\n", retval);
@@ -3519,38 +3323,11 @@ static int ipa3_q6_set_ex_path_to_apps(void)
 	struct ipahal_imm_cmd_register_write reg_write;
 	struct ipahal_imm_cmd_pyld *cmd_pyld;
 	int retval;
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int i;
 
-	desc = kcalloc(ipa3_ctx->ipa_num_pipes + 1, sizeof(struct ipa3_desc),
+	desc = kcalloc(ipa3_ctx->ipa_num_pipes, sizeof(struct ipa3_desc),
 			GFP_KERNEL);
 	if (!desc)
 		return -ENOMEM;
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld) {
-			IPAERR("failed to construct coal close IC\n");
-			ipa_assert();
-			return -ENOMEM;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_descs], cmd_pyld);
-		desc[num_descs].callback = ipa3_destroy_imm;
-		desc[num_descs].user1 = cmd_pyld;
-		++num_descs;
-	}
 
 	/* Set the exception path to AP */
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++) {
@@ -3559,13 +3336,11 @@ static int ipa3_q6_set_ex_path_to_apps(void)
 			continue;
 
 		/* disable statuses for all modem controlled prod pipes */
-		if (!IPA_CLIENT_IS_TEST(client_idx) &&
-			(IPA_CLIENT_IS_Q6_PROD(client_idx) ||
-			(IPA_CLIENT_IS_PROD(client_idx) &&
-			ipa3_ctx->ep[ep_idx].valid &&
+		if (IPA_CLIENT_IS_Q6_PROD(client_idx) ||
+			(ipa3_ctx->ep[ep_idx].valid &&
 			ipa3_ctx->ep[ep_idx].skip_ep_cfg) ||
 			(ipa3_ctx->ep[ep_idx].client == IPA_CLIENT_APPS_WAN_PROD
-			&& ipa3_ctx->modem_cfg_emb_pipe_flt))) {
+			&& ipa3_ctx->modem_cfg_emb_pipe_flt)) {
 			ipa_assert_on(num_descs >= ipa3_ctx->ipa_num_pipes);
 
 			ipa3_ctx->ep[ep_idx].status.status_en = false;
@@ -3651,7 +3426,7 @@ void ipa3_q6_pre_shutdown_cleanup(void)
 		 * Indicates IPA hardware is stalled, unexpected
 		 * hardware state.
 		 */
-		ipa_assert();
+		BUG();
 	}
 	if (ipa3_q6_set_ex_path_to_apps()) {
 		IPAERR("Failed to redirect exceptions to APPS\n");
@@ -3659,7 +3434,7 @@ void ipa3_q6_pre_shutdown_cleanup(void)
 		 * Indicates IPA hardware is stalled, unexpected
 		 * hardware state.
 		 */
-		ipa_assert();
+		BUG();
 	}
 	/* Remove delay from Q6 PRODs to avoid pending descriptors
 	 * on pipe reset procedure
@@ -3879,84 +3654,58 @@ int _ipa_init_sram_v3(void)
  */
 int _ipa_init_hdr_v3_0(void)
 {
-	struct ipa3_desc hdr_init_desc;
-	struct ipa3_desc dma_cmd_desc[2];
+	struct ipa3_desc desc;
 	struct ipa_mem_buffer mem;
 	struct ipahal_imm_cmd_hdr_init_local cmd = {0};
-	struct ipahal_imm_cmd_pyld *hdr_init_cmd_payload;
-	struct ipahal_imm_cmd_pyld *cmd_pyld[2];
+	struct ipahal_imm_cmd_pyld *cmd_pyld;
 	struct ipahal_imm_cmd_dma_shared_mem dma_cmd = { 0 };
-	struct ipahal_reg_valmask valmask;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	int num_cmds = 0;
-	int i;
 
 	mem.size = IPA_MEM_PART(modem_hdr_size) + IPA_MEM_PART(apps_hdr_size);
-	mem.base = dma_zalloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
+	mem.base = dma_alloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
 		GFP_KERNEL);
 	if (!mem.base) {
 		IPAERR("fail to alloc DMA buff of size %d\n", mem.size);
 		return -ENOMEM;
 	}
+	memset(mem.base, 0, mem.size);
 
 	cmd.hdr_table_addr = mem.phys_base;
 	cmd.size_hdr_table = mem.size;
 	cmd.hdr_addr = ipa3_ctx->smem_restricted_bytes +
 		IPA_MEM_PART(modem_hdr_ofst);
-	hdr_init_cmd_payload = ipahal_construct_imm_cmd(
+	cmd_pyld = ipahal_construct_imm_cmd(
 		IPA_IMM_CMD_HDR_INIT_LOCAL, &cmd, false);
-	if (!hdr_init_cmd_payload) {
+	if (!cmd_pyld) {
 		IPAERR("fail to construct hdr_init_local imm cmd\n");
 		dma_free_coherent(ipa3_ctx->pdev,
 			mem.size, mem.base,
 			mem.phys_base);
 		return -EFAULT;
 	}
-	ipa3_init_imm_cmd_desc(&hdr_init_desc, hdr_init_cmd_payload);
+	ipa3_init_imm_cmd_desc(&desc, cmd_pyld);
 	IPA_DUMP_BUFF(mem.base, mem.phys_base, mem.size);
 
-	if (ipa3_send_cmd(1, &hdr_init_desc)) {
+	if (ipa3_send_cmd(1, &desc)) {
 		IPAERR("fail to send immediate command\n");
-		ipahal_destroy_imm_cmd(hdr_init_cmd_payload);
+		ipahal_destroy_imm_cmd(cmd_pyld);
 		dma_free_coherent(ipa3_ctx->pdev,
 			mem.size, mem.base,
 			mem.phys_base);
 		return -EFAULT;
 	}
 
-	ipahal_destroy_imm_cmd(hdr_init_cmd_payload);
+	ipahal_destroy_imm_cmd(cmd_pyld);
 	dma_free_coherent(ipa3_ctx->pdev, mem.size, mem.base, mem.phys_base);
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!cmd_pyld[num_cmds]) {
-			IPAERR("failed to construct coal close IC\n");
-			return -ENOMEM;
-		}
-		ipa3_init_imm_cmd_desc(&dma_cmd_desc[num_cmds],
-			cmd_pyld[num_cmds]);
-		++num_cmds;
-	}
 
 	mem.size = IPA_MEM_PART(modem_hdr_proc_ctx_size) +
 		IPA_MEM_PART(apps_hdr_proc_ctx_size);
-	mem.base = dma_zalloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
+	mem.base = dma_alloc_coherent(ipa3_ctx->pdev, mem.size, &mem.phys_base,
 		GFP_KERNEL);
 	if (!mem.base) {
 		IPAERR("fail to alloc DMA buff of size %d\n", mem.size);
 		return -ENOMEM;
 	}
+	memset(mem.base, 0, mem.size);
 
 	dma_cmd.is_read = false;
 	dma_cmd.skip_pipeline_clear = false;
@@ -3965,31 +3714,28 @@ int _ipa_init_hdr_v3_0(void)
 	dma_cmd.local_addr = ipa3_ctx->smem_restricted_bytes +
 		IPA_MEM_PART(modem_hdr_proc_ctx_ofst);
 	dma_cmd.size = mem.size;
-	cmd_pyld[num_cmds] = ipahal_construct_imm_cmd(
+	cmd_pyld = ipahal_construct_imm_cmd(
 		IPA_IMM_CMD_DMA_SHARED_MEM, &dma_cmd, false);
-	if (!cmd_pyld[num_cmds]) {
+	if (!cmd_pyld) {
 		IPAERR("fail to construct dma_shared_mem imm\n");
 		dma_free_coherent(ipa3_ctx->pdev,
 			mem.size, mem.base,
 			mem.phys_base);
 		return -ENOMEM;
 	}
-	ipa3_init_imm_cmd_desc(&dma_cmd_desc[num_cmds], cmd_pyld[num_cmds]);
-	++num_cmds;
+	ipa3_init_imm_cmd_desc(&desc, cmd_pyld);
 	IPA_DUMP_BUFF(mem.base, mem.phys_base, mem.size);
 
-	if (ipa3_send_cmd(num_cmds, dma_cmd_desc)) {
+	if (ipa3_send_cmd(1, &desc)) {
 		IPAERR("fail to send immediate command\n");
-		for (i = 0; i < num_cmds; i++)
-			ipahal_destroy_imm_cmd(cmd_pyld[i]);
+		ipahal_destroy_imm_cmd(cmd_pyld);
 		dma_free_coherent(ipa3_ctx->pdev,
 			mem.size,
 			mem.base,
 			mem.phys_base);
 		return -EBUSY;
 	}
-	for (i = 0; i < num_cmds; i++)
-		ipahal_destroy_imm_cmd(cmd_pyld[i]);
+	ipahal_destroy_imm_cmd(cmd_pyld);
 
 	ipahal_write_reg(IPA_LOCAL_PKT_PROC_CNTXT_BASE, dma_cmd.local_addr);
 
@@ -4428,8 +4174,6 @@ static int ipa3_setup_apps_pipes(void)
 	sys_in.desc_fifo_sz = IPA_SYS_DESC_FIFO_SZ;
 	sys_in.notify = ipa3_lan_rx_cb;
 	sys_in.priv = NULL;
-	if (ipa3_ctx->lan_rx_napi_enable)
-		sys_in.napi_obj = &ipa3_ctx->napi_lan_rx;
 	sys_in.ipa_ep_cfg.hdr.hdr_len = IPA_LAN_RX_HEADER_LENGTH;
 	sys_in.ipa_ep_cfg.hdr_ext.hdr_little_endian = false;
 	sys_in.ipa_ep_cfg.hdr_ext.hdr_total_len_or_pad_valid = true;
@@ -4800,7 +4544,8 @@ void ipa3_disable_clks(void)
 
 	ipa3_ctx->ctrl->ipa3_disable_clks();
 
-	ipa_pm_set_clock_index(0);
+	if (ipa3_ctx->use_ipa_pm)
+		ipa_pm_set_clock_index(0);
 
 	if (msm_bus_scale_client_update_request(ipa3_ctx->ipa_bus_hdl, 0))
 		WARN(1, "bus scaling failed");
@@ -4970,10 +4715,19 @@ void ipa3_inc_client_enable_clks(struct ipa_active_client_logging_info *id)
 	}
 
 	ipa3_enable_clks();
-	ipa3_suspend_apps_pipes(false);
-	atomic_inc(&ipa3_ctx->ipa3_active_clients.cnt);
 	IPADBG_LOW("active clients = %d\n",
 		atomic_read(&ipa3_ctx->ipa3_active_clients.cnt));
+	ipa3_suspend_apps_pipes(false);
+	atomic_inc(&ipa3_ctx->ipa3_active_clients.cnt);
+	if (!ipa3_uc_state_check() &&
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v4_1)) {
+		ipa3_read_mailbox_17(IPA_PC_RESTORE_CONTEXT_STATUS_SUCCESS);
+		/* assert if intset = 0 */
+		if (ipa3_ctx->gsi_chk_intset_value == 0) {
+			IPAERR("expected 1, value: 0\n");
+			ipa_assert();
+		}
+	}
 	mutex_unlock(&ipa3_ctx->ipa3_active_clients.mutex);
 }
 
@@ -5024,18 +4778,6 @@ static void __ipa3_dec_client_disable_clks(void)
 	if (ret)
 		goto bail;
 
-	/* Send force close coalsecing frame command in LPM mode before taking
-	 * mutex lock and otherwise observing race condition.
-	 */
-	if (atomic_read(&ipa3_ctx->ipa3_active_clients.cnt) == 1 &&
-		!ipa3_ctx->tag_process_before_gating) {
-		ipa3_force_close_coal();
-		/* While sending force close command setting
-		 * tag process as true to make configure to
-		 * original state
-		 */
-		ipa3_ctx->tag_process_before_gating = false;
-	}
 	/* seems like this is the only client holding the clocks */
 	mutex_lock(&ipa3_ctx->ipa3_active_clients.mutex);
 	if (atomic_read(&ipa3_ctx->ipa3_active_clients.cnt) == 1 &&
@@ -5053,16 +4795,8 @@ static void __ipa3_dec_client_disable_clks(void)
 	ret = atomic_sub_return(1, &ipa3_ctx->ipa3_active_clients.cnt);
 	if (ret > 0)
 		goto unlock_mutex;
-	ret = ipa3_suspend_apps_pipes(true);
-	if (ret) {
-		/* HW is busy, retry after some time */
-		atomic_inc(&ipa3_ctx->ipa3_active_clients.cnt);
-		queue_delayed_work(ipa3_ctx->power_mgmt_wq,
-			&ipa_dec_clients_disable_clks_on_wq_work,
-			IPA_SUSPEND_BUSY_TIMEOUT);
-	} else {
-		ipa3_disable_clks();
-	}
+	ipa3_suspend_apps_pipes(true);
+	ipa3_disable_clks();
 
 unlock_mutex:
 	mutex_unlock(&ipa3_ctx->ipa3_active_clients.mutex);
@@ -5115,8 +4849,8 @@ void ipa3_dec_client_disable_clks_no_block(
 	}
 
 	/* seems like this is the only client holding the clocks */
-	queue_delayed_work(ipa3_ctx->power_mgmt_wq,
-		&ipa_dec_clients_disable_clks_on_wq_work, 0);
+	queue_work(ipa3_ctx->power_mgmt_wq,
+		&ipa_dec_clients_disable_clks_on_wq_work);
 }
 
 /**
@@ -5319,12 +5053,14 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 				void *private_data,
 				void *interrupt_data)
 {
+	enum ipa_rm_resource_name resource;
 	u32 suspend_data =
 		((struct ipa_tx_suspend_irq_data *)interrupt_data)->endpoints;
 	u32 bmsk = 1;
 	u32 i = 0;
 	int res;
 	struct ipa_ep_cfg_holb holb_cfg;
+	struct mutex *pm_mutex_ptr = &ipa3_ctx->transport_pm.transport_pm_mutex;
 	u32 pipe_bitmask = 0;
 
 	IPADBG("interrupt=%d, interrupt_data=%u\n",
@@ -5333,13 +5069,55 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 
 	for (i = 0; i < ipa3_ctx->ipa_num_pipes; i++, bmsk = bmsk << 1) {
 		if ((suspend_data & bmsk) && (ipa3_ctx->ep[i].valid)) {
+			if (ipa3_ctx->use_ipa_pm) {
 				pipe_bitmask |= bmsk;
+				continue;
+			}
+			if (IPA_CLIENT_IS_APPS_CONS(ipa3_ctx->ep[i].client)) {
+				/*
+				 * pipe will be unsuspended as part of
+				 * enabling IPA clocks
+				 */
+				mutex_lock(pm_mutex_ptr);
+				if (!atomic_read(
+					&ipa3_ctx->transport_pm.dec_clients)
+					) {
+					IPA_ACTIVE_CLIENTS_INC_EP(
+						ipa3_ctx->ep[i].client);
+					IPADBG_LOW("Pipes un-suspended.\n");
+					IPADBG_LOW("Enter poll mode.\n");
+					atomic_set(
+					&ipa3_ctx->transport_pm.dec_clients,
+					1);
+					/*
+					 * acquire wake lock as long as suspend
+					 * vote is held
+					 */
+					ipa3_inc_acquire_wakelock();
+					ipa3_process_irq_schedule_rel();
+				}
+				mutex_unlock(pm_mutex_ptr);
+			} else {
+				resource = ipa3_get_rm_resource_from_ep(i);
+				res =
+				ipa_rm_request_resource_with_timer(resource);
+				if (res == -EPERM &&
+					IPA_CLIENT_IS_CONS(
+					   ipa3_ctx->ep[i].client)) {
+					holb_cfg.en = 1;
+					res = ipa3_cfg_ep_holb_by_client(
+					   ipa3_ctx->ep[i].client, &holb_cfg);
+					WARN(res, "holb en failed\n");
+				}
+			}
 		}
 	}
-	res = ipa_pm_handle_suspend(pipe_bitmask);
-	if (res) {
-		IPAERR("ipa_pm_handle_suspend failed %d\n", res);
-		return;
+	if (ipa3_ctx->use_ipa_pm) {
+		res = ipa_pm_handle_suspend(pipe_bitmask);
+		if (res) {
+			IPAERR("ipa_pm_handle_suspend failed %d\n", res);
+			return;
+		}
 	}
 }
 
@@ -5522,7 +5300,7 @@ static void ipa3_freeze_clock_vote_and_notify_modem(void)
 
 void ipa3_reset_freeze_vote(void)
 {
-	if (!ipa3_ctx->smp2p_info.res_sent)
+	if (ipa3_ctx->smp2p_info.res_sent == false)
 		return;
 
 	if (ipa3_ctx->smp2p_info.ipa_clk_on)
@@ -5553,7 +5331,6 @@ static int ipa3_panic_notifier(struct notifier_block *this,
 	if (atomic_read(&ipa3_ctx->ipa_clk_vote)) {
 		ipahal_print_all_regs(false);
 		ipa_save_registers();
-		ipa_wigig_save_regs();
 	}
 
 	return NOTIFY_DONE;
@@ -5615,9 +5392,6 @@ static enum gsi_ver ipa3_get_gsi_ver(enum ipa_hw_type ipa_hw_type)
 		break;
 	case IPA_HW_v4_5:
 		gsi_ver = GSI_VER_2_5;
-		break;
-	case IPA_HW_v4_7:
-		gsi_ver = GSI_VER_2_7;
 		break;
 	default:
 		IPAERR("No GSI version for ipa type %d\n", ipa_hw_type);
@@ -5730,11 +5504,19 @@ static int ipa3_post_init(const struct ipa3_plat_drv_res *resource_p,
 	/* The following will retrieve and save the gsi fw version */
 	ipa_save_gsi_ver();
 
-	if (ipahal_init(ipa3_ctx->ipa_hw_type, ipa3_ctx->mmio,
-		ipa3_ctx->pdev)) {
-		IPAERR("fail to init ipahal\n");
-		result = -EFAULT;
-		goto fail_ipahal;
+	/*
+	 * In Virtual and Emulation mode, IPAHAL initialized at
+	 * pre_init as there is no SMMU. In normal mode need to wait
+	 * until SMMU is attached and thus initialization done here.
+	 */
+	if (ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_VIRTUAL &&
+	    ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_EMULATION) {
+		if (ipahal_init(ipa3_ctx->ipa_hw_type, ipa3_ctx->mmio,
+			ipa3_ctx->pdev)) {
+			IPAERR("fail to init ipahal\n");
+			result = -EFAULT;
+			goto fail_ipahal;
+		}
 	}
 
 	result = ipa3_init_hw();
@@ -5888,7 +5670,6 @@ static int ipa3_post_init(const struct ipa3_plat_drv_res *resource_p,
 		gsi_props.mhi_er_id_limits[0] = resource_p->mhi_evid_limits[0];
 		gsi_props.mhi_er_id_limits[1] = resource_p->mhi_evid_limits[1];
 	}
-	gsi_props.skip_ieob_mask_wa = resource_p->skip_ieob_mask_wa;
 
 	result = gsi_register_device(&gsi_props,
 		&ipa3_ctx->gsi_dev_hdl);
@@ -5964,13 +5745,12 @@ static int ipa3_post_init(const struct ipa3_plat_drv_res *resource_p,
 
 	ipa3_register_panic_hdlr();
 
-	ipa3_debugfs_init();
+	ipa3_debugfs_post_init();
 
 	mutex_lock(&ipa3_ctx->lock);
 	ipa3_ctx->ipa_initialization_complete = true;
 	mutex_unlock(&ipa3_ctx->lock);
-	if (ipa3_ctx->lan_rx_napi_enable)
-		napi_enable(&ipa3_ctx->napi_lan_rx);
+
 	ipa3_trigger_ipa_ready_cbs();
 	complete_all(&ipa3_ctx->init_completion_obj);
 	pr_info("IPA driver initialization was successful.\n");
@@ -5993,7 +5773,9 @@ fail_nat_ipv6ct_init_dev:
 	ipa3_free_dma_task_for_gsi();
 fail_dma_task:
 fail_init_hw:
-	ipahal_destroy();
+	if (ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_VIRTUAL &&
+	    ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_EMULATION)
+		ipahal_destroy();
 fail_ipahal:
 	ipa3_proxy_clk_unvote();
 
@@ -6108,6 +5890,7 @@ static void ipa3_load_ipa_fw(struct work_struct *work)
 	if (result) {
 		IPAERR("IPA FW loading process has failed result=%d\n",
 			result);
+		ipa_assert();
 		return;
 	}
 	pr_info("IPA FW loaded successfully\n");
@@ -6143,9 +5926,8 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 	unsigned long missing;
 
 	char dbg_buff[32] = { 0 };
-	int i = 0;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count)
 		return -EFAULT;
 
 	missing = copy_from_user(dbg_buff, buf, count);
@@ -6164,19 +5946,8 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 	if (ipa3_is_ready())
 		return count;
 
-	/*Ignore empty ipa_config file*/
-	for (i = 0 ; i < count ; ++i) {
-		if (!isspace(dbg_buff[i]))
-			break;
-	}
-
-	if (i == count) {
-		IPADBG("Empty ipa_config file\n");
-		return count;
-	}
-
 	/* Check MHI configuration on MDM devices */
-	if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_MDM) {
+	if (!ipa3_is_msm_device()) {
 
 		if (strnstr(dbg_buff, "vlan", strlen(dbg_buff))) {
 			if (strnstr(dbg_buff, "eth", strlen(dbg_buff)))
@@ -6363,15 +6134,6 @@ static bool ipa_is_mem_dump_allowed(void)
 	return (desc.ret[0] == 1);
 }
 
-static int ipa3_lan_poll(struct napi_struct *napi, int budget)
-{
-	int rcvd_pkts = 0;
-
-	rcvd_pkts = ipa3_lan_rx_poll(ipa3_ctx->clnt_hdl_data_in,
-							NAPI_WEIGHT);
-	return rcvd_pkts;
-}
-
 /**
  * ipa3_pre_init() - Initialize the IPA Driver.
  * This part contains all initialization which doesn't require IPA HW, such
@@ -6401,7 +6163,7 @@ static int ipa3_lan_poll(struct napi_struct *napi, int budget)
  * Initialize the filter block by committing IPV4 and IPV6 default rules
  * Create empty routing table in system memory(no committing)
  * Create a char-device for IPA
- * Initialize IPA PM (power manager)
+ * Initialize IPA RM (resource manager)
  * Configure GSI registers (in GSI case)
  */
 static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
@@ -6434,7 +6196,7 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	for (i = 0; i < IPA_HW_PROTOCOL_MAX; i++) {
 		ipa3_ctx->gsi_info[i].protocol = i;
 		/* initialize all to be not started */
-		for (j = 0; j < IPA_MAX_CH_STATS_SUPPORTED; j++)
+		for (j = 0; j < MAX_CH_STATS_SUPPORTED; j++)
 			ipa3_ctx->gsi_info[i].ch_id_info[j].ch_id =
 				0xFF;
 	}
@@ -6453,20 +6215,18 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	ipa3_ctx->use_64_bit_dma_mask = resource_p->use_64_bit_dma_mask;
 	ipa3_ctx->wan_rx_ring_size = resource_p->wan_rx_ring_size;
 	ipa3_ctx->lan_rx_ring_size = resource_p->lan_rx_ring_size;
-	ipa3_ctx->ipa_wan_skb_page = resource_p->ipa_wan_skb_page;
-	ipa3_ctx->stats.page_recycle_stats[0].total_replenished = 0;
-	ipa3_ctx->stats.page_recycle_stats[0].tmp_alloc = 0;
-	ipa3_ctx->stats.page_recycle_stats[1].total_replenished = 0;
-	ipa3_ctx->stats.page_recycle_stats[1].tmp_alloc = 0;
 	ipa3_ctx->skip_uc_pipe_reset = resource_p->skip_uc_pipe_reset;
 	ipa3_ctx->tethered_flow_control = resource_p->tethered_flow_control;
 	ipa3_ctx->ee = resource_p->ee;
 	ipa3_ctx->gsi_ch20_wa = resource_p->gsi_ch20_wa;
+	ipa3_ctx->use_ipa_pm = resource_p->use_ipa_pm;
 	ipa3_ctx->wdi_over_pcie = resource_p->wdi_over_pcie;
 	ipa3_ctx->ipa3_active_clients_logging.log_rdy = false;
 	ipa3_ctx->ipa_config_is_mhi = resource_p->ipa_mhi_dynamic_config;
 	ipa3_ctx->mhi_evid_limits[0] = resource_p->mhi_evid_limits[0];
 	ipa3_ctx->mhi_evid_limits[1] = resource_p->mhi_evid_limits[1];
+	ipa3_ctx->uc_mailbox17_chk = 0;
+	ipa3_ctx->uc_mailbox17_mismatch = 0;
 	ipa3_ctx->entire_ipa_block_size = resource_p->entire_ipa_block_size;
 	ipa3_ctx->do_register_collection_on_crash =
 	    resource_p->do_register_collection_on_crash;
@@ -6474,11 +6234,10 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	    resource_p->do_testbus_collection_on_crash;
 	ipa3_ctx->do_non_tn_collection_on_crash =
 	    resource_p->do_non_tn_collection_on_crash;
+	ipa3_ctx->ipa_endp_delay_wa = resource_p->ipa_endp_delay_wa;
 	ipa3_ctx->secure_debug_check_action =
-		resource_p->secure_debug_check_action;
-	ipa3_ctx->do_ram_collection_on_crash =
-		resource_p->do_ram_collection_on_crash;
-	ipa3_ctx->lan_rx_napi_enable = resource_p->lan_rx_napi_enable;
+	    resource_p->secure_debug_check_action;
+	ipa3_ctx->ipa_mhi_proxy = resource_p->ipa_mhi_proxy;
 
 	if (ipa3_ctx->secure_debug_check_action == USE_SCM) {
 		if (ipa_is_mem_dump_allowed())
@@ -6501,7 +6260,6 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 		IPADBG("secure debug disabled\n");
 		ipa3_ctx->do_testbus_collection_on_crash = false;
 	}
-	ipa3_ctx->ipa_endp_delay_wa = resource_p->ipa_endp_delay_wa;
 
 	WARN(ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_NORMAL,
 		"Non NORMAL IPA HW mode, is this emulation platform ?");
@@ -6640,6 +6398,22 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 		IPAERR("Allocation of gsi base failed\n");
 		result = -EFAULT;
 		goto fail_gsi_map;
+	}
+
+	/*
+	 * In Virtual and Emulation mode, IPAHAL used to load the
+	 * firmwares and there is no SMMU so IPAHAL is initialized
+	 * here.
+	 */
+	if (ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+	    ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION) {
+		if (ipahal_init(ipa3_ctx->ipa_hw_type,
+				ipa3_ctx->mmio,
+				&(ipa3_ctx->master_pdev->dev))) {
+			IPAERR("fail to init ipahal\n");
+			result = -EFAULT;
+			goto fail_ipahal_init;
+		}
 	}
 
 	mutex_init(&ipa3_ctx->ipa3_active_clients.mutex);
@@ -6811,18 +6585,37 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 		goto fail_device_create;
 	}
 
+	ipa3_debugfs_pre_init();
+
 	/* Create a wakeup source. */
 	wakeup_source_init(&ipa3_ctx->w_lock, "IPA_WS");
 	spin_lock_init(&ipa3_ctx->wakelock_ref_cnt.spinlock);
 
 	/* Initialize Power Management framework */
-	result = ipa_pm_init(&ipa3_res.pm_init);
-	if (result) {
-		IPAERR("IPA PM initialization failed (%d)\n", -result);
-		result = -ENODEV;
-		goto fail_ipa_pm_init;
+	if (ipa3_ctx->use_ipa_pm) {
+		result = ipa_pm_init(&ipa3_res.pm_init);
+		if (result) {
+			IPAERR("IPA PM initialization failed (%d)\n", -result);
+			result = -ENODEV;
+			goto fail_ipa_rm_init;
+		}
+		IPADBG("IPA resource manager initialized");
+	} else {
+		result = ipa_rm_initialize();
+		if (result) {
+			IPAERR("RM initialization failed (%d)\n", -result);
+			result = -ENODEV;
+			goto fail_ipa_rm_init;
+		}
+		IPADBG("IPA resource manager initialized");
+
+		result = ipa3_create_apps_resource();
+		if (result) {
+			IPAERR("Failed to create APPS_CONS resource\n");
+			result = -ENODEV;
+			goto fail_create_apps_resource;
+		}
 	}
-	IPADBG("IPA power manager initialized\n");
 
 	INIT_LIST_HEAD(&ipa3_ctx->ipa_ready_cb_list);
 
@@ -6834,6 +6627,13 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 		IPAERR("Failed to setup IPA DMA\n");
 		result = -ENODEV;
 		goto fail_ipa_dma_setup;
+	}
+
+	result = ipa_eth_init();
+	if (result) {
+		IPAERR("Failed to initialize Ethernet Offload Subsystem\n");
+		result = -ENODEV;
+		goto fail_eth_init;
 	}
 
 	/*
@@ -6887,21 +6687,21 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	/* proxy vote for modem is added in ipa3_post_init() phase */
 	if (ipa3_ctx->ipa_hw_type != IPA_HW_v4_0)
 		ipa3_proxy_clk_unvote();
-
-	/* Create the dummy netdev for LAN RX NAPI*/
-	if (ipa3_ctx->lan_rx_napi_enable) {
-		init_dummy_netdev(&ipa3_ctx->lan_ndev);
-		netif_napi_add(&ipa3_ctx->lan_ndev, &ipa3_ctx->napi_lan_rx,
-			ipa3_lan_poll, NAPI_WEIGHT);
-	}
-
 	return 0;
 fail_cdev_add:
 fail_gsi_pre_fw_load_init:
+	ipa_eth_exit();
+fail_eth_init:
 	ipa3_dma_shutdown();
 fail_ipa_dma_setup:
-	ipa_pm_destroy();
-fail_ipa_pm_init:
+	if (ipa3_ctx->use_ipa_pm)
+		ipa_pm_destroy();
+	else
+		ipa_rm_delete_resource(IPA_RM_RESOURCE_APPS_CONS);
+fail_create_apps_resource:
+	if (!ipa3_ctx->use_ipa_pm)
+		ipa_rm_exit();
+fail_ipa_rm_init:
 	device_destroy(ipa3_ctx->cdev.class, ipa3_ctx->cdev.dev_num);
 fail_device_create:
 	unregister_chrdev_region(ipa3_ctx->cdev.dev_num, 1);
@@ -6935,6 +6735,10 @@ fail_flt_rule_cache:
 fail_create_transport_wq:
 	destroy_workqueue(ipa3_ctx->power_mgmt_wq);
 fail_init_hw:
+	if (ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+	    ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION)
+		ipahal_destroy();
+fail_ipahal_init:
 	gsi_unmap_base();
 fail_gsi_map:
 	if (ipa3_ctx->reg_collection_base)
@@ -6972,6 +6776,12 @@ static int get_ipa_dts_pm_info(struct platform_device *pdev,
 {
 	int result;
 	int i, j;
+
+	ipa_drv_res->use_ipa_pm = of_property_read_bool(pdev->dev.of_node,
+		"qcom,use-ipa-pm");
+	IPADBG("use_ipa_pm=%d\n", ipa_drv_res->use_ipa_pm);
+	if (!ipa_drv_res->use_ipa_pm)
+		return 0;
 
 	result = of_property_read_u32(pdev->dev.of_node,
 		"qcom,msm-bus,num-cases",
@@ -7069,7 +6879,6 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	ipa_drv_res->platform_type = 0;
 	ipa_drv_res->modem_cfg_emb_pipe_flt = false;
 	ipa_drv_res->ipa_wdi2 = false;
-	ipa_drv_res->ipa_wan_skb_page = false;
 	ipa_drv_res->ipa_wdi2_over_gsi = false;
 	ipa_drv_res->ipa_wdi3_over_gsi = false;
 	ipa_drv_res->ipa_mhi_dynamic_config = false;
@@ -7085,7 +6894,6 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	ipa_drv_res->mhi_evid_limits[1] = IPA_MHI_GSI_EVENT_RING_ID_END;
 	ipa_drv_res->ipa_fltrt_not_hashable = false;
 	ipa_drv_res->ipa_endp_delay_wa = false;
-	ipa_drv_res->skip_ieob_mask_wa = false;
 
 	/* Get IPA HW Version */
 	result = of_property_read_u32(pdev->dev.of_node, "qcom,ipa-hw-ver",
@@ -7192,13 +7000,6 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 			ipa_drv_res->ipa_wdi2
 			? "True" : "False");
 
-	ipa_drv_res->ipa_wan_skb_page =
-			of_property_read_bool(pdev->dev.of_node,
-			"qcom,wan-use-skb-page");
-	IPADBG(": Use skb page = %s\n",
-			ipa_drv_res->ipa_wan_skb_page
-			? "True" : "False");
-
 	ipa_drv_res->ipa_fltrt_not_hashable =
 			of_property_read_bool(pdev->dev.of_node,
 			"qcom,ipa-fltrt-not-hashable");
@@ -7219,12 +7020,6 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	IPADBG(": use_bw_vote = %s\n",
 			ipa_drv_res->use_bw_vote
 			? "True" : "False");
-	ipa_drv_res->skip_ieob_mask_wa =
-			of_property_read_bool(pdev->dev.of_node,
-			"qcom,skip-ieob-mask-wa");
-	IPADBG(": skip ieob mask wa = %s\n",
-			ipa_drv_res->skip_ieob_mask_wa
-			? "True" : "False");
 
 	ipa_drv_res->skip_uc_pipe_reset =
 		of_property_read_bool(pdev->dev.of_node,
@@ -7240,11 +7035,11 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 		ipa_drv_res->tethered_flow_control
 		? "True" : "False");
 
-	ipa_drv_res->lan_rx_napi_enable =
+	ipa_drv_res->ipa_mhi_proxy =
 		of_property_read_bool(pdev->dev.of_node,
-		"qcom,lan-rx-napi");
-	IPADBG(": Enable LAN rx NAPI = %s\n",
-		ipa_drv_res->lan_rx_napi_enable
+		"qcom,ipa-mhi-proxy");
+	IPADBG(": Use mhi proxy = %s\n",
+		ipa_drv_res->ipa_mhi_proxy
 		? "True" : "False");
 
 	/* Get IPA wrapper address */
@@ -7431,10 +7226,12 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 		       ipa_drv_res->emulator_intcntrlr_mem_size);
 	}
 
-	ipa_drv_res->entire_ipa_block_size = 0x100000;
 	result = of_property_read_u32(pdev->dev.of_node,
 				      "qcom,entire-ipa-block-size",
 				      &ipa_drv_res->entire_ipa_block_size);
+	if (result || ipa_drv_res->entire_ipa_block_size == 0)
+		ipa_drv_res->entire_ipa_block_size = 0x100000;
+
 	IPADBG(": entire_ipa_block_size = %d\n",
 	       ipa_drv_res->entire_ipa_block_size);
 
@@ -7452,8 +7249,11 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	ipa_drv_res->do_testbus_collection_on_crash =
 	    of_property_read_bool(pdev->dev.of_node,
 				  "qcom,testbus-collection-on-crash");
-	IPADBG(": doing testbus collection on crash = %u\n",
-	       ipa_drv_res->do_testbus_collection_on_crash);
+	IPADBG(": doing testbus collection on crash = %s\n",
+	       ipa_drv_res->do_testbus_collection_on_crash ? "True":"False");
+
+	if (ipa_drv_res->do_testbus_collection_on_crash)
+		ipa_drv_res->do_register_collection_on_crash = true;
 
 	/*
 	 * We'll read non-tn-collection-on-crash here...
@@ -7461,26 +7261,14 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	ipa_drv_res->do_non_tn_collection_on_crash =
 	    of_property_read_bool(pdev->dev.of_node,
 				  "qcom,non-tn-collection-on-crash");
-	IPADBG(": doing non-tn collection on crash = %u\n",
-	       ipa_drv_res->do_non_tn_collection_on_crash);
+	IPADBG(": doing non-tn collection on crash = %s\n",
+	       ipa_drv_res->do_non_tn_collection_on_crash ? "True":"False");
 
-	/*
-	 * We'll read ram-collection-on-crash here...
-	 */
-	ipa_drv_res->do_ram_collection_on_crash =
-		of_property_read_bool(
-			pdev->dev.of_node,
-			"qcom,ram-collection-on-crash");
-	IPADBG(": doing ram collection on crash = %u\n",
-		   ipa_drv_res->do_ram_collection_on_crash);
-
-	if (ipa_drv_res->do_testbus_collection_on_crash ||
-		ipa_drv_res->do_non_tn_collection_on_crash ||
-		ipa_drv_res->do_ram_collection_on_crash)
+	if (ipa_drv_res->do_non_tn_collection_on_crash)
 		ipa_drv_res->do_register_collection_on_crash = true;
 
-	IPADBG(": doing register collection on crash = %u\n",
-	       ipa_drv_res->do_register_collection_on_crash);
+	IPADBG(": doing register collection on crash = %s\n",
+	       ipa_drv_res->do_register_collection_on_crash ? "True":"False");
 
 	result = of_property_read_u32(
 		pdev->dev.of_node,
@@ -7501,67 +7289,81 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 static int ipa_smmu_wlan_cb_probe(struct device *dev)
 {
 	struct ipa_smmu_cb_ctx *cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_WLAN);
-	int fast = 0;
-	int bypass = 0;
+	int atomic_ctx = 1;
+	int fast = 1;
+	int bypass = 1;
+	int ret;
 	u32 add_map_size;
 	const u32 *add_map;
 	int i;
-	u32 iova_ap_mapping[2];
 
-	IPADBG("WLAN CB PROBE dev=%pK\n", dev);
+	IPADBG("sub pdev=%pK\n", dev);
 
 	if (!smmu_info.present[IPA_SMMU_CB_WLAN]) {
 		IPAERR("WLAN SMMU is disabled\n");
 		return 0;
 	}
 
-	IPADBG("WLAN CB PROBE dev=%pK retrieving IOMMU mapping\n", dev);
-
-	cb->iommu_domain = iommu_get_domain_for_dev(dev);
-	if (IS_ERR_OR_NULL(cb->iommu_domain)) {
-		IPAERR("could not get iommu domain\n");
-		return -EINVAL;
+	cb->dev = dev;
+	cb->iommu = iommu_domain_alloc(dev->bus);
+	if (!cb->iommu) {
+		IPAERR("could not alloc iommu domain\n");
+		/* assume this failure is because iommu driver is not ready */
+		return -EPROBE_DEFER;
 	}
 
-	IPADBG("WLAN CB PROBE mapping retrieved\n");
 	cb->is_cache_coherent = of_property_read_bool(dev->of_node,
 							"dma-coherent");
-	cb->dev   = dev;
 	cb->valid = true;
 
-	cb->va_start = cb->va_end  = cb->va_size = 0;
-	if (of_property_read_u32_array(
-			dev->of_node, "qcom,iommu-dma-addr-pool",
-			iova_ap_mapping, 2) == 0) {
-		cb->va_start = iova_ap_mapping[0];
-		cb->va_size  = iova_ap_mapping[1];
-		cb->va_end   = cb->va_start + cb->va_size;
+	if (of_property_read_bool(dev->of_node, "qcom,smmu-s1-bypass") ||
+		ipa3_ctx->ipa_config_is_mhi) {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_WLAN] = true;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN] = true;
+		cb->is_cache_coherent = false;
+
+		if (iommu_domain_set_attr(cb->iommu,
+					DOMAIN_ATTR_S1_BYPASS,
+					&bypass)) {
+			IPAERR("couldn't set bypass\n");
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG("WLAN SMMU S1 BYPASS\n");
+	} else {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_WLAN] = false;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN] = false;
+
+		if (iommu_domain_set_attr(cb->iommu,
+					DOMAIN_ATTR_ATOMIC,
+					&atomic_ctx)) {
+			IPAERR("couldn't disable coherent HTW\n");
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG(" WLAN SMMU ATTR ATOMIC\n");
+
+		if (smmu_info.fast_map) {
+			if (iommu_domain_set_attr(cb->iommu,
+						DOMAIN_ATTR_FAST,
+						&fast)) {
+				IPAERR("couldn't set fast map\n");
+				cb->valid = false;
+				return -EIO;
+			}
+			IPADBG("SMMU fast map set\n");
+		}
 	}
 
-	IPADBG("WLAN CB PROBE dev=%pK va_start=0x%x va_size=0x%x\n",
-		   dev, cb->va_start, cb->va_size);
+	pr_info("IPA smmu_info.s1_bypass_arr[WLAN]=%d smmu_info.fast_map=%d\n",
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_WLAN], smmu_info.fast_map);
 
-	/*
-	 * Prior to these calls to iommu_domain_get_attr(), these
-	 * attributes were set in this function relative to dtsi values
-	 * defined for this driver.  In other words, if corresponding ipa
-	 * driver owned values were found in the dtsi, they were read and
-	 * set here.
-	 *
-	 * In this new world, the developer will use iommu owned dtsi
-	 * settings to set them there.  This new logic below, simply
-	 * checks to see if they've been set in dtsi.  If so, the logic
-	 * further below acts accordingly...
-	 */
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_FAST, &fast);
-
-	IPADBG(
-	  "WLAN CB PROBE dev=%pK DOMAIN ATTRS bypass=%d fast=%d\n",
-	  dev, bypass, fast);
-
-	ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN] = (bypass != 0);
-
+	ret = iommu_attach_device(cb->iommu, dev);
+	if (ret) {
+		IPAERR("could not attach device ret=%d\n", ret);
+		cb->valid = false;
+		return ret;
+	}
 	/* MAP ipa-uc ram */
 	add_map = of_get_property(dev->of_node,
 		"qcom,additional-mapping", &add_map_size);
@@ -7586,90 +7388,144 @@ static int ipa_smmu_wlan_cb_probe(struct device *dev)
 				iova_p, pa_p, size_p);
 			IPADBG_LOW("mapping 0x%lx to 0x%pa size %d\n",
 				iova_p, &pa_p, size_p);
-			ipa3_iommu_map(cb->iommu_domain,
+			ipa3_iommu_map(cb->iommu,
 				iova_p, pa_p, size_p,
 				IOMMU_READ | IOMMU_WRITE | IOMMU_MMIO);
 		}
 	}
-
 	return 0;
 }
 
 static int ipa_smmu_uc_cb_probe(struct device *dev)
 {
 	struct ipa_smmu_cb_ctx *cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_UC);
-	int bypass = 0;
-	int fast = 0;
+	int atomic_ctx = 1;
+	int bypass = 1;
+	int fast = 1;
+	int ret;
 	u32 iova_ap_mapping[2];
+	/* G_RD_CNTR register */
+	u32 a1 = 0x0C220000;
+	u32 a2 = 0x4000;
+	unsigned long iova_p;
+	phys_addr_t pa_p;
+	u32 size_p;
 
-	IPADBG("UC CB PROBE dev=%pK\n", dev);
+	IPADBG("UC CB PROBE sub pdev=%pK\n", dev);
 
 	if (!smmu_info.present[IPA_SMMU_CB_UC]) {
 		IPAERR("UC SMMU is disabled\n");
 		return 0;
 	}
 
+	ret = of_property_read_u32_array(dev->of_node, "qcom,iova-mapping",
+			iova_ap_mapping, 2);
+	if (ret) {
+		IPAERR("Fail to read UC start/size iova addresses\n");
+		return ret;
+	}
+	cb->va_start = iova_ap_mapping[0];
+	cb->va_size = iova_ap_mapping[1];
+	cb->va_end = cb->va_start + cb->va_size;
+	IPADBG("UC va_start=0x%x va_sise=0x%x\n", cb->va_start, cb->va_size);
+
 	if (smmu_info.use_64_bit_dma_mask) {
 		if (dma_set_mask(dev, DMA_BIT_MASK(64)) ||
-			dma_set_coherent_mask(dev, DMA_BIT_MASK(64))) {
+				dma_set_coherent_mask(dev, DMA_BIT_MASK(64))) {
 			IPAERR("DMA set 64bit mask failed\n");
 			return -EOPNOTSUPP;
 		}
 	} else {
 		if (dma_set_mask(dev, DMA_BIT_MASK(32)) ||
-			dma_set_coherent_mask(dev, DMA_BIT_MASK(32))) {
+				dma_set_coherent_mask(dev, DMA_BIT_MASK(32))) {
 			IPAERR("DMA set 32bit mask failed\n");
 			return -EOPNOTSUPP;
 		}
 	}
+	IPADBG("UC CB PROBE=%pK create IOMMU mapping\n", dev);
 
-	IPADBG("UC CB PROBE dev=%pK retrieving IOMMU mapping\n", dev);
-
-	cb->iommu_domain = iommu_get_domain_for_dev(dev);
-	if (IS_ERR_OR_NULL(cb->iommu_domain)) {
-		IPAERR("could not get iommu domain\n");
-		return -EINVAL;
+	cb->dev = dev;
+	cb->mapping = arm_iommu_create_mapping(dev->bus,
+			cb->va_start, cb->va_size);
+	if (IS_ERR_OR_NULL(cb->mapping)) {
+		IPADBG("Fail to create mapping\n");
+		/* assume this failure is because iommu driver is not ready */
+		return -EPROBE_DEFER;
 	}
-
-	IPADBG("UC CB PROBE mapping retrieved\n");
-
 	cb->is_cache_coherent = of_property_read_bool(dev->of_node,
-						"dma-coherent");
-	cb->dev   = dev;
+							"dma-coherent");
+	IPADBG("SMMU mapping created\n");
 	cb->valid = true;
 
-	cb->va_start = cb->va_end  = cb->va_size = 0;
-	if (of_property_read_u32_array(
-			dev->of_node, "qcom,iommu-dma-addr-pool",
-			iova_ap_mapping, 2) == 0) {
-		cb->va_start = iova_ap_mapping[0];
-		cb->va_size  = iova_ap_mapping[1];
-		cb->va_end   = cb->va_start + cb->va_size;
+	IPADBG("UC CB PROBE sub pdev=%pK set attribute\n", dev);
+
+	if (of_property_read_bool(dev->of_node, "qcom,smmu-s1-bypass") ||
+		ipa3_ctx->ipa_config_is_mhi) {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_UC] = true;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] = true;
+		cb->is_cache_coherent = false;
+
+		if (iommu_domain_set_attr(cb->mapping->domain,
+			DOMAIN_ATTR_S1_BYPASS,
+			&bypass)) {
+			IPAERR("couldn't set bypass\n");
+			arm_iommu_release_mapping(cb->mapping);
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG("UC SMMU S1 BYPASS\n");
+	} else {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_UC] = false;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] = false;
+
+		if (iommu_domain_set_attr(cb->mapping->domain,
+			DOMAIN_ATTR_ATOMIC,
+			&atomic_ctx)) {
+			IPAERR("couldn't set domain as atomic\n");
+			arm_iommu_release_mapping(cb->mapping);
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG("SMMU atomic set\n");
+
+		if (smmu_info.fast_map) {
+			if (iommu_domain_set_attr(cb->mapping->domain,
+				DOMAIN_ATTR_FAST,
+				&fast)) {
+				IPAERR("couldn't set fast map\n");
+				arm_iommu_release_mapping(cb->mapping);
+				cb->valid = false;
+				return -EIO;
+			}
+			IPADBG("SMMU fast map set\n");
+		}
 	}
 
-	IPADBG("UC CB PROBE dev=%pK va_start=0x%x va_size=0x%x\n",
-		   dev, cb->va_start, cb->va_size);
+	pr_info("IPA smmu_info.s1_bypass_arr[UC]=%d smmu_info.fast_map=%d\n",
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_UC], smmu_info.fast_map);
 
-	/*
-	 * Prior to these calls to iommu_domain_get_attr(), these
-	 * attributes were set in this function relative to dtsi values
-	 * defined for this driver.  In other words, if corresponding ipa
-	 * driver owned values were found in the dtsi, they were read and
-	 * set here.
-	 *
-	 * In this new world, the developer will use iommu owned dtsi
-	 * settings to set them there.  This new logic below, simply
-	 * checks to see if they've been set in dtsi.  If so, the logic
-	 * further below acts accordingly...
-	 */
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_FAST, &fast);
+	IPADBG("UC CB PROBE sub pdev=%pK attaching IOMMU device\n", dev);
+	ret = arm_iommu_attach_device(cb->dev, cb->mapping);
+	if (ret) {
+		IPAERR("could not attach device ret=%d\n", ret);
+		arm_iommu_release_mapping(cb->mapping);
+		cb->valid = false;
+		return ret;
+	}
 
-	IPADBG("UC CB PROBE dev=%pK DOMAIN ATTRS bypass=%d fast=%d\n",
-		   dev, bypass, fast);
+	/* map G_RD_CNTR for uc*/
+	IPA_SMMU_ROUND_TO_PAGE(a1, a1, a2,
+		iova_p, pa_p, size_p);
 
-	ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] = (bypass != 0);
+	if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_1) {
+		IPADBG_LOW("mapping 0x%lx to 0x%pa size %d\n",
+			iova_p, &pa_p, size_p);
+		ipa3_iommu_map(cb->mapping->domain,
+			iova_p, pa_p, size_p,
+			IOMMU_READ | IOMMU_WRITE | IOMMU_MMIO);
+	}
 
+	cb->next_addr = cb->va_end;
 	ipa3_ctx->uc_pdev = dev;
 
 	return 0;
@@ -7678,8 +7534,11 @@ static int ipa_smmu_uc_cb_probe(struct device *dev)
 static int ipa_smmu_ap_cb_probe(struct device *dev)
 {
 	struct ipa_smmu_cb_ctx *cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_AP);
-	int fast = 0;
-	int bypass = 0;
+	int result;
+	int atomic_ctx = 1;
+	int fast = 1;
+	int bypass = 1;
+	u32 iova_ap_mapping[2];
 	u32 add_map_size;
 	const u32 *add_map;
 	void *smem_addr;
@@ -7692,75 +7551,102 @@ static int ipa_smmu_ap_cb_probe(struct device *dev)
 	u32 size_p;
 	phys_addr_t iova;
 	phys_addr_t pa;
-	u32 iova_ap_mapping[2];
 
-	IPADBG("AP CB PROBE dev=%pK\n", dev);
+	IPADBG("AP CB probe: sub pdev=%pK\n", dev);
 
 	if (!smmu_info.present[IPA_SMMU_CB_AP]) {
 		IPAERR("AP SMMU is disabled");
 		return 0;
 	}
 
+	result = of_property_read_u32_array(dev->of_node, "qcom,iova-mapping",
+		iova_ap_mapping, 2);
+	if (result) {
+		IPAERR("Fail to read AP start/size iova addresses\n");
+		return result;
+	}
+	cb->va_start = iova_ap_mapping[0];
+	cb->va_size = iova_ap_mapping[1];
+	cb->va_end = cb->va_start + cb->va_size;
+	IPADBG("AP va_start=0x%x va_sise=0x%x\n", cb->va_start, cb->va_size);
+
 	if (smmu_info.use_64_bit_dma_mask) {
 		if (dma_set_mask(dev, DMA_BIT_MASK(64)) ||
-			dma_set_coherent_mask(dev, DMA_BIT_MASK(64))) {
+				dma_set_coherent_mask(dev, DMA_BIT_MASK(64))) {
 			IPAERR("DMA set 64bit mask failed\n");
 			return -EOPNOTSUPP;
 		}
 	} else {
 		if (dma_set_mask(dev, DMA_BIT_MASK(32)) ||
-			dma_set_coherent_mask(dev, DMA_BIT_MASK(32))) {
+				dma_set_coherent_mask(dev, DMA_BIT_MASK(32))) {
 			IPAERR("DMA set 32bit mask failed\n");
 			return -EOPNOTSUPP;
 		}
 	}
 
-	IPADBG("AP CB PROBE dev=%pK retrieving IOMMU mapping\n", dev);
-
-	cb->iommu_domain = iommu_get_domain_for_dev(dev);
-	if (IS_ERR_OR_NULL(cb->iommu_domain)) {
-		IPAERR("could not get iommu domain\n");
-		return -EINVAL;
-	}
-
-	IPADBG("AP CB PROBE mapping retrieved\n");
-
 	cb->is_cache_coherent = of_property_read_bool(dev->of_node,
-						"dma-coherent");
-	cb->dev   = dev;
+							"dma-coherent");
+	cb->dev = dev;
+	cb->mapping = arm_iommu_create_mapping(dev->bus,
+					cb->va_start, cb->va_size);
+	if (IS_ERR_OR_NULL(cb->mapping)) {
+		IPADBG("Fail to create mapping\n");
+		/* assume this failure is because iommu driver is not ready */
+		return -EPROBE_DEFER;
+	}
+	IPADBG("SMMU mapping created\n");
 	cb->valid = true;
 
-	cb->va_start = cb->va_end  = cb->va_size = 0;
-	if (of_property_read_u32_array(
-			dev->of_node, "qcom,iommu-dma-addr-pool",
-			iova_ap_mapping, 2) == 0) {
-		cb->va_start = iova_ap_mapping[0];
-		cb->va_size  = iova_ap_mapping[1];
-		cb->va_end   = cb->va_start + cb->va_size;
+	if (of_property_read_bool(dev->of_node,
+		"qcom,smmu-s1-bypass") || ipa3_ctx->ipa_config_is_mhi) {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_AP] = true;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP] = true;
+		cb->is_cache_coherent = false;
+
+		if (iommu_domain_set_attr(cb->mapping->domain,
+				DOMAIN_ATTR_S1_BYPASS,
+				&bypass)) {
+			IPAERR("couldn't set bypass\n");
+			arm_iommu_release_mapping(cb->mapping);
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG("AP/USB SMMU S1 BYPASS\n");
+	} else {
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_AP] = false;
+		ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP] = false;
+		if (iommu_domain_set_attr(cb->mapping->domain,
+				DOMAIN_ATTR_ATOMIC,
+				&atomic_ctx)) {
+			IPAERR("couldn't set domain as atomic\n");
+			arm_iommu_release_mapping(cb->mapping);
+			cb->valid = false;
+			return -EIO;
+		}
+		IPADBG("AP/USB SMMU atomic set\n");
+
+		if (smmu_info.fast_map) {
+			if (iommu_domain_set_attr(cb->mapping->domain,
+				DOMAIN_ATTR_FAST,
+				&fast)) {
+				IPAERR("couldn't set fast map\n");
+				arm_iommu_release_mapping(cb->mapping);
+				cb->valid = false;
+				return -EIO;
+			}
+			IPADBG("SMMU fast map set\n");
+		}
 	}
 
-	IPADBG("AP CB PROBE dev=%pK va_start=0x%x va_size=0x%x\n",
-		   dev, cb->va_start, cb->va_size);
+	pr_info("IPA smmu_info.s1_bypass_arr[AP]=%d smmu_info.fast_map=%d\n",
+		smmu_info.s1_bypass_arr[IPA_SMMU_CB_AP], smmu_info.fast_map);
 
-	/*
-	 * Prior to these calls to iommu_domain_get_attr(), these
-	 * attributes were set in this function relative to dtsi values
-	 * defined for this driver.  In other words, if corresponding ipa
-	 * driver owned values were found in the dtsi, they were read and
-	 * set here.
-	 *
-	 * In this new world, the developer will use iommu owned dtsi
-	 * settings to set them there.  This new logic below, simply
-	 * checks to see if they've been set in dtsi.  If so, the logic
-	 * further below acts accordingly...
-	 */
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_FAST, &fast);
-
-	IPADBG("AP CB PROBE dev=%pK DOMAIN ATTRS bypass=%d fast=%d\n",
-		   dev, bypass, fast);
-
-	ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP] = (bypass != 0);
+	result = arm_iommu_attach_device(cb->dev, cb->mapping);
+	if (result) {
+		IPAERR("couldn't attach to IOMMU ret=%d\n", result);
+		cb->valid = false;
+		return result;
+	}
 
 	add_map = of_get_property(dev->of_node,
 		"qcom,additional-mapping", &add_map_size);
@@ -7785,7 +7671,7 @@ static int ipa_smmu_ap_cb_probe(struct device *dev)
 				iova_p, pa_p, size_p);
 			IPADBG_LOW("mapping 0x%lx to 0x%pa size %d\n",
 				iova_p, &pa_p, size_p);
-			ipa3_iommu_map(cb->iommu_domain,
+			ipa3_iommu_map(cb->mapping->domain,
 				iova_p, pa_p, size_p,
 				IOMMU_READ | IOMMU_WRITE | IOMMU_MMIO);
 		}
@@ -7827,68 +7713,17 @@ static int ipa_smmu_ap_cb_probe(struct device *dev)
 		pa = iova;
 
 		IPA_SMMU_ROUND_TO_PAGE(iova, pa, ipa_smem_size,
-				iova_p, pa_p, size_p);
-		IPADBG("mapping 0x%lx to 0x%pa size %d\n",
-				iova_p, &pa_p, size_p);
-		ipa3_iommu_map(cb->iommu_domain,
-				iova_p, pa_p, size_p,
-				IOMMU_READ | IOMMU_WRITE);
+					iova_p, pa_p, size_p);
+				IPADBG_LOW("mapping 0x%lx to 0x%pa size %d\n",
+					iova_p, &pa_p, size_p);
+				ipa3_iommu_map(cb->mapping->domain,
+					iova_p, pa_p, size_p,
+					IOMMU_READ | IOMMU_WRITE);
 	}
 
 	smmu_info.present[IPA_SMMU_CB_AP] = true;
-
 	ipa3_ctx->pdev = dev;
 	cb->next_addr = cb->va_end;
-
-	return 0;
-}
-
-static int ipa_smmu_11ad_cb_probe(struct device *dev)
-{
-	int bypass = 0;
-	struct ipa_smmu_cb_ctx *cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_11AD);
-	u32 iova_ap_mapping[2];
-
-	IPADBG("11AD CB probe: dev=%pK\n", dev);
-
-	if (!smmu_info.present[IPA_SMMU_CB_11AD]) {
-		IPAERR("11AD SMMU is disabled");
-		return 0;
-	}
-
-	cb->iommu_domain = iommu_get_domain_for_dev(dev);
-	if (IS_ERR_OR_NULL(cb->iommu_domain)) {
-		IPAERR("could not get iommu domain\n");
-		return -EINVAL;
-	}
-	cb->is_cache_coherent = of_property_read_bool(dev->of_node,
-							"dma-coherent");
-	cb->dev   = dev;
-	cb->valid = true;
-
-	cb->va_start = cb->va_end  = cb->va_size = 0;
-	if (of_property_read_u32_array(
-			dev->of_node, "qcom,iommu-dma-addr-pool",
-			iova_ap_mapping, 2) == 0) {
-		cb->va_start = iova_ap_mapping[0];
-		cb->va_size  = iova_ap_mapping[1];
-		cb->va_end   = cb->va_start + cb->va_size;
-	}
-
-	IPADBG("11AD CB PROBE dev=%pK va_start=0x%x va_size=0x%x\n",
-		   dev, cb->va_start, cb->va_size);
-
-	iommu_domain_get_attr(cb->iommu_domain, DOMAIN_ATTR_S1_BYPASS, &bypass);
-
-	IPADBG("11AD CB PROBE dev=%pK DOMAIN ATTRS bypass=%d\n",
-		   dev, bypass);
-
-	ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD] = (bypass != 0);
-
-	if (of_property_read_bool(dev->of_node, "qcom,shared-cb")) {
-		IPADBG("11AD using shared CB\n");
-		cb->shared = true;
-	}
 
 	return 0;
 }
@@ -7902,8 +7737,6 @@ static int ipa_smmu_cb_probe(struct device *dev, enum ipa_smmu_cb_type cb_type)
 		return ipa_smmu_wlan_cb_probe(dev);
 	case IPA_SMMU_CB_UC:
 		return ipa_smmu_uc_cb_probe(dev);
-	case IPA_SMMU_CB_11AD:
-		return ipa_smmu_11ad_cb_probe(dev);
 	case IPA_SMMU_CB_MAX:
 		IPAERR("Invalid cb_type\n");
 	}
@@ -7978,8 +7811,7 @@ static int ipa3_smp2p_probe(struct device *dev)
 		IPADBG("smp2p irq#=%d\n", irq);
 		res = devm_request_threaded_irq(dev, irq, NULL,
 			(irq_handler_t)ipa3_smp2p_modem_clk_query_isr,
-			IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-			"ipa_smp2p_clk_vote", dev);
+			IRQF_TRIGGER_RISING, "ipa_smp2p_clk_vote", dev);
 		if (res) {
 			IPAERR("fail to register smp2p irq=%d\n", irq);
 			return -ENODEV;
@@ -8035,18 +7867,6 @@ int ipa3_plat_drv_probe(struct platform_device *pdev_p,
 		return 0;
 	}
 
-	if (of_device_is_compatible(dev->of_node, "qcom,ipa-smmu-11ad-cb")) {
-		if (ipa3_ctx == NULL) {
-			IPAERR("ipa3_ctx was not initialized\n");
-			return -EPROBE_DEFER;
-		}
-		cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_11AD);
-		cb->dev = dev;
-		smmu_info.present[IPA_SMMU_CB_11AD] = true;
-
-		return 0;
-	}
-
 	if (of_device_is_compatible(dev->of_node,
 	    "qcom,smp2p-map-ipa-1-out"))
 		return ipa3_smp2p_probe(dev);
@@ -8068,9 +7888,16 @@ int ipa3_plat_drv_probe(struct platform_device *pdev_p,
 
 	if (of_property_read_bool(pdev_p->dev.of_node, "qcom,arm-smmu")) {
 		if (of_property_read_bool(pdev_p->dev.of_node,
+			"qcom,smmu-fast-map"))
+			smmu_info.fast_map = true;
+		if (of_property_read_bool(pdev_p->dev.of_node,
 			"qcom,use-64-bit-dma-mask"))
 			smmu_info.use_64_bit_dma_mask = true;
 		smmu_info.arm_smmu = true;
+	} else if (of_property_read_bool(pdev_p->dev.of_node,
+				"qcom,msm-smmu")) {
+		IPAERR("Legacy IOMMU not supported\n");
+		result = -EOPNOTSUPP;
 	} else {
 		if (of_property_read_bool(pdev_p->dev.of_node,
 			"qcom,use-64-bit-dma-mask")) {
@@ -8133,8 +7960,16 @@ int ipa3_ap_suspend(struct device *dev)
 		}
 	}
 
-	ipa_pm_deactivate_all_deferred();
-
+	if (ipa3_ctx->use_ipa_pm) {
+		ipa_pm_deactivate_all_deferred();
+	} else {
+		/*
+		 * Release transport IPA resource without waiting
+		 * for inactivity timer
+		 */
+		atomic_set(&ipa3_ctx->transport_pm.eot_activity, 0);
+		ipa3_transport_release_resource(NULL);
+	}
 	IPADBG("Exit\n");
 
 	return 0;
@@ -8159,11 +7994,6 @@ struct ipa3_context *ipa3_get_ctx(void)
 	return ipa3_ctx;
 }
 
-bool ipa3_get_lan_rx_napi(void)
-{
-	return ipa3_ctx->lan_rx_napi_enable;
-}
-
 static void ipa_gsi_notify_cb(struct gsi_per_notify *notify)
 {
 	/*
@@ -8177,35 +8007,35 @@ static void ipa_gsi_notify_cb(struct gsi_per_notify *notify)
 		break;
 	case GSI_PER_EVT_GLOB_GP1:
 		IPAERR("Got GSI_PER_EVT_GLOB_GP1\n");
-		ipa_assert();
+		BUG();
 		break;
 	case GSI_PER_EVT_GLOB_GP2:
 		IPAERR("Got GSI_PER_EVT_GLOB_GP2\n");
-		ipa_assert();
+		BUG();
 		break;
 	case GSI_PER_EVT_GLOB_GP3:
 		IPAERR("Got GSI_PER_EVT_GLOB_GP3\n");
-		ipa_assert();
+		BUG();
 		break;
 	case GSI_PER_EVT_GENERAL_BREAK_POINT:
 		IPAERR("Got GSI_PER_EVT_GENERAL_BREAK_POINT\n");
 		break;
 	case GSI_PER_EVT_GENERAL_BUS_ERROR:
 		IPAERR("Got GSI_PER_EVT_GENERAL_BUS_ERROR\n");
-		ipa_assert();
+		BUG();
 		break;
 	case GSI_PER_EVT_GENERAL_CMD_FIFO_OVERFLOW:
 		IPAERR("Got GSI_PER_EVT_GENERAL_CMD_FIFO_OVERFLOW\n");
-		ipa_assert();
+		BUG();
 		break;
 	case GSI_PER_EVT_GENERAL_MCS_STACK_OVERFLOW:
 		IPAERR("Got GSI_PER_EVT_GENERAL_MCS_STACK_OVERFLOW\n");
-		ipa_assert();
+		BUG();
 		break;
 	default:
 		IPAERR("Received unexpected evt: %d\n",
 			notify->evt_id);
-		ipa_assert();
+		BUG();
 	}
 }
 
@@ -8243,50 +8073,43 @@ int ipa3_register_ipa_ready_cb(void (*ipa_ready_cb)(void *), void *user_data)
 int ipa3_iommu_map(struct iommu_domain *domain,
 	unsigned long iova, phys_addr_t paddr, size_t size, int prot)
 {
-	struct ipa_smmu_cb_ctx *cb = NULL;
+	struct ipa_smmu_cb_ctx *ap_cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_AP);
+	struct ipa_smmu_cb_ctx *uc_cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_UC);
+	struct ipa_smmu_cb_ctx *wlan_cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_WLAN);
 
 	IPADBG_LOW("domain =0x%pK iova 0x%lx\n", domain, iova);
 	IPADBG_LOW("paddr =0x%pa size 0x%x\n", &paddr, (u32)size);
 
 	/* make sure no overlapping */
 	if (domain == ipa3_get_smmu_domain()) {
-		cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_AP);
-		if (iova >= cb->va_start && iova < cb->va_end) {
+		if (iova >= ap_cb->va_start && iova < ap_cb->va_end) {
 			IPAERR("iommu AP overlap addr 0x%lx\n", iova);
 			ipa_assert();
 			return -EFAULT;
 		}
+		if (ap_cb->is_cache_coherent)
+			prot |= IOMMU_CACHE;
 	} else if (domain == ipa3_get_wlan_smmu_domain()) {
 		/* wlan is one time map */
-		cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_WLAN);
-	} else if (domain == ipa3_get_11ad_smmu_domain()) {
-		/* 11ad is one time map */
-		cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_11AD);
+		if (wlan_cb->is_cache_coherent)
+			prot |= IOMMU_CACHE;
 	} else if (domain == ipa3_get_uc_smmu_domain()) {
-		cb = ipa3_get_smmu_ctx(IPA_SMMU_CB_UC);
-		if (iova >= cb->va_start && iova < cb->va_end) {
+		if (iova >= uc_cb->va_start && iova < uc_cb->va_end) {
 			IPAERR("iommu uC overlap addr 0x%lx\n", iova);
 			ipa_assert();
 			return -EFAULT;
 		}
+		if (uc_cb->is_cache_coherent)
+			prot |= IOMMU_CACHE;
 	} else {
 		IPAERR("Unexpected domain 0x%pK\n", domain);
 		ipa_assert();
 		return -EFAULT;
 	}
-
-	if (cb == NULL) {
-		IPAERR("Unexpected cb turning NULL for domain 0x%pK\n", domain);
-		ipa_assert();
-	}
-
 	/*
-	 * IOMMU_CACHE is needed to make the entries cachable
+	 * IOMMU_CACHE is needed in prot to make the entries cachable
 	 * if cache coherency is enabled in dtsi.
 	 */
-	if (cb->is_cache_coherent)
-		prot |= IOMMU_CACHE;
-
 	return iommu_map(domain, iova, paddr, size, prot);
 }
 
@@ -8296,7 +8119,7 @@ int ipa3_iommu_map(struct iommu_domain *domain,
 int ipa3_get_smmu_params(struct ipa_smmu_in_params *in,
 	struct ipa_smmu_out_params *out)
 {
-	bool is_smmu_enable = false;
+	bool is_smmu_enable = 0;
 
 	if (out == NULL || in == NULL) {
 		IPAERR("bad parms for Client SMMU out params\n");
@@ -8308,55 +8131,23 @@ int ipa3_get_smmu_params(struct ipa_smmu_in_params *in,
 		return -EINVAL;
 	}
 
-	out->shared_cb = false;
-
 	switch (in->smmu_client) {
 	case IPA_SMMU_WLAN_CLIENT:
-		if (ipa3_ctx->ipa_wdi3_over_gsi ||
-			ipa3_ctx->ipa_wdi2_over_gsi)
+		if (ipa3_ctx->ipa_wdi3_over_gsi)
 			is_smmu_enable =
-				!(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP] ||
+				!(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP] |
 				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN]);
 		else
 			is_smmu_enable =
-			!(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] ||
-			ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN]);
-		break;
-	case IPA_SMMU_WIGIG_CLIENT:
-		is_smmu_enable = !(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] ||
-			ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD] ||
-			ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP]);
-		if (is_smmu_enable) {
-			if (ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] ||
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD] ||
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP]) {
-				IPAERR("11AD SMMU Discrepancy (%d %d %d)\n",
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC],
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP],
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD]);
-				WARN_ON(1);
-				return -EINVAL;
-			}
-		} else {
-			if (!ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] ||
-				!ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD] ||
-				!ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP]) {
-				IPAERR("11AD SMMU Discrepancy (%d %d %d)\n",
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC],
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP],
-				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_11AD]);
-				WARN_ON(1);
-				return -EINVAL;
-			}
-		}
-		out->shared_cb = (ipa3_get_smmu_ctx(IPA_SMMU_CB_11AD))->shared;
+				!(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_UC] |
+				ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_WLAN]);
 		break;
 	case IPA_SMMU_AP_CLIENT:
 		is_smmu_enable =
 			!(ipa3_ctx->s1_bypass_arr[IPA_SMMU_CB_AP]);
 		break;
 	default:
-		is_smmu_enable = false;
+		is_smmu_enable = 0;
 		IPAERR("Trying to get illegal clients SMMU status");
 		return -EINVAL;
 	}

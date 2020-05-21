@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
-
 obj-$(CONFIG_MSM_11AD) += msm_11ad_proxy.o
 
 msm_11ad_proxy-y := msm_11ad.o

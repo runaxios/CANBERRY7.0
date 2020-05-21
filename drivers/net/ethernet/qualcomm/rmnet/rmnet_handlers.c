@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * RMNET Data ingress/egress handler
  *
@@ -50,7 +57,7 @@ static int rmnet_check_skb_can_gro(struct sk_buff *skb)
 {
 	unsigned char *data = rmnet_map_data_ptr(skb);
 
-	switch (skb->protocol) {
+	switch(skb->protocol) {
 	case htons(ETH_P_IP):
 		if (((struct iphdr *)data)->protocol == IPPROTO_TCP)
 			return 0;
@@ -80,22 +87,7 @@ void rmnet_set_skb_proto(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(rmnet_set_skb_proto);
 
-bool (*rmnet_shs_slow_start_detect)(u32 hash_key) __rcu __read_mostly;
-EXPORT_SYMBOL(rmnet_shs_slow_start_detect);
-
-bool rmnet_slow_start_on(u32 hash_key)
-{
-	bool (*rmnet_shs_slow_start_on)(u32 hash_key);
-
-	rmnet_shs_slow_start_on = rcu_dereference(rmnet_shs_slow_start_detect);
-	if (rmnet_shs_slow_start_on)
-		return rmnet_shs_slow_start_on(hash_key);
-	return false;
-}
-EXPORT_SYMBOL(rmnet_slow_start_on);
-
 /* Shs hook handler */
-
 int (*rmnet_shs_skb_entry)(struct sk_buff *skb,
 			   struct rmnet_port *port) __rcu __read_mostly;
 EXPORT_SYMBOL(rmnet_shs_skb_entry);
@@ -283,10 +275,8 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 		__skb_queue_tail(&list, skb);
 	}
 
-#ifdef CONFIG_QCOM_QMI_HELPERS
 	if (port->data_format & RMNET_INGRESS_FORMAT_PS)
 		qmi_rmnet_work_maybe_restart(port);
-#endif
 
 	rmnet_deliver_skb_list(&list, port);
 	return;
@@ -308,7 +298,7 @@ rmnet_map_ingress_handler(struct sk_buff *skb,
 					   struct rmnet_port *port);
 
 	if (skb->dev->type == ARPHRD_ETHER) {
-		if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_ATOMIC)) {
+		if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_KERNEL)) {
 			kfree_skb(skb);
 			return;
 		}
@@ -385,11 +375,6 @@ static int rmnet_map_egress_handler(struct sk_buff *skb,
 		if (pskb_expand_head(skb, required_headroom, 0, GFP_ATOMIC))
 			return -ENOMEM;
 	}
-
-#ifdef CONFIG_QCOM_QMI_HELPERS
-	if (port->data_format & RMNET_INGRESS_FORMAT_PS)
-		qmi_rmnet_work_maybe_restart(port);
-#endif
 
 	if (csum_type)
 		rmnet_map_checksum_uplink_packet(skb, orig_dev, csum_type);
@@ -488,9 +473,9 @@ void rmnet_egress_handler(struct sk_buff *skb)
 
 	skb_len = skb->len;
 	err = rmnet_map_egress_handler(skb, port, mux_id, orig_dev);
-	if (err == -ENOMEM) {
+	if (err == -ENOMEM)
 		goto drop;
-	} else if (err == -EINPROGRESS) {
+	else if (err == -EINPROGRESS) {
 		rmnet_vnd_tx_fixup(orig_dev, skb_len);
 		return;
 	}

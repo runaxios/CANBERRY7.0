@@ -18,8 +18,7 @@
 #ifndef __ASM_CMPXCHG_H
 #define __ASM_CMPXCHG_H
 
-#include <linux/build_bug.h>
-#include <linux/compiler.h>
+#include <linux/bug.h>
 
 #include <asm/atomic.h>
 #include <asm/barrier.h>
@@ -74,7 +73,7 @@ __XCHG_CASE( ,  ,  mb_8, dmb ish, nop,  , a, l, "memory")
 #undef __XCHG_CASE
 
 #define __XCHG_GEN(sfx)							\
-static __always_inline  unsigned long __xchg##sfx(unsigned long x,	\
+static inline unsigned long __xchg##sfx(unsigned long x,		\
 					volatile void *ptr,		\
 					int size)			\
 {									\
@@ -116,7 +115,7 @@ __XCHG_GEN(_mb)
 #define xchg(...)		__xchg_wrapper( _mb, __VA_ARGS__)
 
 #define __CMPXCHG_GEN(sfx)						\
-static __always_inline unsigned long __cmpxchg##sfx(volatile void *ptr,	\
+static inline unsigned long __cmpxchg##sfx(volatile void *ptr,		\
 					   unsigned long old,		\
 					   unsigned long new,		\
 					   int size)			\
@@ -197,6 +196,32 @@ __CMPXCHG_GEN(_mb)
 	__ret; \
 })
 
+/* this_cpu_cmpxchg */
+#define _protect_cmpxchg_local(pcp, o, n)			\
+({								\
+	typeof(*raw_cpu_ptr(&(pcp))) __ret;			\
+	preempt_disable();					\
+	__ret = cmpxchg_local(raw_cpu_ptr(&(pcp)), o, n);	\
+	preempt_enable();					\
+	__ret;							\
+})
+
+#define this_cpu_cmpxchg_1(ptr, o, n) _protect_cmpxchg_local(ptr, o, n)
+#define this_cpu_cmpxchg_2(ptr, o, n) _protect_cmpxchg_local(ptr, o, n)
+#define this_cpu_cmpxchg_4(ptr, o, n) _protect_cmpxchg_local(ptr, o, n)
+#define this_cpu_cmpxchg_8(ptr, o, n) _protect_cmpxchg_local(ptr, o, n)
+
+#define this_cpu_cmpxchg_double_8(ptr1, ptr2, o1, o2, n1, n2)		\
+({									\
+	int __ret;							\
+	preempt_disable();						\
+	__ret = cmpxchg_double_local(	raw_cpu_ptr(&(ptr1)),		\
+					raw_cpu_ptr(&(ptr2)),		\
+					o1, o2, n1, n2);		\
+	preempt_enable();						\
+	__ret;								\
+})
+
 #define __CMPWAIT_CASE(w, sz, name)					\
 static inline void __cmpwait_case_##name(volatile void *ptr,		\
 					 unsigned long val)		\
@@ -223,7 +248,7 @@ __CMPWAIT_CASE( ,  , 8);
 #undef __CMPWAIT_CASE
 
 #define __CMPWAIT_GEN(sfx)						\
-static __always_inline void __cmpwait##sfx(volatile void *ptr,		\
+static inline void __cmpwait##sfx(volatile void *ptr,			\
 				  unsigned long val,			\
 				  int size)				\
 {									\

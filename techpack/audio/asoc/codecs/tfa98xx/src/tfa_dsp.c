@@ -1,6 +1,6 @@
 /*
  * Copyright 2014-2017 NXP Semiconductors
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-#include "dbgprint.h"
-#include "tfa_container.h"
-#include "tfa.h"
-#include "tfa98xx_tfafieldnames.h"
-#include "tfa_internal.h"
+#include "inc/dbgprint.h"
+#include "inc/tfa_container.h"
+#include "inc/tfa.h"
+#include "inc/tfa98xx_tfafieldnames.h"
+#include "inc/tfa_internal.h"
 
 #ifdef __KERNEL__
 	#ifdef pr_fmt
@@ -3289,7 +3289,7 @@ enum Tfa98xx_Error tfa_dsp_get_calibration_impedance(struct tfa_device *tfa)
 			/* dsp inside of TFA device. */
 			calibrateDone = 1;
 		}
-		
+
 		/* SoftDSP interface differs from hw-dsp interfaces */
 		if(tfa->is_probus_device && tfa->cnt->ndev > 1) {
 			spkr_count = tfa->cnt->ndev;

@@ -5,7 +5,6 @@
 #if !defined(_TRACE_POWER_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_POWER_H
 
-#include <linux/cpufreq.h>
 #include <linux/ktime.h>
 #include <linux/pm_qos.h>
 #include <linux/tracepoint.h>
@@ -151,20 +150,21 @@ DEFINE_EVENT(cpu, cpu_frequency,
 
 TRACE_EVENT(cpu_frequency_limits,
 
-	TP_PROTO(struct cpufreq_policy *policy),
+	TP_PROTO(unsigned int max_freq, unsigned int min_freq,
+		unsigned int cpu_id),
 
-	TP_ARGS(policy),
+	TP_ARGS(max_freq, min_freq, cpu_id),
 
 	TP_STRUCT__entry(
-		__field(u32, min_freq)
-		__field(u32, max_freq)
-		__field(u32, cpu_id)
+		__field(	u32,		min_freq	)
+		__field(	u32,		max_freq	)
+		__field(	u32,		cpu_id		)
 	),
 
 	TP_fast_assign(
-		__entry->min_freq = policy->min;
-		__entry->max_freq = policy->max;
-		__entry->cpu_id = policy->cpu;
+		__entry->min_freq = min_freq;
+		__entry->max_freq = max_freq;
+		__entry->cpu_id = cpu_id;
 	),
 
 	TP_printk("min=%lu max=%lu cpu_id=%lu",
@@ -181,9 +181,9 @@ TRACE_EVENT(cpu_frequency_switch_start,
 	TP_ARGS(start_freq, end_freq, cpu_id),
 
 	TP_STRUCT__entry(
-		__field(u32, start_freq)
-		__field(u32, end_freq)
-		__field(u32, cpu_id)
+		__field(	u32,		start_freq	)
+		__field(	u32,		end_freq	)
+		__field(	u32,		cpu_id		)
 	),
 
 	TP_fast_assign(
@@ -205,7 +205,7 @@ TRACE_EVENT(cpu_frequency_switch_end,
 	TP_ARGS(cpu_id),
 
 	TP_STRUCT__entry(
-		__field(u32, cpu_id)
+		__field(	u32,		cpu_id		)
 	),
 
 	TP_fast_assign(
@@ -366,6 +366,25 @@ DEFINE_EVENT(clock, clock_set_rate,
 	TP_PROTO(const char *name, unsigned int state, unsigned int cpu_id),
 
 	TP_ARGS(name, state, cpu_id)
+);
+
+TRACE_EVENT(clock_set_parent,
+
+	TP_PROTO(const char *name, const char *parent_name),
+
+	TP_ARGS(name, parent_name),
+
+	TP_STRUCT__entry(
+		__string(       name,           name            )
+		__string(       parent_name,    parent_name     )
+	),
+
+	TP_fast_assign(
+		__assign_str(name, name);
+		__assign_str(parent_name, parent_name);
+	),
+
+	TP_printk("%s parent=%s", __get_str(name), __get_str(parent_name))
 );
 
 /*
@@ -576,17 +595,16 @@ TRACE_EVENT(sugov_util_update,
 	    TP_PROTO(int cpu,
 		     unsigned long util, unsigned long avg_cap,
 		     unsigned long max_cap, unsigned long nl, unsigned long pl,
-		     unsigned int rtgb, unsigned int flags),
-	    TP_ARGS(cpu, util, avg_cap, max_cap, nl, pl, rtgb, flags),
+		     unsigned int flags),
+	    TP_ARGS(cpu, util, avg_cap, max_cap, nl, pl, flags),
 	    TP_STRUCT__entry(
-		    __field(int, cpu)
-		    __field(unsigned long, util)
-		    __field(unsigned long, avg_cap)
-		    __field(unsigned long, max_cap)
-		    __field(unsigned long, nl)
-		    __field(unsigned long, pl)
-		    __field(unsigned int, rtgb)
-		    __field(unsigned int, flags)
+		    __field(	int,		cpu)
+		    __field(	unsigned long,	util)
+		    __field(	unsigned long,	avg_cap)
+		    __field(	unsigned long,	max_cap)
+		    __field(	unsigned long,	nl)
+		    __field(	unsigned long,	pl)
+		    __field(	unsigned int,	flags)
 	    ),
 	    TP_fast_assign(
 		    __entry->cpu = cpu;
@@ -595,13 +613,12 @@ TRACE_EVENT(sugov_util_update,
 		    __entry->max_cap = max_cap;
 		    __entry->nl = nl;
 		    __entry->pl = pl;
-		    __entry->rtgb = rtgb;
 		    __entry->flags = flags;
 	    ),
-	    TP_printk("cpu=%d util=%lu avg_cap=%lu max_cap=%lu nl=%lu pl=%lu rtgb=%u flags=0x%x",
+	    TP_printk("cpu=%d util=%lu avg_cap=%lu max_cap=%lu nl=%lu pl=%lu flags=0x%x",
 		      __entry->cpu, __entry->util, __entry->avg_cap,
 		      __entry->max_cap, __entry->nl,
-		      __entry->pl, __entry->rtgb, __entry->flags)
+		      __entry->pl, __entry->flags)
 );
 
 TRACE_EVENT(sugov_next_freq,
@@ -609,10 +626,63 @@ TRACE_EVENT(sugov_next_freq,
 		     unsigned int freq),
 	    TP_ARGS(cpu, util, max, freq),
 	    TP_STRUCT__entry(
-		    __field(unsigned int, cpu)
-		    __field(unsigned long, util)
-		    __field(unsigned long, max)
-		    __field(unsigned int, freq)
+		    __field(	unsigned int,	cpu)
+		    __field(	unsigned long,	util)
+		    __field(	unsigned long,	max)
+		    __field(	unsigned int,	freq)
+	    ),
+	    TP_fast_assign(
+		    __entry->cpu = cpu;
+		    __entry->util = util;
+		    __entry->max = max;
+		    __entry->freq = freq;
+	    ),
+	    TP_printk("cpu=%u util=%lu max=%lu freq=%u",
+		      __entry->cpu,
+		      __entry->util,
+		      __entry->max,
+		      __entry->freq)
+);
+
+TRACE_EVENT(smugov_util_update,
+	    TP_PROTO(int cpu,
+		     unsigned long util, unsigned long avg_cap,
+		     unsigned long max_cap, unsigned long nl, unsigned long pl,
+		     unsigned int flags),
+	    TP_ARGS(cpu, util, avg_cap, max_cap, nl, pl, flags),
+	    TP_STRUCT__entry(
+		    __field(	int,		cpu)
+		    __field(	unsigned long,	util)
+		    __field(	unsigned long,	avg_cap)
+		    __field(	unsigned long,	max_cap)
+		    __field(	unsigned long,	nl)
+		    __field(	unsigned long,	pl)
+		    __field(	unsigned int,	flags)
+	    ),
+	    TP_fast_assign(
+		    __entry->cpu = cpu;
+		    __entry->util = util;
+		    __entry->avg_cap = avg_cap;
+		    __entry->max_cap = max_cap;
+		    __entry->nl = nl;
+		    __entry->pl = pl;
+		    __entry->flags = flags;
+	    ),
+	    TP_printk("cpu=%d util=%lu avg_cap=%lu max_cap=%lu nl=%lu pl=%lu flags=0x%x",
+		      __entry->cpu, __entry->util, __entry->avg_cap,
+		      __entry->max_cap, __entry->nl,
+		      __entry->pl, __entry->flags)
+);
+
+TRACE_EVENT(smugov_next_freq,
+	    TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max,
+		     unsigned int freq),
+	    TP_ARGS(cpu, util, max, freq),
+	    TP_STRUCT__entry(
+		    __field(	unsigned int,	cpu)
+		    __field(	unsigned long,	util)
+		    __field(	unsigned long,	max)
+		    __field(	unsigned int,	freq)
 	    ),
 	    TP_fast_assign(
 		    __entry->cpu = cpu;
@@ -635,10 +705,10 @@ TRACE_EVENT(bw_hwmon_meas,
 	TP_ARGS(name, mbps, us, wake),
 
 	TP_STRUCT__entry(
-		__string(name,			name)
-		__field(unsigned long,		mbps)
-		__field(unsigned long,		us)
-		__field(int,			wake)
+		__string(	name,			name	)
+		__field(	unsigned long,		mbps	)
+		__field(	unsigned long,		us	)
+		__field(	int,			wake	)
 	),
 
 	TP_fast_assign(
@@ -663,11 +733,11 @@ TRACE_EVENT(bw_hwmon_update,
 	TP_ARGS(name, mbps, freq, up_thres, down_thres),
 
 	TP_STRUCT__entry(
-		__string(name,			name)
-		__field(unsigned long,		mbps)
-		__field(unsigned long,		freq)
-		__field(unsigned long,		up_thres)
-		__field(unsigned long,		down_thres)
+		__string(	name,			name		)
+		__field(	unsigned long,		mbps		)
+		__field(	unsigned long,		freq		)
+		__field(	unsigned long,		up_thres	)
+		__field(	unsigned long,		down_thres	)
 	),
 
 	TP_fast_assign(

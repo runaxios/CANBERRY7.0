@@ -3,7 +3,6 @@
 #
 # This code is based on drivers/scsi/ufs/Kconfig
 # Copyright (C) 2011-2013 Samsung India Software Operations
-# Copyright (C) 2020 XiaoMi, Inc.
 #
 # Authors:
 #	Santosh Yaraganavi <santosh.sy@samsung.com>
@@ -93,8 +92,6 @@ config SCSI_UFS_QCOM
 	tristate "QCOM specific hooks to UFS controller platform driver"
 	depends on SCSI_UFSHCD_PLATFORM && ARCH_QCOM
 	select PHY_QCOM_UFS
-	select EXTCON
-	select EXTCON_STORAGE_CD_GPIO
 	help
 	  This selects the QCOM specific additions to UFSHCD platform driver.
 	  UFS host on QCOM needs some vendor specific configuration before
@@ -116,15 +113,16 @@ config SCSI_UFS_QCOM_ICE
 	  Select this if you have ICE supported for UFS on QCOM chipset.
 	  If unsure, say N.
 
+
 config SCSI_UFS_TEST
 	tristate "Universal Flash Storage host controller driver unit-tests"
 	depends on SCSI_UFSHCD && IOSCHED_TEST
 	default m
-	help
-	  This adds UFS Host controller unit-test framework.
-	  The UFS unit-tests register as a block device test utility to
-	  the test-iosched and will be initiated when the test-iosched will
-	  be chosen to be the active I/O scheduler.
+	---help---
+	This adds UFS Host controller unit-test framework.
+	The UFS unit-tests register as a block device test utility to
+	the test-iosched and will be initiated when the test-iosched will
+	be chosen to be the active I/O scheduler.
 
 config SCSI_UFSHCD_CMD_LOGGING
 	bool "Universal Flash Storage host controller driver layer command logging support"
@@ -136,13 +134,4 @@ config SCSI_UFSHCD_CMD_LOGGING
 	  purpose.
 
 	  Select this if you want above mentioned debug information captured.
-	  If unsure, say N.
-
-config SCSI_UFS_HISI
-	tristate "Hisilicon specific hooks to UFS controller platform driver"
-	depends on (ARCH_HISI || COMPILE_TEST) && SCSI_UFSHCD_PLATFORM
-	---help---
-	  This selects the Hisilicon specific additions to UFSHCD platform driver.
-
-	  Select this if you have UFS controller on Hisilicon chipset.
 	  If unsure, say N.

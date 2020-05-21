@@ -29,12 +29,12 @@ extern int __vdso_gettimeofday(struct timeval *tv, struct timezone *tz);
 extern time_t __vdso_time(time_t *t);
 
 #ifdef CONFIG_PARAVIRT_CLOCK
-extern u8 pvclock_page[PAGE_SIZE]
+extern u8 pvclock_page
 	__attribute__((visibility("hidden")));
 #endif
 
 #ifdef CONFIG_HYPERV_TSCPAGE
-extern u8 hvclock_page[PAGE_SIZE]
+extern u8 hvclock_page
 	__attribute__((visibility("hidden")));
 #endif
 
@@ -191,24 +191,13 @@ notrace static inline u64 vgetsns(int *mode)
 
 	if (gtod->vclock_mode == VCLOCK_TSC)
 		cycles = vread_tsc();
-
-	/*
-	 * For any memory-mapped vclock type, we need to make sure that gcc
-	 * doesn't cleverly hoist a load before the mode check.  Otherwise we
-	 * might end up touching the memory-mapped page even if the vclock in
-	 * question isn't enabled, which will segfault.  Hence the barriers.
-	 */
 #ifdef CONFIG_PARAVIRT_CLOCK
-	else if (gtod->vclock_mode == VCLOCK_PVCLOCK) {
-		barrier();
+	else if (gtod->vclock_mode == VCLOCK_PVCLOCK)
 		cycles = vread_pvclock(mode);
-	}
 #endif
 #ifdef CONFIG_HYPERV_TSCPAGE
-	else if (gtod->vclock_mode == VCLOCK_HVCLOCK) {
-		barrier();
+	else if (gtod->vclock_mode == VCLOCK_HVCLOCK)
 		cycles = vread_hvclock(mode);
-	}
 #endif
 	else
 		return 0;
@@ -331,11 +320,11 @@ int gettimeofday(struct timeval *, struct timezone *)
 notrace time_t __vdso_time(time_t *t)
 {
 	/* This is atomic on x86 so we don't need any locks. */
-	time_t result = READ_ONCE(gtod->wall_time_sec);
+	time_t result = ACCESS_ONCE(gtod->wall_time_sec);
 
 	if (t)
 		*t = result;
 	return result;
 }
-time_t time(time_t *t)
+int time(time_t *t)
 	__attribute__((weak, alias("__vdso_time")));

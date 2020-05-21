@@ -23,11 +23,12 @@
 
 struct gic_quirk {
 	const char *desc;
-	bool (*init)(void *data);
+	void (*init)(void *data);
 	u32 iidr;
 	u32 mask;
 };
 extern bool from_suspend;
+extern struct irq_chip gic_arch_extn;
 
 #ifdef CONFIG_QCOM_SHOW_RESUME_IRQ
 extern int msm_show_resume_irq_mask;

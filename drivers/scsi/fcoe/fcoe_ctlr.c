@@ -49,7 +49,7 @@
 #define	FCOE_CTLR_MIN_FKA	500		/* min keep alive (mS) */
 #define	FCOE_CTLR_DEF_FKA	FIP_DEF_FKA	/* default keep alive (mS) */
 
-static void fcoe_ctlr_timeout(struct timer_list *);
+static void fcoe_ctlr_timeout(unsigned long);
 static void fcoe_ctlr_timer_work(struct work_struct *);
 static void fcoe_ctlr_recv_work(struct work_struct *);
 static int fcoe_ctlr_flogi_retry(struct fcoe_ctlr *);
@@ -156,7 +156,7 @@ void fcoe_ctlr_init(struct fcoe_ctlr *fip, enum fip_mode mode)
 	mutex_init(&fip->ctlr_mutex);
 	spin_lock_init(&fip->ctlr_lock);
 	fip->flogi_oxid = FC_XID_UNKNOWN;
-	timer_setup(&fip->timer, fcoe_ctlr_timeout, 0);
+	setup_timer(&fip->timer, fcoe_ctlr_timeout, (unsigned long)fip);
 	INIT_WORK(&fip->timer_work, fcoe_ctlr_timer_work);
 	INIT_WORK(&fip->recv_work, fcoe_ctlr_recv_work);
 	skb_queue_head_init(&fip->fip_recv_list);
@@ -1393,8 +1393,8 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 	 */
 	num_vlink_desc = rlen / sizeof(*vp);
 	if (num_vlink_desc)
-		vlink_desc_arr = kmalloc_array(num_vlink_desc, sizeof(vp),
-					       GFP_ATOMIC);
+		vlink_desc_arr = kmalloc(sizeof(vp) * num_vlink_desc,
+					 GFP_ATOMIC);
 	if (!vlink_desc_arr)
 		return;
 	num_vlink_desc = 0;
@@ -1789,9 +1789,9 @@ unlock:
  * fcoe_ctlr_timeout() - FIP timeout handler
  * @arg: The FCoE controller that timed out
  */
-static void fcoe_ctlr_timeout(struct timer_list *t)
+static void fcoe_ctlr_timeout(unsigned long arg)
 {
-	struct fcoe_ctlr *fip = from_timer(fip, t, timer);
+	struct fcoe_ctlr *fip = (struct fcoe_ctlr *)arg;
 
 	schedule_work(&fip->timer_work);
 }
@@ -2017,7 +2017,7 @@ EXPORT_SYMBOL_GPL(fcoe_wwn_from_mac);
  */
 static inline struct fcoe_rport *fcoe_ctlr_rport(struct fc_rport_priv *rdata)
 {
-	return container_of(rdata, struct fcoe_rport, rdata);
+	return (struct fcoe_rport *)(rdata + 1);
 }
 
 /**
@@ -2178,13 +2178,15 @@ static void fcoe_ctlr_disc_stop_locked(struct fc_lport *lport)
 {
 	struct fc_rport_priv *rdata;
 
-	mutex_lock(&lport->disc.disc_mutex);
+	rcu_read_lock();
 	list_for_each_entry_rcu(rdata, &lport->disc.rports, peers) {
 		if (kref_get_unless_zero(&rdata->kref)) {
 			fc_rport_logoff(rdata);
 			kref_put(&rdata->kref, fc_rport_destroy);
 		}
 	}
+	rcu_read_unlock();
+	mutex_lock(&lport->disc.disc_mutex);
 	lport->disc.disc_callback = NULL;
 	mutex_unlock(&lport->disc.disc_mutex);
 }
@@ -2281,7 +2283,7 @@ static void fcoe_ctlr_vn_start(struct fcoe_ctlr *fip)
  */
 static int fcoe_ctlr_vn_parse(struct fcoe_ctlr *fip,
 			      struct sk_buff *skb,
-			      struct fcoe_rport *frport)
+			      struct fc_rport_priv *rdata)
 {
 	struct fip_header *fiph;
 	struct fip_desc *desc = NULL;
@@ -2289,11 +2291,15 @@ static int fcoe_ctlr_vn_parse(struct fcoe_ctlr *fip,
 	struct fip_wwn_desc *wwn = NULL;
 	struct fip_vn_desc *vn = NULL;
 	struct fip_size_desc *size = NULL;
+	struct fcoe_rport *frport;
 	size_t rlen;
 	size_t dlen;
 	u32 desc_mask = 0;
 	u32 dtype;
 	u8 sub;
+
+	memset(rdata, 0, sizeof(*rdata) + sizeof(*frport));
+	frport = fcoe_ctlr_rport(rdata);
 
 	fiph = (struct fip_header *)skb->data;
 	frport->flags = ntohs(fiph->fip_flags);
@@ -2357,17 +2363,15 @@ static int fcoe_ctlr_vn_parse(struct fcoe_ctlr *fip,
 			if (dlen != sizeof(struct fip_wwn_desc))
 				goto len_err;
 			wwn = (struct fip_wwn_desc *)desc;
-			frport->rdata.ids.node_name =
-				get_unaligned_be64(&wwn->fd_wwn);
+			rdata->ids.node_name = get_unaligned_be64(&wwn->fd_wwn);
 			break;
 		case FIP_DT_VN_ID:
 			if (dlen != sizeof(struct fip_vn_desc))
 				goto len_err;
 			vn = (struct fip_vn_desc *)desc;
 			memcpy(frport->vn_mac, vn->fd_mac, ETH_ALEN);
-			frport->rdata.ids.port_id = ntoh24(vn->fd_fc_id);
-			frport->rdata.ids.port_name =
-				get_unaligned_be64(&vn->fd_wwpn);
+			rdata->ids.port_id = ntoh24(vn->fd_fc_id);
+			rdata->ids.port_name = get_unaligned_be64(&vn->fd_wwpn);
 			break;
 		case FIP_DT_FC4F:
 			if (dlen != sizeof(struct fip_fc4_feat))
@@ -2711,7 +2715,7 @@ static unsigned long fcoe_ctlr_vn_age(struct fcoe_ctlr *fip)
 	unsigned long deadline;
 
 	next_time = jiffies + msecs_to_jiffies(FIP_VN_BEACON_INT * 10);
-	mutex_lock(&lport->disc.disc_mutex);
+	rcu_read_lock();
 	list_for_each_entry_rcu(rdata, &lport->disc.rports, peers) {
 		if (!kref_get_unless_zero(&rdata->kref))
 			continue;
@@ -2732,7 +2736,7 @@ static unsigned long fcoe_ctlr_vn_age(struct fcoe_ctlr *fip)
 			next_time = deadline;
 		kref_put(&rdata->kref, fc_rport_destroy);
 	}
-	mutex_unlock(&lport->disc.disc_mutex);
+	rcu_read_unlock();
 	return next_time;
 }
 
@@ -2748,7 +2752,10 @@ static int fcoe_ctlr_vn_recv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 {
 	struct fip_header *fiph;
 	enum fip_vn2vn_subcode sub;
-	struct fcoe_rport frport = { };
+	struct {
+		struct fc_rport_priv rdata;
+		struct fcoe_rport frport;
+	} buf;
 	int rc, vlan_id = 0;
 
 	fiph = (struct fip_header *)skb->data;
@@ -2764,7 +2771,7 @@ static int fcoe_ctlr_vn_recv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		goto drop;
 	}
 
-	rc = fcoe_ctlr_vn_parse(fip, skb, &frport);
+	rc = fcoe_ctlr_vn_parse(fip, skb, &buf.rdata);
 	if (rc) {
 		LIBFCOE_FIP_DBG(fip, "vn_recv vn_parse error %d\n", rc);
 		goto drop;
@@ -2773,19 +2780,19 @@ static int fcoe_ctlr_vn_recv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 	mutex_lock(&fip->ctlr_mutex);
 	switch (sub) {
 	case FIP_SC_VN_PROBE_REQ:
-		fcoe_ctlr_vn_probe_req(fip, &frport.rdata);
+		fcoe_ctlr_vn_probe_req(fip, &buf.rdata);
 		break;
 	case FIP_SC_VN_PROBE_REP:
-		fcoe_ctlr_vn_probe_reply(fip, &frport.rdata);
+		fcoe_ctlr_vn_probe_reply(fip, &buf.rdata);
 		break;
 	case FIP_SC_VN_CLAIM_NOTIFY:
-		fcoe_ctlr_vn_claim_notify(fip, &frport.rdata);
+		fcoe_ctlr_vn_claim_notify(fip, &buf.rdata);
 		break;
 	case FIP_SC_VN_CLAIM_REP:
-		fcoe_ctlr_vn_claim_resp(fip, &frport.rdata);
+		fcoe_ctlr_vn_claim_resp(fip, &buf.rdata);
 		break;
 	case FIP_SC_VN_BEACON:
-		fcoe_ctlr_vn_beacon(fip, &frport.rdata);
+		fcoe_ctlr_vn_beacon(fip, &buf.rdata);
 		break;
 	default:
 		LIBFCOE_FIP_DBG(fip, "vn_recv unknown subcode %d\n", sub);
@@ -2809,17 +2816,21 @@ drop:
  */
 static int fcoe_ctlr_vlan_parse(struct fcoe_ctlr *fip,
 			      struct sk_buff *skb,
-			      struct fcoe_rport *frport)
+			      struct fc_rport_priv *rdata)
 {
 	struct fip_header *fiph;
 	struct fip_desc *desc = NULL;
 	struct fip_mac_desc *macd = NULL;
 	struct fip_wwn_desc *wwn = NULL;
+	struct fcoe_rport *frport;
 	size_t rlen;
 	size_t dlen;
 	u32 desc_mask = 0;
 	u32 dtype;
 	u8 sub;
+
+	memset(rdata, 0, sizeof(*rdata) + sizeof(*frport));
+	frport = fcoe_ctlr_rport(rdata);
 
 	fiph = (struct fip_header *)skb->data;
 	frport->flags = ntohs(fiph->fip_flags);
@@ -2874,8 +2885,7 @@ static int fcoe_ctlr_vlan_parse(struct fcoe_ctlr *fip,
 			if (dlen != sizeof(struct fip_wwn_desc))
 				goto len_err;
 			wwn = (struct fip_wwn_desc *)desc;
-			frport->rdata.ids.node_name =
-				get_unaligned_be64(&wwn->fd_wwn);
+			rdata->ids.node_name = get_unaligned_be64(&wwn->fd_wwn);
 			break;
 		default:
 			LIBFCOE_FIP_DBG(fip, "unexpected descriptor type %x "
@@ -2986,19 +2996,22 @@ static int fcoe_ctlr_vlan_recv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 {
 	struct fip_header *fiph;
 	enum fip_vlan_subcode sub;
-	struct fcoe_rport frport = { };
+	struct {
+		struct fc_rport_priv rdata;
+		struct fcoe_rport frport;
+	} buf;
 	int rc;
 
 	fiph = (struct fip_header *)skb->data;
 	sub = fiph->fip_subcode;
-	rc = fcoe_ctlr_vlan_parse(fip, skb, &frport);
+	rc = fcoe_ctlr_vlan_parse(fip, skb, &buf.rdata);
 	if (rc) {
 		LIBFCOE_FIP_DBG(fip, "vlan_recv vlan_parse error %d\n", rc);
 		goto drop;
 	}
 	mutex_lock(&fip->ctlr_mutex);
 	if (sub == FIP_SC_VL_REQ)
-		fcoe_ctlr_vlan_disc_reply(fip, &frport.rdata);
+		fcoe_ctlr_vlan_disc_reply(fip, &buf.rdata);
 	mutex_unlock(&fip->ctlr_mutex);
 
 drop:
@@ -3070,6 +3083,8 @@ static void fcoe_ctlr_vn_disc(struct fcoe_ctlr *fip)
 	mutex_lock(&disc->disc_mutex);
 	callback = disc->pending ? disc->disc_callback : NULL;
 	disc->pending = 0;
+	mutex_unlock(&disc->disc_mutex);
+	rcu_read_lock();
 	list_for_each_entry_rcu(rdata, &disc->rports, peers) {
 		if (!kref_get_unless_zero(&rdata->kref))
 			continue;
@@ -3078,7 +3093,7 @@ static void fcoe_ctlr_vn_disc(struct fcoe_ctlr *fip)
 			fc_rport_login(rdata);
 		kref_put(&rdata->kref, fc_rport_destroy);
 	}
-	mutex_unlock(&disc->disc_mutex);
+	rcu_read_unlock();
 	if (callback)
 		callback(lport, DISC_EV_SUCCESS);
 }

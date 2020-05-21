@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018 - 2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/debugfs.h>
@@ -115,7 +122,7 @@ struct ipa_gsb_iface_info {
 	int (*send_dl_skb)(void *priv, struct sk_buff *skb);
 	struct stats iface_stats;
 	uint32_t partial_hdr_hdl[IPA_IP_MAX];
-	void (*wakeup_request)(void *cl_priv);
+	void (*wakeup_request)(void *);
 	bool is_connected;
 	bool is_resumed;
 	u8 iface_hdl;
@@ -242,7 +249,6 @@ static void ipa_gsb_debugfs_destroy(void)
 static int ipa_gsb_driver_init(struct odu_bridge_params *params)
 {
 	int i;
-
 	if (!ipa_is_ready()) {
 		IPA_GSB_ERR("IPA is not ready\n");
 		return -EFAULT;
@@ -529,7 +535,7 @@ int ipa_bridge_init(struct ipa_bridge_init_params *params, u32 *hdl)
 	}
 
 	for (i = 0; i < MAX_SUPPORTED_IFACE; i++)
-		if (!ipa_gsb_ctx->iface_hdl[i]) {
+		if (ipa_gsb_ctx->iface_hdl[i] == false) {
 			ipa_gsb_ctx->iface_hdl[i] = true;
 			*hdl = i;
 			IPA_GSB_DBG("iface hdl: %d\n", *hdl);
@@ -604,7 +610,6 @@ static void ipa_gsb_deregister_pm(void)
 int ipa_bridge_cleanup(u32 hdl)
 {
 	int i;
-
 	if (!ipa_gsb_ctx) {
 		IPA_GSB_ERR("ipa_gsb_ctx was not initialized\n");
 		return -EFAULT;

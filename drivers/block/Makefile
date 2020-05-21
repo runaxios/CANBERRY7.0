@@ -36,16 +36,13 @@ obj-$(CONFIG_BLK_DEV_RBD)     += rbd.o
 obj-$(CONFIG_BLK_DEV_PCIESSD_MTIP32XX)	+= mtip32xx/
 
 obj-$(CONFIG_BLK_DEV_RSXX) += rsxx/
-obj-$(CONFIG_ZRAM) += zram/
-
 obj-$(CONFIG_BLK_DEV_NULL_BLK)	+= null_blk.o
-null_blk-objs	:= null_blk_main.o
-null_blk-$(CONFIG_BLK_DEV_ZONED) += null_blk_zoned.o
+obj-$(CONFIG_ZRAM) += zram/
 
 skd-y		:= skd_main.o
 swim_mod-y	:= swim.o swim_asm.o
 
 obj-$(CONFIG_VSERVICES_BLOCK_SERVER)     += vs_block_server.o
-CFLAGS_vs_block_server.o += -Wno-error
+CFLAGS_vs_block_server.o += -Werror
 obj-$(CONFIG_VSERVICES_BLOCK_CLIENT)     += vs_block_client.o
-CFLAGS_vs_block_client.o += -Wno-error
+CFLAGS_vs_block_client.o += -Werror

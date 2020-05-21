@@ -70,13 +70,10 @@ struct iova_fq {
 struct iova_domain {
 	spinlock_t	iova_rbtree_lock; /* Lock to protect update of rbtree */
 	struct rb_root	rbroot;		/* iova domain rbtree root */
-	struct rb_node	*cached_node;	/* Save last alloced node */
-	struct rb_node	*cached32_node; /* Save last 32-bit alloced node */
+	struct rb_node	*cached32_node; /* Save last alloced node */
 	unsigned long	granule;	/* pfn granularity for this domain */
 	unsigned long	start_pfn;	/* Lower limit for this domain */
-	unsigned long	end_pfn;        /* Upper limit for this domain */
 	unsigned long	dma_32bit_pfn;
-	struct iova	anchor;		/* rbtree lookup anchor */
 	struct iova_rcache rcaches[IOVA_RANGE_CACHE_MAX_SIZE];	/* IOVA range caches */
 
 	iova_flush_cb	flush_cb;	/* Call-Back function to flush IOMMU
@@ -97,7 +94,6 @@ struct iova_domain {
 						   flush-queues */
 	atomic_t fq_timer_on;			/* 1 when timer is active, 0
 						   when not */
-	bool best_fit;
 };
 
 static inline unsigned long iova_size(struct iova *iova)
@@ -152,13 +148,12 @@ void queue_iova(struct iova_domain *iovad,
 		unsigned long pfn, unsigned long pages,
 		unsigned long data);
 unsigned long alloc_iova_fast(struct iova_domain *iovad, unsigned long size,
-			      unsigned long limit_pfn, bool flush_rcache);
+			      unsigned long limit_pfn);
 struct iova *reserve_iova(struct iova_domain *iovad, unsigned long pfn_lo,
 	unsigned long pfn_hi);
 void copy_reserved_iova(struct iova_domain *from, struct iova_domain *to);
 void init_iova_domain(struct iova_domain *iovad, unsigned long granule,
-	unsigned long start_pfn);
-bool has_iova_flush_queue(struct iova_domain *iovad);
+	unsigned long start_pfn, unsigned long pfn_32bit);
 int init_iova_flush_queue(struct iova_domain *iovad,
 			  iova_flush_cb flush_cb, iova_entry_dtor entry_dtor);
 struct iova *find_iova(struct iova_domain *iovad, unsigned long pfn);
@@ -215,8 +210,7 @@ static inline void queue_iova(struct iova_domain *iovad,
 
 static inline unsigned long alloc_iova_fast(struct iova_domain *iovad,
 					    unsigned long size,
-					    unsigned long limit_pfn,
-					    bool flush_rcache)
+					    unsigned long limit_pfn)
 {
 	return 0;
 }
@@ -235,13 +229,9 @@ static inline void copy_reserved_iova(struct iova_domain *from,
 
 static inline void init_iova_domain(struct iova_domain *iovad,
 				    unsigned long granule,
-				    unsigned long start_pfn)
+				    unsigned long start_pfn,
+				    unsigned long pfn_32bit)
 {
-}
-
-static inline bool has_iova_flush_queue(struct iova_domain *iovad)
-{
-	return false;
 }
 
 static inline int init_iova_flush_queue(struct iova_domain *iovad,

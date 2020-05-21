@@ -1,7 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _ARCH_ARM_MACH_MSM_BUS_ADHOC_H
@@ -84,7 +90,7 @@ struct qos_bcm_type {
 };
 
 struct msm_bus_rsc_device_type {
-	struct device *mbox;
+	struct rpmh_client *mbox;
 	struct list_head bcm_clist[VCD_MAX_CNT];
 	int req_state;
 	uint32_t acv[NUM_CTX];
@@ -236,6 +242,7 @@ static inline struct msm_bus_node_device_type *to_msm_bus_node(struct device *d)
 int msm_bus_enable_limiter(struct msm_bus_node_device_type *nodedev,
 				int throttle_en, uint64_t lim_bw);
 int msm_bus_commit_data(struct list_head *clist);
+void msm_bus_commit_single(struct device *dev);
 int bcm_remove_handoff_req(struct device *dev, void *data);
 int commit_late_init_data(bool lock);
 int msm_bus_query_gen(struct list_head *qlist,
@@ -253,20 +260,6 @@ extern int msm_bus_of_get_static_rules(struct platform_device *pdev,
 extern int msm_rules_update_path(struct list_head *input_list,
 				struct list_head *output_list);
 extern void print_all_rules(void);
-
-extern int in_panic;
-#define mbus_rpmh_rt_mutex_lock(lock)				\
-do {	\
-	if (!in_panic)\
-		rt_mutex_lock(lock);	\
-} while (0)
-
-#define mbus_rpmh_rt_mutex_unlock(lock)				\
-do {	\
-	if (!in_panic)\
-		rt_mutex_unlock(lock);	\
-} while (0)
-
 #ifdef CONFIG_DEBUG_BUS_VOTER
 int msm_bus_floor_init(struct device *dev);
 #else

@@ -73,7 +73,6 @@ static void __unhash_process(struct task_struct *p, bool group_dead)
 	nr_threads--;
 	detach_pid(p, PIDTYPE_PID);
 	if (group_dead) {
-		detach_pid(p, PIDTYPE_TGID);
 		detach_pid(p, PIDTYPE_PGID);
 		detach_pid(p, PIDTYPE_SID);
 
@@ -194,7 +193,6 @@ repeat:
 	rcu_read_unlock();
 
 	proc_flush_task(p);
-	cgroup_release(p);
 
 	write_lock_irq(&tasklist_lock);
 	ptrace_release_task(p);
@@ -220,6 +218,7 @@ repeat:
 	}
 
 	write_unlock_irq(&tasklist_lock);
+	cgroup_release(p);
 	release_thread(p);
 	call_rcu(&p->rcu, delayed_put_task_struct);
 
@@ -497,6 +496,7 @@ static void exit_mm(void)
 {
 	struct mm_struct *mm = current->mm;
 	struct core_state *core_state;
+	int mm_released;
 
 	mm_release(current, mm);
 	if (!mm)
@@ -543,9 +543,12 @@ static void exit_mm(void)
 	enter_lazy_tlb(mm, current);
 	task_unlock(current);
 	mm_update_next_owner(mm);
-	mmput(mm);
+
+	mm_released = mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
+	if (mm_released)
+		set_tsk_thread_flag(current, TIF_MM_RELEASED);
 }
 
 static struct task_struct *find_alive_thread(struct task_struct *p)
@@ -690,8 +693,7 @@ static void forget_original_parent(struct task_struct *father,
 				t->parent = t->real_parent;
 			if (t->pdeath_signal)
 				group_send_sig_info(t->pdeath_signal,
-						    SEND_SIG_NOINFO, t,
-						    PIDTYPE_TGID);
+						    SEND_SIG_NOINFO, t);
 		}
 		/*
 		 * If this is a threaded reparent there is no need to
@@ -753,6 +755,7 @@ static void check_stack_usage(void)
 	static DEFINE_SPINLOCK(low_water_lock);
 	static int lowest_to_date = THREAD_SIZE;
 	unsigned long free;
+	int islower = false;
 
 	free = stack_not_used(current);
 
@@ -761,11 +764,15 @@ static void check_stack_usage(void)
 
 	spin_lock(&low_water_lock);
 	if (free < lowest_to_date) {
-		pr_info("%s (%d) used greatest stack depth: %lu bytes left\n",
-			current->comm, task_pid_nr(current), free);
 		lowest_to_date = free;
+		islower = true;
 	}
 	spin_unlock(&low_water_lock);
+
+	if (islower) {
+		pr_info("%s (%d) used greatest stack depth: %lu bytes left\n",
+				current->comm, task_pid_nr(current), free);
+	}
 }
 #else
 static inline void check_stack_usage(void) {}
@@ -804,7 +811,11 @@ void __noreturn do_exit(long code)
 	 * leave this task alone and wait for reboot.
 	 */
 	if (unlikely(tsk->flags & PF_EXITING)) {
+#ifdef CONFIG_PANIC_ON_RECURSIVE_FAULT
+		panic("Recursive fault!\n");
+#else
 		pr_alert("Fixing recursive fault but reboot is needed!\n");
+#endif
 		/*
 		 * We can do this unlocked here. The futex code uses
 		 * this flag just to verify whether the pi state
@@ -1012,6 +1023,14 @@ struct wait_opts {
 	wait_queue_entry_t		child_wait;
 	int			notask_error;
 };
+
+static inline
+struct pid *task_pid_type(struct task_struct *task, enum pid_type type)
+{
+	if (type != PIDTYPE_PID)
+		task = task->group_leader;
+	return task->pids[type].pid;
+}
 
 static int eligible_pid(struct wait_opts *wo, struct task_struct *p)
 {
@@ -1343,7 +1362,7 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 	 * Ensure that EXIT_ZOMBIE -> EXIT_DEAD/EXIT_TRACE transition
 	 * can't confuse the checks below.
 	 */
-	int exit_state = READ_ONCE(p->exit_state);
+	int exit_state = ACCESS_ONCE(p->exit_state);
 	int ret;
 
 	if (unlikely(exit_state == EXIT_DEAD))
@@ -1695,7 +1714,7 @@ SYSCALL_DEFINE4(wait4, pid_t, upid, int __user *, stat_addr,
  */
 SYSCALL_DEFINE3(waitpid, pid_t, pid, int __user *, stat_addr, int, options)
 {
-	return kernel_wait4(pid, stat_addr, options, NULL);
+	return sys_wait4(pid, stat_addr, options, NULL);
 }
 
 #endif

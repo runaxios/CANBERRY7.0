@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "AXI: %s(): " fmt, __func__
@@ -41,7 +47,7 @@ static int get_qos_mode(struct platform_device *pdev,
 			break;
 	}
 	if (i == ARRAY_SIZE(qos_names))
-		dev_err(&pdev->dev, "Cannot match mode qos %s using Bypass\n",
+		dev_err(&pdev->dev, "Cannot match mode qos %s using Bypass",
 				qos_mode);
 	else
 		ret = i;
@@ -184,6 +190,12 @@ static void get_qos_params(
 	of_property_read_u32(dev_node, "qcom,prio-wr",
 						&node_info->qos_params.prio_wr);
 
+	of_property_read_u32(dev_node, "qcom,prio",
+					&node_info->qos_params.prio_dflt);
+
+	node_info->qos_params.urg_fwd_en = of_property_read_bool(dev_node,
+						"qcom,forwarding");
+
 	of_property_read_u32(dev_node, "qcom,gp",
 						&node_info->qos_params.gp);
 
@@ -237,7 +249,7 @@ static int msm_bus_of_parse_clk_array(struct device_node *dev_node,
 
 		if (IS_ERR_OR_NULL((*clk_arr)[idx].clk)) {
 			dev_err(&pdev->dev,
-				"Failed to get clk %s for bus%d\n", clk_name,
+				"Failed to get clk %s for bus%d ", clk_name,
 									id);
 			continue;
 		}
@@ -436,7 +448,7 @@ static struct msm_bus_node_info_type *get_node_info_data(
 	if (!IS_ERR_OR_NULL(bus_dev)) {
 		if (of_property_read_u32(bus_dev, "cell-id",
 			&node_info->bus_device_id)) {
-			dev_err(&pdev->dev, "Can't find bus device. Node %d\n",
+			dev_err(&pdev->dev, "Can't find bus device. Node %d",
 					node_info->id);
 			goto node_info_err;
 		}
@@ -532,7 +544,7 @@ static int get_bus_node_device_data(
 			int ret;
 
 			dev_err(&pdev->dev,
-				"%s:Failed to get bus clk for bus%d ctx%d\n",
+				"%s:Failed to get bus clk for bus%d ctx%d",
 				__func__, node_device->node_info->id,
 								DUAL_CTX);
 			ret = (IS_ERR(node_device->clk[DUAL_CTX].clk) ?
@@ -553,7 +565,7 @@ static int get_bus_node_device_data(
 			int ret;
 
 			dev_err(&pdev->dev,
-				"Failed to get bus clk for bus%d ctx%d\n",
+				"Failed to get bus clk for bus%d ctx%d",
 				 node_device->node_info->id, ACTIVE_CTX);
 			ret = (IS_ERR(node_device->clk[DUAL_CTX].clk) ?
 			PTR_ERR(node_device->clk[DUAL_CTX].clk) : -ENXIO);
@@ -595,8 +607,7 @@ static int get_bus_node_device_data(
 						&node_device->node_qos_clks,
 						&node_device->num_node_qos_clks,
 						node_device->node_info->id)) {
-				dev_info(&pdev->dev,
-					"Bypass QoS programming\n");
+				dev_info(&pdev->dev, "Bypass QoS programming");
 				node_device->fabdev->bypass_qos_prg = true;
 			}
 			of_node_put(qos_clk_node);
@@ -645,8 +656,7 @@ static int get_bus_node_device_data(
 						&node_device->node_qos_clks,
 						&node_device->num_node_qos_clks,
 						node_device->node_info->id)) {
-				dev_info(&pdev->dev,
-					"Bypass QoS programming\n");
+				dev_info(&pdev->dev, "Bypass QoS programming");
 				node_device->fabdev->bypass_qos_prg = true;
 			}
 			of_node_put(qos_clk_node);
@@ -770,7 +780,7 @@ static int msm_bus_of_get_ids(struct platform_device *pdev,
 		*num_ids = size / sizeof(int);
 		ids = devm_kzalloc(&pdev->dev, size, GFP_KERNEL);
 	} else {
-		dev_err(&pdev->dev, "No rule nodes, skipping node\n");
+		dev_err(&pdev->dev, "No rule nodes, skipping node");
 		ret = -ENXIO;
 		goto exit_get_ids;
 	}
@@ -779,14 +789,14 @@ static int msm_bus_of_get_ids(struct platform_device *pdev,
 	for (i = 0; i < *num_ids; i++) {
 		rule_node = of_parse_phandle(dev_node, prop_name, i);
 		if (IS_ERR_OR_NULL(rule_node)) {
-			dev_err(&pdev->dev, "Can't get rule node id\n");
+			dev_err(&pdev->dev, "Can't get rule node id");
 			ret = -ENXIO;
 			goto err_get_ids;
 		}
 
 		if (of_property_read_u32(rule_node, "cell-id",
 				&ids[i])) {
-			dev_err(&pdev->dev, "Can't get rule node id\n");
+			dev_err(&pdev->dev, "Can't get rule node id");
 			ret = -ENXIO;
 			goto err_get_ids;
 		}
@@ -838,7 +848,7 @@ int msm_bus_of_get_static_rules(struct platform_device *pdev,
 		ret = of_property_read_u32(child_node, "qcom,src-field",
 				&local_rule[rule_idx].src_field);
 		if (ret) {
-			dev_err(&pdev->dev, "src-field missing\n");
+			dev_err(&pdev->dev, "src-field missing");
 			ret = -ENXIO;
 			goto err_static_rules;
 		}
@@ -846,7 +856,7 @@ int msm_bus_of_get_static_rules(struct platform_device *pdev,
 		ret = of_property_read_u32(child_node, "qcom,src-op",
 				&local_rule[rule_idx].op);
 		if (ret) {
-			dev_err(&pdev->dev, "src-op missing\n");
+			dev_err(&pdev->dev, "src-op missing");
 			ret = -ENXIO;
 			goto err_static_rules;
 		}
@@ -854,14 +864,14 @@ int msm_bus_of_get_static_rules(struct platform_device *pdev,
 		ret = of_property_read_u32(child_node, "qcom,mode",
 				&local_rule[rule_idx].mode);
 		if (ret) {
-			dev_err(&pdev->dev, "mode missing\n");
+			dev_err(&pdev->dev, "mode missing");
 			ret = -ENXIO;
 			goto err_static_rules;
 		}
 
 		ret = of_property_read_u32(child_node, "qcom,thresh", &bw_fld);
 		if (ret) {
-			dev_err(&pdev->dev, "thresh missing\n");
+			dev_err(&pdev->dev, "thresh missing");
 			ret = -ENXIO;
 			goto err_static_rules;
 		} else

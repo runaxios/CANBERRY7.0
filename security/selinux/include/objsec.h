@@ -26,6 +26,8 @@
 #include <linux/in.h>
 #include <linux/spinlock.h>
 #include <net/net_namespace.h>
+//#include "flask.h"
+//#include "avc.h"
 #include "security.h"
 
 struct task_security_struct {
@@ -131,10 +133,6 @@ struct sk_security_struct {
 	u32 sid;			/* SID of this object */
 	u32 peer_sid;			/* SID of peer */
 	u16 sclass;			/* sock security class */
-	enum {				/* SCTP association state */
-		SCTP_ASSOC_UNSET = 0,
-		SCTP_ASSOC_SET,
-	} sctp_assoc_state;
 };
 
 struct tun_security_struct {
@@ -158,5 +156,7 @@ struct pkey_security_struct {
 struct bpf_security_struct {
 	u32 sid;  /*SID of bpf obj creater*/
 };
+
+extern unsigned int selinux_checkreqprot;
 
 #endif /* _SELINUX_OBJSEC_H_ */

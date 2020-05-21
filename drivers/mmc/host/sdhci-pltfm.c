@@ -165,7 +165,6 @@ struct sdhci_host *sdhci_pltfm_init(struct platform_device *pdev,
 	if (!IS_ERR(extcon))
 		host->mmc->extcon = extcon;
 
-
 	platform_set_drvdata(pdev, host);
 
 	return host;

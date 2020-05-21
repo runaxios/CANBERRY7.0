@@ -44,7 +44,9 @@ struct bvec_iter {
 
 	unsigned int            bi_bvec_done;	/* number of bytes completed in
 						   current bvec */
+#ifdef CONFIG_PFK
 	u64			bi_dun;		/* DUN setting for bio */
+#endif
 };
 
 /*
@@ -125,14 +127,5 @@ static inline bool bvec_iter_rewind(const struct bio_vec *bv,
 	     (iter).bi_size &&						\
 		((bvl = bvec_iter_bvec((bio_vec), (iter))), 1);	\
 	     bvec_iter_advance((bio_vec), &(iter), (bvl).bv_len))
-
-/* for iterating one bio from start to end */
-#define BVEC_ITER_ALL_INIT (struct bvec_iter)				\
-{									\
-	.bi_sector	= 0,						\
-	.bi_size	= UINT_MAX,					\
-	.bi_idx		= 0,						\
-	.bi_bvec_done	= 0,						\
-}
 
 #endif /* __LINUX_BVEC_ITER_H */

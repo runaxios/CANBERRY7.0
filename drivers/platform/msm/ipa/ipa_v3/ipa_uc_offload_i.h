@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _IPA_UC_OFFLOAD_I_H_
@@ -30,8 +37,6 @@
 #define MAX_MHIP_CHANNELS 4
 #define MAX_USB_CHANNELS 2
 
-#define BW_QUOTA_MONITORING_MAX_ADDR_OFFSET 8
-#define BW_MONITORING_MAX_THRESHOLD 3
 /**
  *  @brief   Enum value determined based on the feature it
  *           corresponds to
@@ -100,7 +105,6 @@ enum ipa4_hw_protocol {
  * @IPA_HW_2_CPU_EVENT_ERROR : Event specify a system error is detected by the
  *  device
  * @IPA_HW_2_CPU_EVENT_LOG_INFO : Event providing logging specific information
- * @IPA_HW_2_CPU_POST_EVNT_RING_NOTIFICAITON : Event to notify APPS
  */
 enum ipa3_hw_2_cpu_events {
 	IPA_HW_2_CPU_EVENT_NO_OP     =
@@ -109,8 +113,6 @@ enum ipa3_hw_2_cpu_events {
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 1),
 	IPA_HW_2_CPU_EVENT_LOG_INFO  =
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 2),
-	IPA_HW_2_CPU_EVNT_RING_NOTIFY  =
-		FEATURE_ENUM_VAL(IPA_HW_FEATURE_COMMON, 3),
 };
 
 /**
@@ -452,8 +454,6 @@ struct Ipa3HwStatsNTNInfoData_t {
  * uC stats calculation for a particular protocol
  * @IPA_CPU_2_HW_CMD_OFFLOAD_STATS_DEALLOC: Command to stop the
  * uC stats calculation for a particular protocol
- * @IPA_CPU_2_HW_CMD_QUOTA_MONITORING : Command to start the Quota monitoring
- * @IPA_CPU_2_HW_CMD_BW_MONITORING : Command to start the BW monitoring
  */
 enum ipa_cpu_2_hw_offload_commands {
 	IPA_CPU_2_HW_CMD_OFFLOAD_CHANNEL_SET_UP  =
@@ -468,11 +468,34 @@ enum ipa_cpu_2_hw_offload_commands {
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_OFFLOAD, 5),
 	IPA_CPU_2_HW_CMD_OFFLOAD_STATS_DEALLOC =
 		FEATURE_ENUM_VAL(IPA_HW_FEATURE_OFFLOAD, 6),
-	IPA_CPU_2_HW_CMD_QUOTA_MONITORING =
-		FEATURE_ENUM_VAL(IPA_HW_FEATURE_OFFLOAD, 7),
-	IPA_CPU_2_HW_CMD_BW_MONITORING =
-		FEATURE_ENUM_VAL(IPA_HW_FEATURE_OFFLOAD, 8),
 };
+
+/**
+ * struct IpaOffloadStatschannel_info - channel info for uC
+ * stats
+ * @dir: Director of the channel ID DIR_CONSUMER =0,
+ * DIR_PRODUCER = 1
+ * @ch_id: Channel id of the IPA endpoint for which stats need
+ * to be calculated, 0xFF means invalid channel or disable stats
+ * on already stats enabled channel
+ */
+struct IpaOffloadStatschannel_info {
+	uint8_t dir;
+	uint8_t ch_id;
+} __packed;
+
+/**
+ * struct IpaHwOffloadStatsAllocCmdData_t - protocol info for uC
+ * stats start
+ * @protocol: Enum that indicates the protocol type
+ * @ch_id_info: Channel id of the IPA endpoint for which stats
+ * need to be calculated
+ */
+struct IpaHwOffloadStatsAllocCmdData_t {
+	uint32_t protocol;
+	struct IpaOffloadStatschannel_info
+		ch_id_info[MAX_CH_STATS_SUPPORTED];
+} __packed;
 
 /**
  * struct IpaHwOffloadStatsDeAllocCmdData_t - protocol info for
@@ -607,48 +630,6 @@ struct IpaHwOffloadSetUpCmdData_t {
 	union IpaHwSetUpCmd SetupCh_params;
 } __packed;
 
-struct IpaCommonMonitoringParams_t {
-	/* max 8 */
-	uint8_t  Num;
-	/* Sampling interval in ms */
-	uint8_t  Interval;
-	uint16_t Offset[BW_QUOTA_MONITORING_MAX_ADDR_OFFSET];
-} __packed; // 18 bytes
-
-struct IpaWdiQuotaMonitoringParams_t {
-	uint64_t Quota;
-	struct IpaCommonMonitoringParams_t info;
-} __packed;
-
-struct IpaWdiBwMonitoringParams_t {
-	uint64_t BwThreshold[BW_MONITORING_MAX_THRESHOLD];
-	struct IpaCommonMonitoringParams_t info;
-	uint8_t NumThresh;
-	/*Variable to Start Stop Bw Monitoring*/
-	uint8_t Stop;
-} __packed;
-
-union IpaQuotaMonitoringParams_t {
-	struct IpaWdiQuotaMonitoringParams_t WdiQM;
-} __packed;
-
-union IpaBwMonitoringParams_t {
-	struct IpaWdiBwMonitoringParams_t WdiBw;
-} __packed;
-
-struct IpaQuotaMonitoring_t {
-	/* indicates below union needs to be interpreted */
-	uint32_t protocol;
-	union IpaQuotaMonitoringParams_t  params;
-} __packed;
-
-struct IpaBwMonitoring_t {
-	/* indicates below union needs to be interpreted */
-	uint32_t protocol;
-	union IpaBwMonitoringParams_t   params;
-} __packed;
-
-
 struct IpaHwOffloadSetUpCmdData_t_v4_0 {
 	u32 protocol;
 	union IpaHwSetUpCmd SetupCh_params;
@@ -668,46 +649,6 @@ union IpaHwCommonChCmd {
 struct IpaHwOffloadCommonChCmdData_t {
 	u8 protocol;
 	union IpaHwCommonChCmd CommonCh_params;
-} __packed;
-
-enum EVENT_2_CPU_OPCODE {
-	BW_NOTIFY = 0x0,
-	QUOTA_NOTIFY = 0x1,
-};
-
-struct EventStructureBwMonitoring_t {
-	uint32_t ThresholdIndex;
-	uint64_t throughput;
-} __packed;
-
-struct EventStructureQuotaMonitoring_t {
-	/* indicate threshold has reached */
-	uint32_t ThreasholdReached;
-	uint64_t usage;
-} __packed;
-
-union EventParamFormat_t {
-	struct EventStructureBwMonitoring_t bw_param;
-	struct EventStructureQuotaMonitoring_t quota_param;
-} __packed;
-
-/* EVT RING STRUCTURE
- *	|	Word|	bit	|	Field	|
- *	-----------------------------
- *	|	0	|0	-	8|	Protocol|
- *	|		|8	-	16|	Reserved0|
- *	|		|16	-	24|	Opcode	|
- *	|		|24	-	31|	Reserved1|
- *	|	1	|0	-	31|	Word1	|
- *	|	2	|0	-	31|	Word2	|
- *	|	3	|0	-	31|	Word3	|
- */
-struct eventElement_t {
-	uint8_t Protocol;
-	uint8_t Reserved0;
-	uint8_t Opcode;
-	uint8_t Reserved1;
-	union EventParamFormat_t Value;
 } __packed;
 
 struct IpaHwOffloadCommonChCmdData_t_v4_0 {

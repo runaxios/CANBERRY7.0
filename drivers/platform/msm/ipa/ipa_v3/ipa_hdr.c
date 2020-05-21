@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "ipa_i.h"
@@ -36,7 +42,7 @@ static int ipa3_generate_hdr_hw_tbl(struct ipa_mem_buffer *mem)
 	IPADBG_LOW("tbl_sz=%d\n", ipa3_ctx->hdr_tbl.end);
 
 alloc:
-	mem->base = dma_zalloc_coherent(ipa3_ctx->pdev, mem->size,
+	mem->base = dma_alloc_coherent(ipa3_ctx->pdev, mem->size,
 			&mem->phys_base, flag);
 	if (!mem->base) {
 		if (flag == GFP_KERNEL) {
@@ -47,6 +53,7 @@ alloc:
 		return -ENOMEM;
 	}
 
+	memset(mem->base, 0, mem->size);
 	list_for_each_entry(entry, &ipa3_ctx->hdr_tbl.head_hdr_entry_list,
 			link) {
 		if (entry->is_hdr_proc_ctx)
@@ -99,8 +106,7 @@ static int ipa3_hdr_proc_ctx_to_hw_format(struct ipa_mem_buffer *mem,
 				entry->hdr->phys_base,
 				hdr_base_addr,
 				entry->hdr->offset_entry,
-				&entry->l2tp_params,
-				&entry->generic_params,
+				entry->l2tp_params,
 				ipa3_ctx->use_64_bit_dma_mask);
 		if (ret)
 			return ret;
@@ -155,7 +161,7 @@ static int ipa3_generate_hdr_proc_ctx_hw_tbl(u64 hdr_sys_addr,
  */
 int __ipa_commit_hdr_v3_0(void)
 {
-	struct ipa3_desc desc[3];
+	struct ipa3_desc desc[2];
 	struct ipa_mem_buffer hdr_mem;
 	struct ipa_mem_buffer ctx_mem;
 	struct ipa_mem_buffer aligned_ctx_mem;
@@ -165,17 +171,12 @@ int __ipa_commit_hdr_v3_0(void)
 	struct ipahal_imm_cmd_hdr_init_system hdr_init_cmd = {0};
 	struct ipahal_imm_cmd_pyld *hdr_cmd_pyld = NULL;
 	struct ipahal_imm_cmd_pyld *ctx_cmd_pyld = NULL;
-	struct ipahal_imm_cmd_pyld *coal_cmd_pyld = NULL;
 	int rc = -EFAULT;
-	int i;
-	int num_cmd = 0;
 	u32 proc_ctx_size;
 	u32 proc_ctx_ofst;
 	u32 proc_ctx_size_ddr;
-	struct ipahal_imm_cmd_register_write reg_write_coal_close;
-	struct ipahal_reg_valmask valmask;
 
-	memset(desc, 0, 3 * sizeof(struct ipa3_desc));
+	memset(desc, 0, 2 * sizeof(struct ipa3_desc));
 
 	if (ipa3_generate_hdr_hw_tbl(&hdr_mem)) {
 		IPAERR("fail to generate HDR HW TBL\n");
@@ -186,27 +187,6 @@ int __ipa_commit_hdr_v3_0(void)
 	    &aligned_ctx_mem)) {
 		IPAERR("fail to generate HDR PROC CTX HW TBL\n");
 		goto end;
-	}
-
-	/* IC to close the coal frame before HPS Clear if coal is enabled */
-	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
-		i = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
-		reg_write_coal_close.skip_pipeline_clear = false;
-		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
-		reg_write_coal_close.offset = ipahal_get_reg_ofst(
-			IPA_AGGR_FORCE_CLOSE);
-		ipahal_get_aggr_force_close_valmask(i, &valmask);
-		reg_write_coal_close.value = valmask.val;
-		reg_write_coal_close.value_mask = valmask.mask;
-		coal_cmd_pyld = ipahal_construct_imm_cmd(
-			IPA_IMM_CMD_REGISTER_WRITE,
-			&reg_write_coal_close, false);
-		if (!coal_cmd_pyld) {
-			IPAERR("failed to construct coal close IC\n");
-			goto end;
-		}
-		ipa3_init_imm_cmd_desc(&desc[num_cmd], coal_cmd_pyld);
-		++num_cmd;
 	}
 
 	if (ipa3_ctx->hdr_tbl_lcl) {
@@ -247,8 +227,7 @@ int __ipa_commit_hdr_v3_0(void)
 			}
 		}
 	}
-	ipa3_init_imm_cmd_desc(&desc[num_cmd], hdr_cmd_pyld);
-	++num_cmd;
+	ipa3_init_imm_cmd_desc(&desc[0], hdr_cmd_pyld);
 	IPA_DUMP_BUFF(hdr_mem.base, hdr_mem.phys_base, hdr_mem.size);
 
 	proc_ctx_size = IPA_MEM_PART(apps_hdr_proc_ctx_size);
@@ -302,11 +281,10 @@ int __ipa_commit_hdr_v3_0(void)
 			}
 		}
 	}
-	ipa3_init_imm_cmd_desc(&desc[num_cmd], ctx_cmd_pyld);
-	++num_cmd;
+	ipa3_init_imm_cmd_desc(&desc[1], ctx_cmd_pyld);
 	IPA_DUMP_BUFF(ctx_mem.base, ctx_mem.phys_base, ctx_mem.size);
 
-	if (ipa3_send_cmd(num_cmd, desc))
+	if (ipa3_send_cmd(2, desc))
 		IPAERR("fail to send immediate command\n");
 	else
 		rc = 0;
@@ -340,9 +318,6 @@ int __ipa_commit_hdr_v3_0(void)
 	}
 
 end:
-	if (coal_cmd_pyld)
-		ipahal_destroy_imm_cmd(coal_cmd_pyld);
-
 	if (ctx_cmd_pyld)
 		ipahal_destroy_imm_cmd(ctx_cmd_pyld);
 
@@ -396,27 +371,23 @@ static int __ipa_add_hdr_proc_ctx(struct ipa_hdr_proc_ctx_add *proc_ctx,
 	entry->type = proc_ctx->type;
 	entry->hdr = hdr_entry;
 	entry->l2tp_params = proc_ctx->l2tp_params;
-	entry->generic_params = proc_ctx->generic_params;
 	if (add_ref_hdr)
 		hdr_entry->ref_cnt++;
 	entry->cookie = IPA_PROC_HDR_COOKIE;
 	entry->ipacm_installed = user_only;
 
 	needed_len = ipahal_get_proc_ctx_needed_len(proc_ctx->type);
-	if ((needed_len < 0) ||
-		((needed_len > ipa_hdr_proc_ctx_bin_sz[IPA_HDR_PROC_CTX_BIN0])
-			&&
-			(needed_len >
-			ipa_hdr_proc_ctx_bin_sz[IPA_HDR_PROC_CTX_BIN1]))) {
+
+	if (needed_len <= ipa_hdr_proc_ctx_bin_sz[IPA_HDR_PROC_CTX_BIN0]) {
+		bin = IPA_HDR_PROC_CTX_BIN0;
+	} else if (needed_len <=
+			ipa_hdr_proc_ctx_bin_sz[IPA_HDR_PROC_CTX_BIN1]) {
+		bin = IPA_HDR_PROC_CTX_BIN1;
+	} else {
 		IPAERR_RL("unexpected needed len %d\n", needed_len);
 		WARN_ON_RATELIMIT_IPA(1);
 		goto bad_len;
 	}
-
-	if (needed_len <= ipa_hdr_proc_ctx_bin_sz[IPA_HDR_PROC_CTX_BIN0])
-		bin = IPA_HDR_PROC_CTX_BIN0;
-	else
-		bin = IPA_HDR_PROC_CTX_BIN1;
 
 	mem_size = (ipa3_ctx->hdr_proc_ctx_tbl_lcl) ?
 		IPA_MEM_PART(apps_hdr_proc_ctx_size) :
@@ -906,7 +877,7 @@ int ipa3_add_hdr_proc_ctx(struct ipa_ioc_add_hdr_proc_ctx *proc_ctxs,
 	for (i = 0; i < proc_ctxs->num_proc_ctxs; i++) {
 		if (__ipa_add_hdr_proc_ctx(&proc_ctxs->proc_ctx[i],
 				true, user_only)) {
-			IPAERR_RL("failed to add hdr proc ctx %d\n", i);
+			IPAERR_RL("failed to add hdr pric ctx %d\n", i);
 			proc_ctxs->proc_ctx[i].status = -1;
 		} else {
 			proc_ctxs->proc_ctx[i].status = 0;
@@ -1084,7 +1055,7 @@ int ipa3_reset_hdr(bool user_only)
 				entry->proc_ctx = NULL;
 			} else {
 				/* move the offset entry to free list */
-				entry->offset_entry->ipacm_installed = false;
+				entry->offset_entry->ipacm_installed = 0;
 				list_move(&entry->offset_entry->link,
 				&htbl->head_free_offset_list[
 					entry->offset_entry->bin]);
@@ -1133,7 +1104,7 @@ int ipa3_reset_hdr(bool user_only)
 	list_for_each_entry_safe(
 		ctx_entry,
 		ctx_next,
-		&(htbl_proc->head_proc_ctx_entry_list),
+		&ipa3_ctx->hdr_proc_ctx_tbl.head_proc_ctx_entry_list,
 		link) {
 
 		if (ipa3_id_find(ctx_entry->id) == NULL) {
@@ -1163,22 +1134,24 @@ int ipa3_reset_hdr(bool user_only)
 	if (!user_only) {
 		for (i = 0; i < IPA_HDR_PROC_CTX_BIN_MAX; i++) {
 			list_for_each_entry_safe(ctx_off_entry, ctx_off_next,
-				&(htbl_proc->head_offset_list[i]), link) {
+				&ipa3_ctx->hdr_proc_ctx_tbl.head_offset_list[i],
+				link) {
 				list_del(&ctx_off_entry->link);
 				kmem_cache_free(
 					ipa3_ctx->hdr_proc_ctx_offset_cache,
 					ctx_off_entry);
 			}
 			list_for_each_entry_safe(ctx_off_entry, ctx_off_next,
-				&(htbl_proc->head_free_offset_list[i]), link) {
+				&ipa3_ctx->hdr_proc_ctx_tbl.
+				head_free_offset_list[i], link) {
 				list_del(&ctx_off_entry->link);
 				kmem_cache_free(
 					ipa3_ctx->hdr_proc_ctx_offset_cache,
 					ctx_off_entry);
 			}
 		}
-		htbl_proc->end = 0;
-		htbl_proc->proc_ctx_cnt = 0;
+		ipa3_ctx->hdr_proc_ctx_tbl.end = 0;
+		ipa3_ctx->hdr_proc_ctx_tbl.proc_ctx_cnt = 0;
 	}
 
 	/* commit the change to IPA-HW */

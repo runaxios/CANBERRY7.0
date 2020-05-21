@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2011-2012, 2017, The Linux Foundation. All rights reserved.
- */
 #ifndef __LINUX_CORESIGHT_STM_H_
 #define __LINUX_CORESIGHT_STM_H_
-
 #include <asm/local.h>
 #include <linux/stm.h>
 #include <linux/bitmap.h>

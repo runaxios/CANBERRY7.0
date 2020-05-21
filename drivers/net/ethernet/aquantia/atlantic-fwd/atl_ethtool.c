@@ -243,7 +243,7 @@ static int atl_ethtool_set_settings(struct net_device *ndev,
 
 	atl_ethtool_set_common(cmd, lstate,
 		(unsigned long *)&cmd->advertising, &tmp, true, speed);
-	hw->mcp.ops->set_link(hw);
+	hw->mcp.ops->set_link(hw, false);
 	return 0;
 }
 
@@ -350,8 +350,14 @@ static void atl_get_channels(struct net_device *ndev,
 	struct ethtool_channels *chan)
 {
 	struct atl_nic *nic = netdev_priv(ndev);
+	int max_rings;
 
-	chan->max_combined = ATL_MAX_QUEUES;
+	if (atl_enable_msi)
+		max_rings = min_t(int, ATL_MAX_QUEUES, num_present_cpus());
+	else
+		max_rings = 1;
+
+	chan->max_combined = max_rings;
 	chan->combined_count = nic->nvecs;
 	if (nic->flags & ATL_FL_MULTIPLE_VECTORS)
 		chan->max_other = chan->other_count = ATL_NUM_NON_RING_IRQS;
@@ -407,8 +413,7 @@ static int atl_set_pauseparam(struct net_device *ndev,
 	if (pause->autoneg && !lstate->autoneg)
 		return -EINVAL;
 
-	fc->req = pause->autoneg ? atl_fc_full :
-		(!!pause->rx_pause << atl_fc_rx_shift) |
+	fc->req = (!!pause->rx_pause << atl_fc_rx_shift) |
 		(!!pause->tx_pause << atl_fc_tx_shift);
 
 	hw->mcp.ops->set_link(hw, false);
@@ -793,26 +798,27 @@ static int atl_set_pad_stripping(struct atl_nic *nic, bool on)
 {
 	struct atl_hw *hw = &nic->hw;
 	int ret;
-	uint32_t ctrl;
+	uint32_t msm_opts;
 
-	ret = atl_hwsem_get(hw, ATL_MCP_SEM_MSM);
+	if (hw->mcp.fw_rev < 0x0300008e)
+		return -EOPNOTSUPP;
+
+	ret = atl_read_fwsettings_word(hw, atl_fw2_setings_msm_opts,
+		&msm_opts);
 	if (ret)
 		return ret;
 
-	ret = __atl_msm_read(hw, ATL_MSM_GEN_CTRL, &ctrl);
+	msm_opts &= ~atl_fw2_settings_msm_opts_strip_pad;
+	msm_opts |= !!on << atl_fw2_settings_msm_opts_strip_pad_shift;
+
+	ret = atl_write_fwsettings_word(hw, atl_fw2_setings_msm_opts,
+		msm_opts);
 	if (ret)
-		goto unlock;
+		return ret;
 
-	if (on)
-		ctrl |= BIT(5);
-	else
-		ctrl &= ~BIT(5);
-
-	ret = __atl_msm_write(hw, ATL_MSM_GEN_CTRL, ctrl);
-
-unlock:
-	atl_hwsem_put(hw, ATL_MCP_SEM_MSM);
-	return ret;
+	/* Restart aneg to make FW apply the new settings */
+	hw->mcp.ops->restart_aneg(hw);
+	return 0;
 }
 
 static uint32_t atl_get_priv_flags(struct net_device *ndev)
@@ -908,7 +914,7 @@ static int atl_set_coalesce(struct net_device *ndev,
 
 struct atl_rxf_flt_desc {
 	int base;
-	int count;
+	int max;
 	uint32_t rxq_bit;
 	int rxq_shift;
 	size_t cmd_offt;
@@ -928,7 +934,7 @@ for (_desc = atl_rxf_descs;					\
 	_desc++)
 
 #define atl_for_each_rxf_idx(_desc, _idx)		\
-	for (_idx = 0; _idx < _desc->count; _idx++)
+	for (_idx = 0; _idx < _desc->max; _idx++)
 
 static inline int atl_rxf_idx(const struct atl_rxf_flt_desc *desc,
 	struct ethtool_rx_flow_spec *fsp)
@@ -1091,31 +1097,19 @@ static int atl_rxf_get_ntuple(const struct atl_rxf_flt_desc *desc,
 	return 0;
 }
 
-static int atl_get_rxf_locs(struct atl_nic *nic, struct ethtool_rxnfc *rxnfc,
-	uint32_t *rule_locs)
+static int atl_rxf_get_flex(const struct atl_rxf_flt_desc *desc,
+	struct atl_nic *nic, struct ethtool_rx_flow_spec *fsp)
 {
-	struct atl_rxf_ntuple *ntuple = &nic->rxf_ntuple;
-	struct atl_rxf_vlan *vlan = &nic->rxf_vlan;
-	struct atl_rxf_etype *etype = &nic->rxf_etype;
-	int count = ntuple->count + vlan->count + etype->count;
-	int i;
+	struct atl_rxf_flex *flex = &nic->rxf_flex;
+	int idx = atl_rxf_idx(desc, fsp);
+	uint32_t cmd = flex->cmd[idx];
 
-	if (rxnfc->rule_cnt < count)
-		return -EMSGSIZE;
+	if (!(cmd & ATL_RXF_EN))
+		return -EINVAL;
 
-	for (i = 0; i < ATL_RXF_VLAN_MAX; i++)
-		if (vlan->cmd[i] & ATL_RXF_EN)
-			*rule_locs++ = i + ATL_RXF_VLAN_BASE;
+	fsp->flow_type = ETHER_FLOW;
+	fsp->ring_cookie = atl_ring_cookie(desc, cmd);
 
-	for (i = 0; i < ATL_RXF_ETYPE_MAX; i++)
-		if (etype->cmd[i] & ATL_RXF_EN)
-			*rule_locs++ = i + ATL_RXF_ETYPE_BASE;
-
-	for (i = 0; i < ATL_RXF_NTUPLE_MAX; i++)
-		if (ntuple->cmd[i] & ATL_RXF_EN)
-			*rule_locs++ = i + ATL_RXF_NTUPLE_BASE;
-
-	rxnfc->rule_cnt = count;
 	return 0;
 }
 
@@ -1141,6 +1135,22 @@ static int atl_check_mask(uint8_t *mask, int len, uint32_t *cmd, uint32_t flag)
 	return 0;
 }
 
+static int atl_rxf_check_ring(struct atl_nic *nic, uint32_t ring)
+{
+	if (ring > ATL_RXF_RING_ANY)
+		return -EINVAL;
+
+	if (ring < nic->nvecs || ring == ATL_RXF_RING_ANY)
+		return 0;
+
+#ifdef CONFIG_ATLFWD_FWD
+	if (test_bit(ring, &nic->fwd.ring_map[ATL_FWDIR_RX]))
+		return 0;
+#endif
+
+	return -EINVAL;
+}
+
 static int atl_rxf_set_ring(const struct atl_rxf_flt_desc *desc,
 	struct atl_nic *nic, struct ethtool_rx_flow_spec *fsp, uint32_t *cmd)
 {
@@ -1151,9 +1161,7 @@ static int atl_rxf_set_ring(const struct atl_rxf_flt_desc *desc,
 		return 0;
 
 	ring = ethtool_get_flow_spec_ring(ring_cookie);
-	if (ring > ATL_RXF_RING_ANY ||
-		(ring >= nic->nvecs && ring != ATL_RXF_RING_ANY &&
-			!test_bit(ring, &nic->fwd.ring_map[ATL_FWDIR_RX]))) {
+	if (atl_rxf_check_ring(nic, ring)) {
 		atl_nic_err("Invalid Rx filter queue %d\n", ring);
 		return -EINVAL;
 	}
@@ -1577,6 +1585,24 @@ static int atl_rxf_set_ntuple(const struct atl_rxf_flt_desc *desc,
 	return !present;
 }
 
+static int atl_rxf_set_flex(const struct atl_rxf_flt_desc *desc,
+			    struct atl_nic *nic, struct ethtool_rx_flow_spec *fsp)
+{
+	struct atl_rxf_flex *flex = &nic->rxf_flex;
+	int idx = atl_rxf_idx(desc, fsp);
+	int ret;
+	uint32_t cmd = ATL_RXF_EN;
+	int present = !!(flex->cmd[idx] & ATL_RXF_EN);;
+
+	ret = atl_rxf_set_ring(desc, nic, fsp, &cmd);
+	if (ret)
+		return ret;
+
+	flex->cmd[idx] = cmd;
+
+	return !present;
+}
+
 static void atl_rxf_update_vlan(struct atl_nic *nic, int idx)
 {
 	atl_write(&nic->hw, ATL_RX_VLAN_FLT(idx), nic->rxf_vlan.cmd[idx]);
@@ -1587,10 +1613,15 @@ static void atl_rxf_update_etype(struct atl_nic *nic, int idx)
 	atl_write(&nic->hw, ATL_RX_ETYPE_FLT(idx), nic->rxf_etype.cmd[idx]);
 }
 
+static void atl_rxf_update_flex(struct atl_nic *nic, int idx)
+{
+	atl_write(&nic->hw, ATL_RX_FLEX_FLT_CTRL(idx), nic->rxf_flex.cmd[idx]);
+}
+
 static const struct atl_rxf_flt_desc atl_rxf_descs[] = {
 	{
 		.base = ATL_RXF_VLAN_BASE,
-		.count = ATL_RXF_VLAN_MAX,
+		.max = ATL_RXF_VLAN_MAX,
 		.rxq_bit = ATL_VLAN_RXQ,
 		.rxq_shift = ATL_VLAN_RXQ_SHIFT,
 		.cmd_offt = offsetof(struct atl_nic, rxf_vlan.cmd),
@@ -1602,7 +1633,7 @@ static const struct atl_rxf_flt_desc atl_rxf_descs[] = {
 	},
 	{
 		.base = ATL_RXF_ETYPE_BASE,
-		.count = ATL_RXF_ETYPE_MAX,
+		.max = ATL_RXF_ETYPE_MAX,
 		.rxq_bit = ATL_ETYPE_RXQ,
 		.rxq_shift = ATL_ETYPE_RXQ_SHIFT,
 		.cmd_offt = offsetof(struct atl_nic, rxf_etype.cmd),
@@ -1613,7 +1644,7 @@ static const struct atl_rxf_flt_desc atl_rxf_descs[] = {
 	},
 	{
 		.base = ATL_RXF_NTUPLE_BASE,
-		.count = ATL_RXF_NTUPLE_MAX,
+		.max = ATL_RXF_NTUPLE_MAX,
 		.rxq_bit = ATL_NTC_RXQ,
 		.rxq_shift = ATL_NTC_RXQ_SHIFT,
 		.cmd_offt = offsetof(struct atl_nic, rxf_ntuple.cmd),
@@ -1621,6 +1652,17 @@ static const struct atl_rxf_flt_desc atl_rxf_descs[] = {
 		.get_rxf = atl_rxf_get_ntuple,
 		.set_rxf = atl_rxf_set_ntuple,
 		.update_rxf = atl_update_ntuple_flt,
+	},
+	{
+		.base = ATL_RXF_FLEX_BASE,
+		.max = ATL_RXF_FLEX_MAX,
+		.rxq_bit = ATL_FLEX_RXQ,
+		.rxq_shift = ATL_FLEX_RXQ_SHIFT,
+		.cmd_offt = offsetof(struct atl_nic, rxf_flex.cmd),
+		.count_offt = offsetof(struct atl_nic, rxf_flex.count),
+		.get_rxf = atl_rxf_get_flex,
+		.set_rxf = atl_rxf_set_flex,
+		.update_rxf = atl_rxf_update_flex,
 	},
 };
 
@@ -1652,7 +1694,7 @@ static const struct atl_rxf_flt_desc *atl_rxf_desc(struct atl_nic *nic,
 		if (loc < desc->base)
 			return NULL;
 
-		if (loc < desc->base + desc->count)
+		if (loc < desc->base + desc->max)
 			return desc;
 	}
 
@@ -1787,6 +1829,46 @@ done:
 	return 0;
 }
 
+static void atl_get_rxf_count(struct atl_nic *nic, struct ethtool_rxnfc *rxnfc)
+{
+	int count = 0, max = 0;
+	const struct atl_rxf_flt_desc *desc;
+
+	atl_for_each_rxf_desc(desc) {
+		count += *atl_rxf_count(desc, nic);
+		max += desc->max;
+	}
+
+	rxnfc->rule_cnt = count;
+	rxnfc->data = max | RX_CLS_LOC_SPECIAL;
+}
+
+static int atl_get_rxf_locs(struct atl_nic *nic, struct ethtool_rxnfc *rxnfc,
+	uint32_t *rule_locs)
+{
+	int count = 0;
+	int i;
+	const struct atl_rxf_flt_desc *desc;
+
+	atl_for_each_rxf_desc(desc)
+		count += *atl_rxf_count(desc, nic);
+
+	if (rxnfc->rule_cnt < count)
+		return -EMSGSIZE;
+
+	atl_for_each_rxf_desc(desc) {
+		uint32_t *cmd = atl_rxf_cmd(desc, nic);
+
+		atl_for_each_rxf_idx(desc, i)
+			if (cmd[i] & ATL_RXF_EN)
+				*rule_locs++ = i + desc->base;
+
+	}
+
+	rxnfc->rule_cnt = count;
+	return 0;
+}
+
 static int atl_get_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *rxnfc,
 	uint32_t *rule_locs)
 {
@@ -1801,10 +1883,7 @@ static int atl_get_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *rxnfc,
 		return 0;
 
 	case ETHTOOL_GRXCLSRLCNT:
-		rxnfc->rule_cnt = nic->rxf_ntuple.count + nic->rxf_vlan.count +
-			nic->rxf_etype.count;
-		rxnfc->data = (ATL_RXF_VLAN_MAX + ATL_RXF_ETYPE_MAX +
-			ATL_RXF_NTUPLE_MAX) | RX_CLS_LOC_SPECIAL;
+		atl_get_rxf_count(nic, rxnfc);
 		return 0;
 
 	case ETHTOOL_GRXCLSRULE:
@@ -1936,8 +2015,8 @@ static void atl_get_wol(struct net_device *ndev, struct ethtool_wolinfo *wol)
 {
 	struct atl_nic *nic = netdev_priv(ndev);
 
-	wol->supported = WAKE_MAGIC;
-	wol->wolopts = nic->flags & ATL_FL_WOL ? WAKE_MAGIC : 0;
+	wol->supported = ATL_WAKE_SUPPORTED;
+	wol->wolopts = nic->hw.wol_mode;
 }
 
 static int atl_set_wol(struct net_device *ndev, struct ethtool_wolinfo *wol)
@@ -1945,22 +2024,27 @@ static int atl_set_wol(struct net_device *ndev, struct ethtool_wolinfo *wol)
 	int ret;
 	struct atl_nic *nic = netdev_priv(ndev);
 
-	if (wol->wolopts & ~WAKE_MAGIC) {
+	if (wol->wolopts & ~ATL_WAKE_SUPPORTED) {
 		atl_nic_err("%s: unsupported WoL mode %x\n", __func__,
 			wol->wolopts);
 		return -EINVAL;
 	}
 
-	if (wol->wolopts & WAKE_MAGIC)
+	if (wol->wolopts)
 		nic->flags |= ATL_FL_WOL;
 	else
 		nic->flags &= ~ATL_FL_WOL;
 
+	nic->hw.wol_mode = wol->wolopts;
+
 	ret = device_set_wakeup_enable(&nic->hw.pdev->dev,
 		!!(nic->flags & ATL_FL_WOL));
 
-	if (ret)
+	if (ret) {
 		atl_nic_err("device_set_wakeup_enable failed: %d\n", -ret);
+		nic->flags &= ~ATL_FL_WOL;
+		nic->hw.wol_mode = 0;
+	}
 
 	return ret;
 }

@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #ifndef __Q6LSM_H__
 #define __Q6LSM_H__
@@ -102,8 +110,6 @@ struct lsm_client {
 	uint32_t	event_type;
 	uint32_t	num_stages;
 	struct lsm_stage_config	stage_cfg[LSM_MAX_STAGES_PER_SESSION];
-	uint64_t	fe_id;
-	uint16_t	unprocessed_data;
 };
 
 struct lsm_stream_cmd_open_tx {
@@ -161,7 +167,7 @@ struct lsm_param_connect_to_port {
 	uint32_t	minor_version;
 	/* AFE port id that receives voice wake up data */
 	uint16_t	port_id;
-	uint16_t	unprocessed_data;
+	uint16_t	reserved;
 } __packed;
 
 struct lsm_param_poll_enable {
@@ -297,6 +303,4 @@ int q6lsm_set_media_fmt_v2_params(struct lsm_client *client);
 int q6lsm_lab_out_ch_cfg(struct lsm_client *client, u8 *ch_map,
 		struct lsm_params_info_v2 *p_info);
 bool q6lsm_adsp_supports_multi_stage_detection(void);
-int q6lsm_set_afe_data_format(uint64_t fe_id, uint16_t afe_data_format);
-void q6lsm_get_afe_data_format(uint64_t fe_id, uint16_t *afe_data_format);
 #endif /* __Q6LSM_H__ */

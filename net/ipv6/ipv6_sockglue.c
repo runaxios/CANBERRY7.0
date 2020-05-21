@@ -377,14 +377,6 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		retv = 0;
 		break;
 
-	case IPV6_FREEBIND:
-		if (optlen < sizeof(int))
-			goto e_inval;
-		/* we also don't have a separate freebind bit for IPV6 */
-		inet_sk(sk)->freebind = valbool;
-		retv = 0;
-		break;
-
 	case IPV6_RECVORIGDSTADDR:
 		if (optlen < sizeof(int))
 			goto e_inval;
@@ -500,6 +492,7 @@ sticky_done:
 		struct ipv6_txoptions *opt = NULL;
 		struct msghdr msg;
 		struct flowi6 fl6;
+		struct sockcm_cookie sockc_junk;
 		struct ipcm6_cookie ipc6;
 
 		memset(&fl6, 0, sizeof(fl6));
@@ -532,7 +525,7 @@ sticky_done:
 		msg.msg_control = (void *)(opt+1);
 		ipc6.opt = opt;
 
-		retv = ip6_datagram_send_ctl(net, sk, &msg, &fl6, &ipc6);
+		retv = ip6_datagram_send_ctl(net, sk, &msg, &fl6, &ipc6, &sockc_junk);
 		if (retv)
 			goto done;
 update:
@@ -728,9 +721,8 @@ done:
 			struct sockaddr_in6 *psin6;
 
 			psin6 = (struct sockaddr_in6 *)&greqs.gsr_group;
-			retv = ipv6_sock_mc_join_ssm(sk, greqs.gsr_interface,
-						     &psin6->sin6_addr,
-						     MCAST_INCLUDE);
+			retv = ipv6_sock_mc_join(sk, greqs.gsr_interface,
+						 &psin6->sin6_addr);
 			/* prior join w/ different source is ok */
 			if (retv && retv != -EADDRINUSE)
 				break;
@@ -1227,10 +1219,6 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 		val = inet_sk(sk)->transparent;
 		break;
 
-	case IPV6_FREEBIND:
-		val = inet_sk(sk)->freebind;
-		break;
-
 	case IPV6_RECVORIGDSTADDR:
 		val = np->rxopt.bits.rxorigdstaddr;
 		break;
@@ -1426,3 +1414,4 @@ int compat_ipv6_getsockopt(struct sock *sk, int level, int optname,
 }
 EXPORT_SYMBOL(compat_ipv6_getsockopt);
 #endif
+

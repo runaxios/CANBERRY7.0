@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/usb/generic.c - generic driver for USB devices (not interfaces)
  *
@@ -17,10 +16,13 @@
  *	(C) Copyright Greg Kroah-Hartman 2002-2003
  *
  * Released under the GPLv2 only.
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/usb/audio.h>
+#include <linux/usb/audio-v3.h>
 #include "usb.h"
 
 static inline const char *plural(int n)
@@ -64,8 +66,11 @@ static int get_usb_audio_config(struct usb_host_bos *bos)
 				conf_summary->bClass != USB_CLASS_AUDIO)
 			continue;
 
-		/* return 1st config as per device preference */
-		return conf_summary->bConfigurationIndex[0];
+		/* look for 1st config summary without UAC3 full ADC profile */
+		if (conf_summary->bProtocol < UAC_VERSION_3 ||
+				(conf_summary->bProtocol == UAC_VERSION_3 &&
+				 conf_summary->bSubClass != FULL_ADC_PROFILE))
+			return conf_summary->bConfigurationIndex[0];
 	}
 
 done:
@@ -162,7 +167,6 @@ int usb_choose_configuration(struct usb_device *udev)
 			best = c;
 			break;
 		}
-
 		/* If all the remaining configs are vendor-specific,
 		 * choose the first one. */
 		else if (!best)

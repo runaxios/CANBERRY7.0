@@ -76,6 +76,16 @@ enum {
 	UFS_UPIU_RPMB_WLUN		= 0xC4,
 };
 
+/**
+ * ufs_is_valid_unit_desc_lun - checks if the given LUN has a unit descriptor
+ * @lun: LU number to check
+ * @return: true if the lun has a matching unit descriptor, false otherwise
+ */
+static inline bool ufs_is_valid_unit_desc_lun(u8 lun)
+{
+	return (lun == UFS_UPIU_RPMB_WLUN || (lun < UFS_UPIU_MAX_GENERAL_LUN));
+}
+
 /*
  * UFS Protocol Information Unit related definitions
  */
@@ -137,13 +147,12 @@ enum desc_header_offset {
 };
 
 enum ufs_desc_def_size {
-	QUERY_DESC_DEVICE_DEF_SIZE		= 0x59,
+	QUERY_DESC_DEVICE_DEF_SIZE		= 0x40,
 	QUERY_DESC_CONFIGURATION_DEF_SIZE	= 0x90,
 	QUERY_DESC_UNIT_DEF_SIZE		= 0x23,
 	QUERY_DESC_INTERCONNECT_DEF_SIZE	= 0x06,
-	QUERY_DESC_GEOMETRY_DEF_SIZE		= 0x48,
+	QUERY_DESC_GEOMETRY_DEF_SIZE		= 0x44,
 	QUERY_DESC_POWER_DEF_SIZE		= 0x62,
-	QUERY_DESC_HEALTH_DEF_SIZE		= 0x25,
 };
 
 /* Unit descriptor parameters offsets in bytes*/
@@ -155,7 +164,6 @@ enum unit_desc_param {
 	UNIT_DESC_PARAM_BOOT_LUN_ID		= 0x4,
 	UNIT_DESC_PARAM_LU_WR_PROTECT		= 0x5,
 	UNIT_DESC_PARAM_LU_Q_DEPTH		= 0x6,
-	UNIT_DESC_PARAM_PSA_SENSITIVE		= 0x7,
 	UNIT_DESC_PARAM_MEM_TYPE		= 0x8,
 	UNIT_DESC_PARAM_DATA_RELIABILITY	= 0x9,
 	UNIT_DESC_PARAM_LOGICAL_BLK_SIZE	= 0xA,
@@ -196,68 +204,6 @@ enum device_desc_param {
 	DEVICE_DESC_PARAM_UD_LEN		= 0x1B,
 	DEVICE_DESC_PARAM_RTT_CAP		= 0x1C,
 	DEVICE_DESC_PARAM_FRQ_RTC		= 0x1D,
-	DEVICE_DESC_PARAM_UFS_FEAT		= 0x1F,
-	DEVICE_DESC_PARAM_FFU_TMT		= 0x20,
-	DEVICE_DESC_PARAM_Q_DPTH		= 0x21,
-	DEVICE_DESC_PARAM_DEV_VER		= 0x22,
-	DEVICE_DESC_PARAM_NUM_SEC_WPA		= 0x24,
-	DEVICE_DESC_PARAM_PSA_MAX_DATA		= 0x25,
-	DEVICE_DESC_PARAM_PSA_TMT		= 0x29,
-	DEVICE_DESC_PARAM_PRDCT_REV		= 0x2A,
-	DEVICE_DESC_PARAM_EXT_UFS_FEATURE_SUP	= 0x4F,
-};
-
-/* Interconnect descriptor parameters offsets in bytes*/
-enum interconnect_desc_param {
-	INTERCONNECT_DESC_PARAM_LEN		= 0x0,
-	INTERCONNECT_DESC_PARAM_TYPE		= 0x1,
-	INTERCONNECT_DESC_PARAM_UNIPRO_VER	= 0x2,
-	INTERCONNECT_DESC_PARAM_MPHY_VER	= 0x4,
-};
-
-/* Geometry descriptor parameters offsets in bytes*/
-enum geometry_desc_param {
-	GEOMETRY_DESC_PARAM_LEN			= 0x0,
-	GEOMETRY_DESC_PARAM_TYPE		= 0x1,
-	GEOMETRY_DESC_PARAM_DEV_CAP		= 0x4,
-	GEOMETRY_DESC_PARAM_MAX_NUM_LUN		= 0xC,
-	GEOMETRY_DESC_PARAM_SEG_SIZE		= 0xD,
-	GEOMETRY_DESC_PARAM_ALLOC_UNIT_SIZE	= 0x11,
-	GEOMETRY_DESC_PARAM_MIN_BLK_SIZE	= 0x12,
-	GEOMETRY_DESC_PARAM_OPT_RD_BLK_SIZE	= 0x13,
-	GEOMETRY_DESC_PARAM_OPT_WR_BLK_SIZE	= 0x14,
-	GEOMETRY_DESC_PARAM_MAX_IN_BUF_SIZE	= 0x15,
-	GEOMETRY_DESC_PARAM_MAX_OUT_BUF_SIZE	= 0x16,
-	GEOMETRY_DESC_PARAM_RPMB_RW_SIZE	= 0x17,
-	GEOMETRY_DESC_PARAM_DYN_CAP_RSRC_PLC	= 0x18,
-	GEOMETRY_DESC_PARAM_DATA_ORDER		= 0x19,
-	GEOMETRY_DESC_PARAM_MAX_NUM_CTX		= 0x1A,
-	GEOMETRY_DESC_PARAM_TAG_UNIT_SIZE	= 0x1B,
-	GEOMETRY_DESC_PARAM_TAG_RSRC_SIZE	= 0x1C,
-	GEOMETRY_DESC_PARAM_SEC_RM_TYPES	= 0x1D,
-	GEOMETRY_DESC_PARAM_MEM_TYPES		= 0x1E,
-	GEOMETRY_DESC_PARAM_SCM_MAX_NUM_UNITS	= 0x20,
-	GEOMETRY_DESC_PARAM_SCM_CAP_ADJ_FCTR	= 0x24,
-	GEOMETRY_DESC_PARAM_NPM_MAX_NUM_UNITS	= 0x26,
-	GEOMETRY_DESC_PARAM_NPM_CAP_ADJ_FCTR	= 0x2A,
-	GEOMETRY_DESC_PARAM_ENM1_MAX_NUM_UNITS	= 0x2C,
-	GEOMETRY_DESC_PARAM_ENM1_CAP_ADJ_FCTR	= 0x30,
-	GEOMETRY_DESC_PARAM_ENM2_MAX_NUM_UNITS	= 0x32,
-	GEOMETRY_DESC_PARAM_ENM2_CAP_ADJ_FCTR	= 0x36,
-	GEOMETRY_DESC_PARAM_ENM3_MAX_NUM_UNITS	= 0x38,
-	GEOMETRY_DESC_PARAM_ENM3_CAP_ADJ_FCTR	= 0x3C,
-	GEOMETRY_DESC_PARAM_ENM4_MAX_NUM_UNITS	= 0x3E,
-	GEOMETRY_DESC_PARAM_ENM4_CAP_ADJ_FCTR	= 0x42,
-	GEOMETRY_DESC_PARAM_OPT_LOG_BLK_SIZE	= 0x44,
-};
-
-/* Health descriptor parameters offsets in bytes*/
-enum health_desc_param {
-	HEALTH_DESC_PARAM_LEN			= 0x0,
-	HEALTH_DESC_PARAM_TYPE			= 0x1,
-	HEALTH_DESC_PARAM_EOL_INFO		= 0x2,
-	HEALTH_DESC_PARAM_LIFE_TIME_EST_A	= 0x3,
-	HEALTH_DESC_PARAM_LIFE_TIME_EST_B	= 0x4,
 };
 
 /*
@@ -375,38 +321,6 @@ enum ufs_dev_pwr_mode {
 	UFS_POWERDOWN_PWR_MODE	= 3,
 };
 
-enum ufs_dev_wb_buf_avail_size {
-	UFS_WB_0_PERCENT_BUF_REMAIN = 0x0,
-	UFS_WB_10_PERCENT_BUF_REMAIN = 0x1,
-	UFS_WB_20_PERCENT_BUF_REMAIN = 0x2,
-	UFS_WB_30_PERCENT_BUF_REMAIN = 0x3,
-	UFS_WB_40_PERCENT_BUF_REMAIN = 0x4,
-	UFS_WB_50_PERCENT_BUF_REMAIN = 0x5,
-	UFS_WB_60_PERCENT_BUF_REMAIN = 0x6,
-	UFS_WB_70_PERCENT_BUF_REMAIN = 0x7,
-	UFS_WB_80_PERCENT_BUF_REMAIN = 0x8,
-	UFS_WB_90_PERCENT_BUF_REMAIN = 0x9,
-	UFS_WB_100_PERCENT_BUF_REMAIN = 0xA,
-};
-
-enum ufs_dev_wb_buf_life_time_est {
-	UFS_WB_0_10_PERCENT_USED = 0x1,
-	UFS_WB_10_20_PERCENT_USED = 0x2,
-	UFS_WB_20_30_PERCENT_USED = 0x3,
-	UFS_WB_30_40_PERCENT_USED = 0x4,
-	UFS_WB_40_50_PERCENT_USED = 0x5,
-	UFS_WB_50_60_PERCENT_USED = 0x6,
-	UFS_WB_60_70_PERCENT_USED = 0x7,
-	UFS_WB_70_80_PERCENT_USED = 0x8,
-	UFS_WB_80_90_PERCENT_USED = 0x9,
-	UFS_WB_90_100_PERCENT_USED = 0xA,
-	UFS_WB_MAX_USED = 0xB,
-};
-
-enum ufs_dev_wb_buf_user_cap_config {
-	UFS_WB_BUFF_PRESERVE_USER_SPACE = 1,
-	UFS_WB_BUFF_USER_SPACE_RED_EN = 2,
-};
 /**
  * struct utp_upiu_header - UPIU header structure
  * @dword_0: UPIU header DW-0
@@ -568,7 +482,6 @@ struct ufs_vreg {
 	int max_uV;
 	bool low_voltage_sup;
 	bool low_voltage_active;
-	bool sys_suspend_pwr_off;
 	int min_uA;
 	int max_uA;
 };
@@ -588,18 +501,12 @@ enum {
 	UFS_DEV_REMOVABLE_NON_BOOTABLE	= 0x03,
 };
 
-/* Possible values for dExtendedUFSFeaturesSupport */
-enum {
-	UFS_DEV_WRITE_BOOSTER_SUP	= BIT(8),
-};
-
 struct ufs_dev_info {
 	/* device descriptor info */
 	u8	b_device_sub_class;
 	u16	w_manufacturer_id;
 	u8	i_product_name;
 	u16	w_spec_version;
-	u32	d_ext_ufs_feature_sup;
 
 	/* query flags */
 	bool f_power_on_wp_en;
@@ -611,8 +518,6 @@ struct ufs_dev_info {
 
 	/* Device deviations from standard UFS device spec. */
 	unsigned int quirks;
-
-	bool keep_vcc_on;
 };
 
 #define MAX_MODEL_LEN 16
@@ -627,15 +532,5 @@ struct ufs_dev_desc {
 	char model[MAX_MODEL_LEN + 1];
 	u16 wspecversion;
 };
-
-/**
- * ufs_is_valid_unit_desc_lun - checks if the given LUN has a unit descriptor
- * @lun: LU number to check
- * @return: true if the lun has a matching unit descriptor, false otherwise
- */
-static inline bool ufs_is_valid_unit_desc_lun(u8 lun)
-{
-	return lun == UFS_UPIU_RPMB_WLUN || (lun < UFS_UPIU_MAX_GENERAL_LUN);
-}
 
 #endif /* End of Header */

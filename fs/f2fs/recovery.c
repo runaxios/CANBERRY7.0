@@ -325,10 +325,8 @@ static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 			break;
 		}
 
-		if (!is_recoverable_dnode(page)) {
-			f2fs_put_page(page, 1);
+		if (!is_recoverable_dnode(page))
 			break;
-		}
 
 		if (!is_fsync_dnode(page))
 			goto next;
@@ -340,10 +338,8 @@ static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 			if (!check_only &&
 					IS_INODE(page) && is_dent_dnode(page)) {
 				err = f2fs_recover_inode_page(sbi, page);
-				if (err) {
-					f2fs_put_page(page, 1);
+				if (err)
 					break;
-				}
 				quota_inode = true;
 			}
 
@@ -359,7 +355,6 @@ static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 					err = 0;
 					goto next;
 				}
-				f2fs_put_page(page, 1);
 				break;
 			}
 		}
@@ -375,7 +370,6 @@ next:
 				"%s: detect looped node chain, "
 				"blkaddr:%u, next:%u",
 				__func__, blkaddr, next_blkaddr_of_node(page));
-			f2fs_put_page(page, 1);
 			err = -EINVAL;
 			break;
 		}
@@ -386,6 +380,7 @@ next:
 
 		f2fs_ra_meta_pages_cond(sbi, blkaddr);
 	}
+	f2fs_put_page(page, 1);
 	return err;
 }
 
@@ -551,33 +546,13 @@ retry_dn:
 		goto err;
 
 	f2fs_bug_on(sbi, ni.ino != ino_of_node(page));
-
-	if (ofs_of_node(dn.node_page) != ofs_of_node(page)) {
-		f2fs_msg(sbi->sb, KERN_WARNING,
-			"Inconsistent ofs_of_node, ino:%lu, ofs:%u, %u",
-			inode->i_ino, ofs_of_node(dn.node_page),
-			ofs_of_node(page));
-		err = -EFSCORRUPTED;
-		goto err;
-	}
+	f2fs_bug_on(sbi, ofs_of_node(dn.node_page) != ofs_of_node(page));
 
 	for (; start < end; start++, dn.ofs_in_node++) {
 		block_t src, dest;
 
 		src = datablock_addr(dn.inode, dn.node_page, dn.ofs_in_node);
 		dest = datablock_addr(dn.inode, page, dn.ofs_in_node);
-
-		if (__is_valid_data_blkaddr(src) &&
-			!f2fs_is_valid_blkaddr(sbi, src, META_POR)) {
-			err = -EFAULT;
-			goto err;
-		}
-
-		if (__is_valid_data_blkaddr(dest) &&
-			!f2fs_is_valid_blkaddr(sbi, dest, META_POR)) {
-			err = -EFAULT;
-			goto err;
-		}
 
 		/* skip recovering if dest is the same as src */
 		if (src == dest)
@@ -691,10 +666,8 @@ static int recover_data(struct f2fs_sb_info *sbi, struct list_head *inode_list,
 		 */
 		if (IS_INODE(page)) {
 			err = recover_inode(entry->inode, page);
-			if (err) {
-				f2fs_put_page(page, 1);
+			if (err)
 				break;
-			}
 		}
 		if (entry->last_dentry == blkaddr) {
 			err = recover_dentry(entry->inode, page, dir_list);
@@ -733,17 +706,17 @@ int f2fs_recover_fsync_data(struct f2fs_sb_info *sbi, bool check_only)
 	int quota_enabled;
 #endif
 
-	if (s_flags & SB_RDONLY) {
+	if (s_flags & MS_RDONLY) {
 		f2fs_msg(sbi->sb, KERN_INFO,
 				"recover fsync data on readonly fs");
-		sbi->sb->s_flags &= ~SB_RDONLY;
+		sbi->sb->s_flags &= ~MS_RDONLY;
 	}
 
 #ifdef CONFIG_QUOTA
 	/* Needed for iput() to work correctly and not trash data */
-	sbi->sb->s_flags |= SB_ACTIVE;
+	sbi->sb->s_flags |= MS_ACTIVE;
 	/* Turn on quotas so that they are updated correctly */
-	quota_enabled = f2fs_enable_quota_files(sbi, s_flags & SB_RDONLY);
+	quota_enabled = f2fs_enable_quota_files(sbi, s_flags & MS_RDONLY);
 #endif
 
 	fsync_entry_slab = f2fs_kmem_cache_create("f2fs_fsync_inode_entry",
@@ -817,7 +790,7 @@ out:
 	if (quota_enabled)
 		f2fs_quota_off_umount(sbi->sb);
 #endif
-	sbi->sb->s_flags = s_flags; /* Restore SB_RDONLY status */
+	sbi->sb->s_flags = s_flags; /* Restore MS_RDONLY status */
 
 	return ret ? ret: err;
 }

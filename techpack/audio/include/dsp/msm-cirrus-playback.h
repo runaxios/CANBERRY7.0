@@ -1,4 +1,5 @@
 /* Copyright (c) 2015 Cirrus Logic, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -155,9 +156,6 @@ struct crus_rx_temperature_t {
 struct crus_control_t {
 	struct device *device;
 	int32_t q6afe_rev;
-	int32_t copp_rev;
-	bool afe_ena;
-	bool copp_ena;
 	bool afe_start;
 	bool enable;
 	bool prot_en;
@@ -182,7 +180,6 @@ struct crus_control_t {
 //extern int afe_apr_send_pkt_crus(void *data, int index, int set);
 
 int crus_afe_callback(void* payload, int size);
-void msm_crus_pb_add_controls(struct snd_soc_component *component);
-
+void msm_crus_pb_add_controls(struct snd_soc_platform *platform);
 #endif /* _MSM_CIRRUS_PLAYBACK_H */
 

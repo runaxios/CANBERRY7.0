@@ -2,7 +2,7 @@
  * cs35l41-i2c.c -- CS35l41 I2C driver
  *
  * Copyright 2017 Cirrus Logic, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * Author:	David Rhodes	<david.rhodes@cirrus.com>
  *
@@ -73,8 +73,6 @@ static int cs35l41_i2c_probe(struct i2c_client *client,
 	if (cs35l41 == NULL)
 		return -ENOMEM;
 
-	mutex_init(&cs35l41->rate_lock);
-
 	cs35l41->dev = dev;
 	cs35l41->irq = client->irq;
 	cs35l41->bus_spi = false;
@@ -98,7 +96,7 @@ static int cs35l41_i2c_remove(struct i2c_client *client)
 	regmap_write(cs35l41->regmap, CS35L41_IRQ1_MASK1, 0xFFFFFFFF);
 	wm_adsp2_remove(&cs35l41->dsp);
 	regulator_bulk_disable(cs35l41->num_supplies, cs35l41->supplies);
-	snd_soc_unregister_component(cs35l41->dev);
+	snd_soc_unregister_codec(cs35l41->dev);
 	return 0;
 }
 

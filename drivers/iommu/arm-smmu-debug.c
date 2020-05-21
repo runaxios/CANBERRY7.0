@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/device.h>
@@ -116,7 +124,7 @@ void arm_smmu_debug_dump_tbu_testbus(struct device *dev, void __iomem *tbu_base,
 		u32 testbus_version)
 {
 	if (tbu_testbus_sel & TBU_CLK_GATE_CONTROLLER_TESTBUS_SEL) {
-		dev_info(dev, "Dumping TBU clk gate controller:\n");
+		dev_info(dev, "Dumping TBU clk gate controller:");
 		arm_smmu_debug_program_tbu_testbus(tbu_base, tcu_base,
 				testbus_version,
 				TBU_CLK_GATE_CONTROLLER_TESTBUS);
@@ -128,7 +136,7 @@ void arm_smmu_debug_dump_tbu_testbus(struct device *dev, void __iomem *tbu_base,
 	}
 
 	if (tbu_testbus_sel & TBU_QNS4_A2Q_TESTBUS_SEL) {
-		dev_info(dev, "Dumping TBU qns4 a2q test bus:\n");
+		dev_info(dev, "Dumping TBU qns4 a2q test bus");
 		arm_smmu_debug_program_tbu_testbus(tbu_base, tcu_base,
 				testbus_version, TBU_QNS4_A2Q_TESTBUS);
 		arm_smmu_debug_dump_tbu_qns4_testbus(dev, tbu_base,
@@ -136,7 +144,7 @@ void arm_smmu_debug_dump_tbu_testbus(struct device *dev, void __iomem *tbu_base,
 	}
 
 	if (tbu_testbus_sel & TBU_QNS4_Q2A_TESTBUS_SEL) {
-		dev_info(dev, "Dumping qns4 q2a test bus:\n");
+		dev_info(dev, "Dumping qns4 q2a test bus");
 		arm_smmu_debug_program_tbu_testbus(tbu_base, tcu_base,
 				testbus_version, TBU_QNS4_Q2A_TESTBUS);
 		arm_smmu_debug_dump_tbu_qns4_testbus(dev, tbu_base,
@@ -144,7 +152,7 @@ void arm_smmu_debug_dump_tbu_testbus(struct device *dev, void __iomem *tbu_base,
 	}
 
 	if (tbu_testbus_sel & TBU_MULTIMASTER_QCHANNEL_TESTBUS_SEL) {
-		dev_info(dev, "Dumping multi master qchannel:\n");
+		dev_info(dev, "Dumping multi master qchannel:");
 		arm_smmu_debug_program_tbu_testbus(tbu_base, tcu_base,
 				testbus_version,
 				TBU_MULTIMASTER_QCHANNEL_TESTBUS);

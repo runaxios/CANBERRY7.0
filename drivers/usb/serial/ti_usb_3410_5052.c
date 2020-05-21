@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * TI 3410/5052 USB Serial Driver
  *
@@ -7,6 +6,11 @@
  * This driver is based on the Linux io_ti driver, which is
  *   Copyright (C) 2000-2002 Inside Out Networks
  *   Copyright (C) 2001-2002 Greg Kroah-Hartman
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * For questions or problems with this driver, contact Texas Instruments
  * technical support, or Al Borchers <alborchers@steinerpoint.com>, or
@@ -776,6 +780,7 @@ static void ti_close(struct usb_serial_port *port)
 	struct ti_port *tport;
 	int port_number;
 	int status;
+	int do_unlock;
 	unsigned long flags;
 
 	tdev = usb_get_serial_data(port->serial);
@@ -799,13 +804,16 @@ static void ti_close(struct usb_serial_port *port)
 			"%s - cannot send close port command, %d\n"
 							, __func__, status);
 
-	mutex_lock(&tdev->td_open_close_lock);
+	/* if mutex_lock is interrupted, continue anyway */
+	do_unlock = !mutex_lock_interruptible(&tdev->td_open_close_lock);
 	--tport->tp_tdev->td_open_port_count;
-	if (tport->tp_tdev->td_open_port_count == 0) {
+	if (tport->tp_tdev->td_open_port_count <= 0) {
 		/* last port is closed, shut down interrupt urb */
 		usb_kill_urb(port->serial->port[0]->interrupt_in_urb);
+		tport->tp_tdev->td_open_port_count = 0;
 	}
-	mutex_unlock(&tdev->td_open_close_lock);
+	if (do_unlock)
+		mutex_unlock(&tdev->td_open_close_lock);
 }
 
 
@@ -1211,7 +1219,6 @@ static void ti_bulk_in_callback(struct urb *urb)
 	struct usb_serial_port *port = tport->tp_port;
 	struct device *dev = &urb->dev->dev;
 	int status = urb->status;
-	unsigned long flags;
 	int retval = 0;
 
 	switch (status) {
@@ -1244,20 +1251,20 @@ static void ti_bulk_in_callback(struct urb *urb)
 				__func__);
 		else
 			ti_recv(port, urb->transfer_buffer, urb->actual_length);
-		spin_lock_irqsave(&tport->tp_lock, flags);
+		spin_lock(&tport->tp_lock);
 		port->icount.rx += urb->actual_length;
-		spin_unlock_irqrestore(&tport->tp_lock, flags);
+		spin_unlock(&tport->tp_lock);
 	}
 
 exit:
 	/* continue to read unless stopping */
-	spin_lock_irqsave(&tport->tp_lock, flags);
+	spin_lock(&tport->tp_lock);
 	if (tport->tp_read_urb_state == TI_READ_URB_RUNNING)
 		retval = usb_submit_urb(urb, GFP_ATOMIC);
 	else if (tport->tp_read_urb_state == TI_READ_URB_STOPPING)
 		tport->tp_read_urb_state = TI_READ_URB_STOPPED;
 
-	spin_unlock_irqrestore(&tport->tp_lock, flags);
+	spin_unlock(&tport->tp_lock);
 	if (retval)
 		dev_err(dev, "%s - resubmit read urb failed, %d\n",
 			__func__, retval);

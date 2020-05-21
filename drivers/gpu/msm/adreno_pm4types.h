@@ -1,6 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2002,2007-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 #ifndef __ADRENO_PM4TYPES_H
 #define __ADRENO_PM4TYPES_H
@@ -382,24 +390,6 @@ static inline uint cp_invalidate_state(struct adreno_device *adreno_dev,
 	}
 
 	return cmds - start;
-}
-
-static inline u32 cp_protected_mode(struct adreno_device *adreno_dev,
-		u32 *cmds, int on)
-{
-	cmds[0] = cp_packet(adreno_dev, CP_SET_PROTECTED_MODE, 1);
-	cmds[1] = on;
-
-	return 2;
-}
-
-static inline u32 cp_identifier(struct adreno_device *adreno_dev,
-		u32 *cmds, u32 id)
-{
-	cmds[0] = cp_packet(adreno_dev, CP_NOP, 1);
-	cmds[1] = id;
-
-	return 2;
 }
 
 #endif	/* __ADRENO_PM4TYPES_H */

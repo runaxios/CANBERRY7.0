@@ -1,3 +1,6 @@
+menu "Kernel hacking"
+
+source "lib/Kconfig.debug"
 
 config ARM64_PTDUMP_CORE
 	def_bool n
@@ -97,3 +100,5 @@ config ARM64_STRICT_BREAK_BEFORE_MAKE
 	bool "Enforce strict break-before-make on page table updates "
 
 source "drivers/hwtracing/coresight/Kconfig"
+
+endmenu

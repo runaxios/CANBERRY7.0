@@ -11,9 +11,21 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/delayacct.h>
+#include <linux/binfmts.h>
 #include <linux/pid_namespace.h>
 #include <linux/cgroupstats.h>
-
+#ifdef CONFIG_CPU_INPUT_BOOST
+#include <linux/cpu_input_boost.h>
+#endif
+#ifdef CONFIG_DEVFREQ_BOOST
+#include <linux/devfreq_boost.h>
+#endif
+#ifdef CONFIG_DEVFREQ_BOOST_DDR
+#include <linux/devfreq_boost_ddr.h>
+#endif
+#ifdef CONFIG_DEVFREQ_BOOST_GPU
+#include <linux/devfreq_boost_gpu.h>
+#endif
 #include <trace/events/cgroup.h>
 
 /*
@@ -135,7 +147,7 @@ int cgroup_transfer_tasks(struct cgroup *to, struct cgroup *from)
 		if (task) {
 			ret = cgroup_migrate(task, false, &mgctx);
 			if (!ret)
-				TRACE_CGROUP_PATH(transfer_tasks, to, task, false);
+				trace_cgroup_transfer_tasks(to, task, false);
 			put_task_struct(task);
 		}
 	} while (task && !ret);
@@ -195,9 +207,9 @@ struct cgroup_pidlist {
 static void *pidlist_allocate(int count)
 {
 	if (PIDLIST_TOO_LARGE(count))
-		return vmalloc(array_size(count, sizeof(pid_t)));
+		return vmalloc(count * sizeof(pid_t));
 	else
-		return kmalloc_array(count, sizeof(pid_t), GFP_KERNEL);
+		return kmalloc(count * sizeof(pid_t), GFP_KERNEL);
 }
 
 static void pidlist_free(void *p)
@@ -550,6 +562,24 @@ static ssize_t __cgroup1_procs_write(struct kernfs_open_file *of,
 
 	ret = cgroup_attach_task(cgrp, task, threadgroup);
 
+	/* This covers boosting for app launches and app transitions */
+#ifdef CONFIG_CPU_INPUT_BOOST
+	if (of && task) {
+		if (!ret && !threadgroup && !strcmp(of->kn->parent->name, "top-app") &&
+	    	(task_is_zygote(task->parent))) {
+			if (task->cpu < 4)
+				cpu_input_boost_kick_cluster1(1000);
+			else if ((task->cpu > 3) && (task->cpu < 7))
+				cpu_input_boost_kick_cluster2(1000);
+#ifdef CONFIG_DEVFRQ_BOOST
+			devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 1000);
+			devfreq_boost_ddr_kick_max(DEVFREQ_MSM_DDRBW, 1000);
+			devfreq_boost_gpu_kick_max(DEVFREQ_MSM_GPUBW, 1000);
+#endif
+		}
+	}
+#endif
+
 out_finish:
 	cgroup_procs_write_finish(task);
 out_unlock:
@@ -683,7 +713,7 @@ struct cftype cgroup1_base_files[] = {
 };
 
 /* Display information about each subsystem and each hierarchy */
-int proc_cgroupstats_show(struct seq_file *m, void *v)
+static int proc_cgroupstats_show(struct seq_file *m, void *v)
 {
 	struct cgroup_subsys *ss;
 	int i;
@@ -705,6 +735,18 @@ int proc_cgroupstats_show(struct seq_file *m, void *v)
 	mutex_unlock(&cgroup_mutex);
 	return 0;
 }
+
+static int cgroupstats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, proc_cgroupstats_show, NULL);
+}
+
+const struct file_operations proc_cgroupstats_operations = {
+	.open = cgroupstats_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 
 /**
  * cgroupstats_build - build and fill cgroupstats
@@ -866,7 +908,7 @@ static int cgroup1_rename(struct kernfs_node *kn, struct kernfs_node *new_parent
 
 	ret = kernfs_rename(kn, new_parent, new_name_str);
 	if (!ret)
-		TRACE_CGROUP_PATH(rename, cgrp);
+		trace_cgroup_rename(cgrp);
 
 	mutex_unlock(&cgroup_mutex);
 

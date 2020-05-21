@@ -1,8 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
-
 #include <linux/completion.h>
 #include <linux/debugfs.h>
 #include <linux/dma-mapping.h>
@@ -39,10 +45,10 @@ static ssize_t gsi_dump_evt(struct file *file,
 	struct gsi_evt_ctx *ctx;
 	uint16_t i;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		return -EINVAL;
 
-	missing = copy_from_user(dbg_buff, buf, count);
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
 	if (missing)
 		return -EFAULT;
 
@@ -152,10 +158,10 @@ static ssize_t gsi_dump_ch(struct file *file,
 	struct gsi_chan_ctx *ctx;
 	uint16_t i;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		return -EINVAL;
 
-	missing = copy_from_user(dbg_buff, buf, count);
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
 	if (missing)
 		return -EFAULT;
 
@@ -291,11 +297,18 @@ static ssize_t gsi_dump_stats(struct file *file,
 		const char __user *buf, size_t count, loff_t *ppos)
 {
 	int ch_id;
-	int min, max, ret;
+	int min, max;
 
-	ret = kstrtos32_from_user(buf, count, 0, &ch_id);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		goto error;
+
+	if (copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count)))
+		goto error;
+
+	dbg_buff[count] = '\0';
+
+	if (kstrtos32(dbg_buff, 0, &ch_id))
+		goto error;
 
 	if (ch_id == -1) {
 		min = 0;
@@ -345,10 +358,10 @@ static ssize_t gsi_enable_dp_stats(struct file *file,
 	bool enable;
 	int ret;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		goto error;
 
-	if (copy_from_user(dbg_buff, buf, count))
+	if (copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count)))
 		goto error;
 
 	dbg_buff[count] = '\0';
@@ -405,10 +418,10 @@ static ssize_t gsi_set_max_elem_dp_stats(struct file *file,
 	char *sptr, *token;
 
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		goto error;
 
-	missing = copy_from_user(dbg_buff, buf, count);
+	missing = copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count));
 	if (missing)
 		goto error;
 
@@ -525,11 +538,18 @@ static ssize_t gsi_rst_stats(struct file *file,
 		const char __user *buf, size_t count, loff_t *ppos)
 {
 	int ch_id;
-	int min, max, ret;
+	int min, max;
 
-	ret = kstrtos32_from_user(buf, count, 0, &ch_id);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		goto error;
+
+	if (copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count)))
+		goto error;
+
+	dbg_buff[count] = '\0';
+
+	if (kstrtos32(dbg_buff, 0, &ch_id))
+		goto error;
 
 	if (ch_id == -1) {
 		min = 0;
@@ -559,10 +579,10 @@ static ssize_t gsi_print_dp_stats(struct file *file,
 	bool enable;
 	int ret;
 
-	if (count >= sizeof(dbg_buff))
+	if (sizeof(dbg_buff) < count + 1)
 		goto error;
 
-	if (copy_from_user(dbg_buff, buf, count))
+	if (copy_from_user(dbg_buff, buf, min(sizeof(dbg_buff), count)))
 		goto error;
 
 	dbg_buff[count] = '\0';
@@ -613,12 +633,19 @@ error:
 static ssize_t gsi_enable_ipc_low(struct file *file,
 	const char __user *ubuf, size_t count, loff_t *ppos)
 {
+	unsigned long missing;
 	s8 option = 0;
-	int ret;
 
-	ret = kstrtos8_from_user(ubuf, count, 0, &option);
-	if (ret)
-		return ret;
+	if (sizeof(dbg_buff) < count + 1)
+		return -EFAULT;
+
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
+	if (missing)
+		return -EFAULT;
+
+	dbg_buff[count] = '\0';
+	if (kstrtos8(dbg_buff, 0, &option))
+		return -EINVAL;
 
 	mutex_lock(&gsi_ctx->mlock);
 	if (option) {

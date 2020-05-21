@@ -2,7 +2,7 @@
  * hwconf_manager.c
  *
  * Copyright (C) 2016 Xiaomi Ltd.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2019 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -18,21 +18,13 @@
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/crypto.h>
+#include <linux/cJSON.h>
 #include <asm/setup.h>
 #include <asm/hwconf_manager.h>
 
-#define MAX_LEN_STR 256
-char *print_buf;
-
-typedef struct hw_item {
-	struct hw_item *next;
-	struct hw_item *child;
-	char name[MAX_LEN_STR];
-	char value[MAX_LEN_STR];
-} hw_item;
-
 struct hw_info_manager {
-	struct hw_item *hw_monitor;
+	cJSON *hw_config;
+	cJSON *hw_monitor;
 	struct crypto_cipher *tfm;
 	struct kobject *hwconf_kobj;
 	struct dentry *hwconf_check;
@@ -40,171 +32,6 @@ struct hw_info_manager {
 };
 
 struct hw_info_manager *info_manager;
-
-void hw_item_free(hw_item *item)
-{
-	hw_item *next;
-
-	while (item) {
-		next = item->next;
-		if (item->child)
-			hw_item_free(item->child);
-		kfree(item);
-		item = next;
-	}
-}
-
-hw_item *hw_item_get_child(hw_item *root, const char *name)
-{
-	hw_item *item = root->child;
-
-	while (item && strncmp(item->name, name, MAX_LEN_STR))
-		item = item->next;
-
-	return item;
-}
-
-void hw_item_add_child(hw_item *root, const char *name, const char *value)
-{
-	hw_item *child, *it;
-	pr_info("hw_item_add_child: %s:%s\n", name, value);
-
-	it = kmalloc(sizeof(hw_item), GFP_KERNEL);
-	if (!it) {
-		return;
-	} else {
-		memset(it, 0, sizeof(hw_item));
-		if (name)
-			strlcpy(it->name, name, MAX_LEN_STR);
-
-		if (value)
-			strlcpy(it->value, value, MAX_LEN_STR);
-
-		child = root->child;
-
-		if (!child) {
-			root->child = it;
-		} else {
-			while (child && child->next)
-				child = child->next;
-
-			child->next = it;
-		}
-	}
-}
-
-void hw_item_update_child(hw_item *child, const char *name, const char *value)
-{
-	if (!child) {
-		return;
-	}
-
-	memset(child->value, 0, MAX_LEN_STR);
-	if (value) {
-		strlcpy(child->value, value, MAX_LEN_STR);
-	}
-}
-
-void hw_item_remove(hw_item *root, char *component_name)
-{
-	bool in_list = false;
-	hw_item *parent = root;
-	hw_item *item = root->child;
-
-	while (item && strncmp(item->name, component_name, MAX_LEN_STR)) {
-		parent = item;
-		item = item->next;
-		in_list = true;
-	}
-
-	if (item) {
-		if (in_list) {
-			parent->next = item->next;
-		} else {
-			parent->child = item->next;
-		}
-
-		hw_item_free(item);
-	}
-}
-
-static char *hw_item_print(hw_item *item, int ident, int *offset)
-{
-	hw_item *next;
-	int i, ident_child;
-	int size = *offset;
-
-	if (!print_buf) {
-		pr_err("hw_item_print: print_buf kmalloc failed\n");
-		return NULL;
-	}
-
-	for (i = 0; i < ident * 4; i++) {
-		size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " ");
-	}
-	size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "{\n");
-
-	while (item) {
-		next = item->next;
-		if (item->child) {
-			if (strlen(item->name) != 0) {
-				for (i = 0; i < (ident + 1) * 4; i++) {
-					size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " ");
-				}
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\"");
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", item->name);
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\" : {\n");
-			}
-
-			ident_child = (strlen(item->name) == 0) ? (ident + 1) : (ident + 2);
-
-			*offset = size;
-			hw_item_print(item->child, ident_child, offset);
-			size = *offset;
-
-			if (strlen(item->name) != 0) {
-				for (i = 0; i < (ident + 1) * 4; i++) {
-					size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " ");
-				}
-
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "},\n");
-			}
-		} else {
-			for (i = 0; i < (ident + 1) * 4; i++) {
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " ");
-			}
-			size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\"");
-			size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", item->name);
-			size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\"");
-			size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " : ");
-
-			if (strlen(item->value) != 0) {
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\"");
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", item->value);
-				size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\",");
-			}
-			size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "\n");
-		}
-
-		item = next;
-	}
-
-	for (i = 0; i < (ident * 4); i++) {
-		size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", " ");
-	}
-	size += snprintf(print_buf + size, PAGE_SIZE - size, "%s", "}\n");
-	*offset = size;
-
-	return print_buf;
-}
-
-static char *hw_item_dump(void)
-{
-	int offset = 0;
-	memset(print_buf, 0, PAGE_SIZE);
-	return hw_item_print(info_manager->hw_monitor, 0, &offset);
-}
-
 static RAW_NOTIFIER_HEAD(hw_mon_notifier_list);
 static DEFINE_MUTEX(hw_mon_notifier_lock);
 
@@ -225,47 +52,101 @@ static struct kobj_attribute _name##_attr = {	\
 
 int add_hw_component_info(char *component_name, char *key, char *value)
 {
+	cJSON *component;
+
+	if (!info_manager->hw_config) {
+		pr_err("hwconfig_manager is still not ready.\n");
+		return -EINVAL;
+	}
+
+	component = cJSON_GetObjectItem(info_manager->hw_config,
+					component_name);
+	if (!component)
+		return -EINVAL;
+
+	if (cJSON_HasObjectItem(component, key)) {
+		pr_err("%s is added in %s already\n", key, component_name);
+		return -EINVAL;
+	}
+
+	cJSON_AddStringToObject(component, key, value);
+	pr_debug("%s: %s\n", __func__, cJSON_Print(component));
+
 	return 0;
 }
 EXPORT_SYMBOL(add_hw_component_info);
 
 int register_hw_component_info(char *component_name)
 {
+	cJSON *component;
+
+	if (!info_manager->hw_config) {
+		pr_err("hwconfig_manager is still not ready.\n");
+		return -EINVAL;
+	}
+
+	component = cJSON_GetObjectItem(info_manager->hw_config,
+					component_name);
+	if (component) {
+		pr_err("%s is registered already\n", component_name);
+		return -EINVAL;
+	}
+
+	component = cJSON_CreateObject();
+	cJSON_AddItemToObject(info_manager->hw_config,
+			      component_name, component);
+	pr_debug("%s: %s\n", __func__, cJSON_Print(component));
+
 	return 0;
 }
 EXPORT_SYMBOL(register_hw_component_info);
 
 int unregister_hw_component_info(char *component_name)
 {
+	cJSON *component;
+
+	if (!info_manager->hw_config) {
+		pr_err("hwconfig_manager is still not ready.\n");
+		return -EINVAL;
+	}
+
+	component = cJSON_GetObjectItem(info_manager->hw_config,
+					component_name);
+	if (!component)
+		return -EINVAL;
+
+	cJSON_DetachItemFromObject(info_manager->hw_config,
+				   component_name);
+
 	return 0;
 }
 EXPORT_SYMBOL(unregister_hw_component_info);
 
 int update_hw_monitor_info(char *component_name, char *mon_key, char *mon_value)
 {
-	hw_item *component;
-	hw_item *child;
+	cJSON *component;
 
 	if (!info_manager->hw_monitor) {
 		pr_err("hwconfig_manager is still not ready.\n");
 		return -EINVAL;
 	}
 
-	component = hw_item_get_child(info_manager->hw_monitor,
+	component = cJSON_GetObjectItem(info_manager->hw_monitor,
 					component_name);
 	if (!component) {
 		pr_err("No component %s\n", component_name);
 		return -EINVAL;
 	}
 
-	child = hw_item_get_child(component, mon_key);
-	if (!child) {
-		pr_err("Not find %s in %s\n", mon_key, component_name);
+	if (!cJSON_HasObjectItem(component, mon_key)) {
+		pr_err("No key %s\n", mon_key);
 		return -EINVAL;
 	}
 
-	hw_item_update_child(child, mon_key, mon_value);
-	pr_debug("%s: %s\n", __func__, hw_item_dump());
+	cJSON_DeleteItemFromObject(component, mon_key);
+	cJSON_AddStringToObject(component, mon_key, mon_value);
+
+	pr_debug("%s: %s\n", __func__, cJSON_Print(info_manager->hw_monitor));
 
 	return 0;
 }
@@ -273,27 +154,25 @@ EXPORT_SYMBOL(update_hw_monitor_info);
 
 int add_hw_monitor_info(char *component_name, char *mon_key, char *mon_value)
 {
-	hw_item *component;
+	cJSON *component;
 
 	if (!info_manager->hw_monitor) {
 		pr_err("hwconfig_manager is still not ready.\n");
 		return -EINVAL;
 	}
 
-	component = hw_item_get_child(info_manager->hw_monitor,
+	component = cJSON_GetObjectItem(info_manager->hw_monitor,
 					component_name);
-	if (!component) {
-		pr_err("can NOT find %s\n", component_name);
+	if (!component)
 		return -EINVAL;
-	}
 
-	if (hw_item_get_child(component, mon_key)) {
+	if (cJSON_HasObjectItem(component, mon_key)) {
 		pr_err("%s is added in %s already\n", mon_key, component_name);
 		return -EINVAL;
 	}
 
-	hw_item_add_child(component, mon_key, mon_value);
-	pr_debug("%s: %s\n", __func__, hw_item_dump());
+	cJSON_AddStringToObject(component, mon_key, mon_value);
+	pr_debug("%s: %s\n", __func__, cJSON_Print(component));
 
 	return 0;
 }
@@ -301,24 +180,24 @@ EXPORT_SYMBOL(add_hw_monitor_info);
 
 int register_hw_monitor_info(char *component_name)
 {
-	hw_item *component;
+	cJSON *component;
 
 	if (!info_manager->hw_monitor) {
 		pr_err("hwconfig_manager is still not ready.\n");
 		return -EINVAL;
 	}
 
-	component = hw_item_get_child(info_manager->hw_monitor,
+	component = cJSON_GetObjectItem(info_manager->hw_monitor,
 					component_name);
 	if (component) {
 		pr_err("%s is registered already\n", component_name);
 		return -EINVAL;
 	}
 
-	hw_item_add_child(info_manager->hw_monitor,
-			      component_name, NULL);
-
-	pr_debug("%s: %s\n", __func__, hw_item_dump());
+	component = cJSON_CreateObject();
+	cJSON_AddItemToObject(info_manager->hw_monitor,
+			      component_name, component);
+	pr_debug("%s: %s\n", __func__, cJSON_Print(component));
 
 	return 0;
 }
@@ -326,19 +205,21 @@ EXPORT_SYMBOL(register_hw_monitor_info);
 
 int unregister_hw_monitor_info(char *component_name)
 {
-	hw_item *component;
+	cJSON *component;
 
 	if (!info_manager->hw_monitor) {
 		pr_err("hwconfig_manager is still not ready.\n");
 		return -EINVAL;
 	}
 
-	component = hw_item_get_child(info_manager->hw_monitor,
+	component = cJSON_GetObjectItem(info_manager->hw_monitor,
 					component_name);
 	if (!component)
 		return -EINVAL;
 
-	hw_item_remove(info_manager->hw_monitor, component_name);
+	cJSON_DetachItemFromObject(info_manager->hw_monitor,
+				   component_name);
+
 	return 0;
 }
 EXPORT_SYMBOL(unregister_hw_monitor_info);
@@ -433,9 +314,8 @@ out:
 static ssize_t hw_info_show(struct kobject *kobj,
 			    struct kobj_attribute *attr, char *buf)
 {
-#if 0
 	int ret;
-	char *src = {0}; /*cJSON_Print(info_manager->hw_config);*/
+	char *src = cJSON_Print(info_manager->hw_config);
 	int i;
 	unsigned int blocksize;
 	char *padding;
@@ -488,15 +368,23 @@ static ssize_t hw_info_show(struct kobject *kobj,
 #endif
 
 	return blocks * blocksize;
-#else
-	return 0;
-#endif
 }
 
 static ssize_t hw_mon_store(struct kobject *kobj,
 			    struct kobj_attribute *attr, const char *buf,
 			    size_t count)
 {
+	int on = 99;
+	char component_name[32] = { 0 };
+	int len;
+
+	len = sscanf(buf, "%s %d", component_name, &on);
+
+	pr_debug("%s component_name=%s, on=%d\n", __func__, component_name, on);
+
+	if (on == 0)
+		unregister_hw_monitor_info(component_name);
+
 	return count;
 }
 
@@ -507,8 +395,8 @@ static ssize_t hw_mon_show(struct kobject *kobj,
 	raw_notifier_call_chain(&hw_mon_notifier_list,
 					0, NULL);
 	mutex_unlock(&hw_mon_notifier_lock);
-
-	return snprintf(buf, PAGE_SIZE, "%s\n", hw_item_dump());
+	return snprintf(buf, PAGE_SIZE, "%s\n",
+			cJSON_Print(info_manager->hw_monitor));
 }
 
 hwconf_attr(hw_info);
@@ -526,6 +414,8 @@ static struct attribute_group attr_group = {
 
 static int hwconf_debugfs_get(void *data, u64 *val)
 {
+	pr_debug("hw_config:\n%s\n", cJSON_Print(info_manager->hw_config));
+	pr_debug("hw_monitor:\n%s\n", cJSON_Print(info_manager->hw_monitor));
 	*val = 0;
 	return 0;
 }
@@ -555,7 +445,6 @@ int hw_monitor_notifier_register(struct notifier_block *nb)
 
 	if (!nb || !info_manager->hw_mon_inited)
 		return -EINVAL;
-
 	mutex_lock(&hw_mon_notifier_lock);
 	ret = raw_notifier_chain_register(&hw_mon_notifier_list, nb);
 	if (info_manager->hw_mon_inited)
@@ -571,9 +460,9 @@ int hw_monitor_notifier_unregister(struct notifier_block *nb)
 
 	if (!nb || !info_manager->hw_mon_inited)
 		return -EINVAL;
-
 	mutex_lock(&hw_mon_notifier_lock);
-	ret = raw_notifier_chain_unregister(&hw_mon_notifier_list, nb);
+	ret = raw_notifier_chain_unregister(&hw_mon_notifier_list,
+						nb);
 	mutex_unlock(&hw_mon_notifier_lock);
 	return ret;
 }
@@ -587,20 +476,8 @@ static int __init hwconf_init(void)
 	if (!info_manager)
 		return ret;
 	memset(info_manager, 0, sizeof(struct hw_info_manager));
-
-	print_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!print_buf) {
-		pr_err("hwconf_init: print_buf kmalloc failed\n");
-		goto print_buf_fail;
-	}
-	memset(print_buf, 0, PAGE_SIZE);
-
-	info_manager->hw_monitor = kmalloc(sizeof(hw_item), GFP_KERNEL);
-	if (!info_manager->hw_monitor) {
-		pr_err("hwconf_init: hw_monitor kmalloc failed\n");
-		goto hw_monitor_fail;
-	}
-	memset(info_manager->hw_monitor, 0, sizeof(hw_item));
+	info_manager->hw_config = cJSON_CreateObject();
+	info_manager->hw_monitor = cJSON_CreateObject();
 
 	info_manager->hwconf_kobj = kobject_create_and_add("hwconf", NULL);
 	if (!info_manager->hwconf_kobj) {
@@ -624,10 +501,8 @@ static int __init hwconf_init(void)
 sys_fail:
 	kobject_del(info_manager->hwconf_kobj);
 fail:
-	hw_item_free(info_manager->hw_monitor);
-hw_monitor_fail:
-	kfree(print_buf);
-print_buf_fail:
+	cJSON_Delete(info_manager->hw_config);
+	cJSON_Delete(info_manager->hw_monitor);
 	kfree(info_manager);
 
 	return ret;
@@ -635,14 +510,14 @@ print_buf_fail:
 
 static void __exit hwconf_exit(void)
 {
-	hw_item_free(info_manager->hw_monitor);
+	cJSON_Delete(info_manager->hw_config);
+	cJSON_Delete(info_manager->hw_monitor);
 
 	if (info_manager->hwconf_kobj) {
 		sysfs_remove_group(info_manager->hwconf_kobj, &attr_group);
 		kobject_del(info_manager->hwconf_kobj);
 	}
 	debugfs_remove(info_manager->hwconf_check);
-	kfree(print_buf);
 	kfree(info_manager);
 }
 

@@ -46,6 +46,8 @@
 static struct mce i_mce;
 static struct dentry *dfs_inj;
 
+static u8 n_banks;
+
 #define MAX_FLAG_OPT_SIZE	4
 #define NBCFG			0x44
 
@@ -489,7 +491,7 @@ static void do_inject(void)
 	unsigned int cpu = i_mce.extcpu;
 	u8 b = i_mce.bank;
 
-	i_mce.tsc = rdtsc_ordered();
+	rdtscll(i_mce.tsc);
 
 	if (i_mce.misc)
 		i_mce.status |= MCI_STATUS_MISCV;
@@ -565,15 +567,9 @@ err:
 static int inj_bank_set(void *data, u64 val)
 {
 	struct mce *m = (struct mce *)data;
-	u8 n_banks;
-	u64 cap;
-
-	/* Get bank count on target CPU so we can handle non-uniform values. */
-	rdmsrl_on_cpu(m->extcpu, MSR_IA32_MCG_CAP, &cap);
-	n_banks = cap & MCG_BANKCNT_MASK;
 
 	if (val >= n_banks) {
-		pr_err("MCA bank %llu non-existent on CPU%d\n", val, m->extcpu);
+		pr_err("Non-existent MCE bank: %llu\n", val);
 		return -EINVAL;
 	}
 
@@ -663,6 +659,10 @@ static struct dfs_node {
 static int __init debugfs_init(void)
 {
 	unsigned int i;
+	u64 cap;
+
+	rdmsrl(MSR_IA32_MCG_CAP, cap);
+	n_banks = cap & MCG_BANKCNT_MASK;
 
 	dfs_inj = debugfs_create_dir("mce-inject", NULL);
 	if (!dfs_inj)

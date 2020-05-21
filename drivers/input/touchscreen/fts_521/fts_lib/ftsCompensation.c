@@ -309,7 +309,7 @@ int readSelfSenseNodeData(u64 address, SelfSenseData *node)
 {
 
 	int size = node->header.force_node * 2 + node->header.sense_node * 2;
-	u8 data[TXNODE_MAX * 2 + RXNODE_MAX * 2];
+	u8 data[size];
 	int ret;
 
 	node->ix2_fm =
@@ -490,21 +490,15 @@ int readTotMutualSenseNodeData(u64 address, TotMutualSenseData *node)
 	int ret, i;
 	int size = node->header.force_node * node->header.sense_node;
 	int toRead = size * sizeof(u16);
-	u8 *data;
+	u8 data[toRead];
 
 	logError(0, "%s Address for Node data = %04X \n", tag, address);
-	data = kzalloc(toRead * sizeof(u16), GFP_KERNEL);
-	if (data == NULL) {
-		logError(1, "%s %s no memory\n", tag, __func__);
-		return ERROR_ALLOC;
-	}
+
 	node->node_data = (short *)kmalloc(size * (sizeof(short)), GFP_KERNEL);
 
 	if (node->node_data == NULL) {
 		logError(1, "%s %s: can not allocate node_data... ERROR %08X",
 			 tag, __func__, ERROR_ALLOC);
-		kfree(data);
-		data = NULL;
 		return ERROR_ALLOC;
 	}
 
@@ -519,8 +513,6 @@ int readTotMutualSenseNodeData(u64 address, TotMutualSenseData *node)
 			 tag, __func__, ret);
 		kfree(node->node_data);
 		node->node_data = NULL;
-		kfree(data);
-		data = NULL;
 		return ret;
 	}
 	node->node_data_size = size;
@@ -531,8 +523,6 @@ int readTotMutualSenseNodeData(u64 address, TotMutualSenseData *node)
 	}
 
 	logError(0, "%s Read node data OK! \n", tag);
-	kfree(data);
-	data = NULL;
 
 	return size;
 
@@ -640,7 +630,7 @@ int readTotSelfSenseNodeData(u64 address, TotSelfSenseData *node)
 
 	int size = node->header.force_node * 2 + node->header.sense_node * 2;
 	int toRead = size * 2;
-	u8 data[(TXNODE_MAX * 2 + RXNODE_MAX * 2) * 2];
+	u8 data[toRead];
 	int ret, i, j = 0;
 
 	node->ix_fm =

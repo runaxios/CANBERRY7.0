@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2013-2015,2017,2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (c) 2013-2015,2017, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2019 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "cpu-boost: " fmt
@@ -11,31 +19,10 @@
 #include <linux/cpufreq.h>
 #include <linux/cpu.h>
 #include <linux/sched.h>
+#include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/time.h>
-#include <linux/sysfs.h>
-
-#define cpu_boost_attr_rw(_name)		\
-static struct kobj_attribute _name##_attr =	\
-__ATTR(_name, 0644, show_##_name, store_##_name)
-
-#define show_one(file_name)			\
-static ssize_t show_##file_name			\
-(struct kobject *kobj, struct kobj_attribute *attr, char *buf)	\
-{								\
-	return scnprintf(buf, PAGE_SIZE, "%u\n", file_name);	\
-}
-
-#define store_one(file_name)					\
-static ssize_t store_##file_name				\
-(struct kobject *kobj, struct kobj_attribute *attr,		\
-const char *buf, size_t count)					\
-{								\
-								\
-	sscanf(buf, "%u", &file_name);				\
-	return count;						\
-}
 
 struct cpu_sync {
 	int cpu;
@@ -44,35 +31,29 @@ struct cpu_sync {
 	unsigned int powerkey_input_boost_freq;
 };
 
+enum input_boost_type {
+	default_input_boost,
+	powerkey_input_boost
+};
 
 static DEFINE_PER_CPU(struct cpu_sync, sync_info);
 static struct workqueue_struct *cpu_boost_wq;
 
 static struct work_struct input_boost_work;
-
 static struct work_struct powerkey_input_boost_work;
 static bool input_boost_enabled;
 
 static unsigned int input_boost_ms = 40;
-show_one(input_boost_ms);
-store_one(input_boost_ms);
-cpu_boost_attr_rw(input_boost_ms);
+module_param(input_boost_ms, uint, 0644);
 
 static unsigned int powerkey_input_boost_ms = 400;
-show_one(powerkey_input_boost_ms);
-store_one(powerkey_input_boost_ms);
-cpu_boost_attr_rw(powerkey_input_boost_ms);
+module_param(powerkey_input_boost_ms, uint, 0644);
 
 static unsigned int sched_boost_on_input;
-show_one(sched_boost_on_input);
-store_one(sched_boost_on_input);
-cpu_boost_attr_rw(sched_boost_on_input);
-
+module_param(sched_boost_on_input, uint, 0644);
 
 static bool sched_boost_on_powerkey_input = true;
-show_one(sched_boost_on_powerkey_input);
-store_one(sched_boost_on_powerkey_input);
-cpu_boost_attr_rw(sched_boost_on_powerkey_input);
+module_param(sched_boost_on_powerkey_input, bool, 0644);
 
 static bool sched_boost_active;
 
@@ -80,14 +61,18 @@ static struct delayed_work input_boost_rem;
 static u64 last_input_time;
 #define MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
 
-static ssize_t store_input_boost_freq(struct kobject *kobj,
-				      struct kobj_attribute *attr,
-				      const char *buf, size_t count)
+static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, ntokens = 0;
 	unsigned int val, cpu;
 	const char *cp = buf;
 	bool enabled = false;
+	enum input_boost_type type;
+
+	if (strstr(kp->name, "input_boost_freq"))
+		type = default_input_boost;
+	if (strstr(kp->name, "powerkey_input_boost_freq"))
+		type = powerkey_input_boost;
 
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
@@ -96,8 +81,12 @@ static ssize_t store_input_boost_freq(struct kobject *kobj,
 	if (!ntokens) {
 		if (sscanf(buf, "%u\n", &val) != 1)
 			return -EINVAL;
-		for_each_possible_cpu(i)
-			per_cpu(sync_info, i).input_boost_freq = val;
+		for_each_possible_cpu(i) {
+			if (type == default_input_boost)
+				per_cpu(sync_info, i).input_boost_freq = val;
+			else if (type == powerkey_input_boost)
+				per_cpu(sync_info, i).powerkey_input_boost_freq = val;
+		}
 		goto check_enable;
 	}
 
@@ -112,96 +101,45 @@ static ssize_t store_input_boost_freq(struct kobject *kobj,
 		if (cpu >= num_possible_cpus())
 			return -EINVAL;
 
-		per_cpu(sync_info, cpu).input_boost_freq = val;
+                if (type == default_input_boost)
+                        per_cpu(sync_info, cpu).input_boost_freq = val;
+                else if (type == powerkey_input_boost)
+                        per_cpu(sync_info, cpu).powerkey_input_boost_freq = val;
 		cp = strnchr(cp, PAGE_SIZE - (cp - buf), ' ');
 		cp++;
 	}
 
 check_enable:
 	for_each_possible_cpu(i) {
-		if (per_cpu(sync_info, i).input_boost_freq) {
+                if (per_cpu(sync_info, i).input_boost_freq
+                        || per_cpu(sync_info, i).powerkey_input_boost_freq) {
 			enabled = true;
 			break;
 		}
 	}
 	input_boost_enabled = enabled;
 
-	return count;
+	return 0;
 }
 
-static ssize_t show_input_boost_freq(struct kobject *kobj,
-				     struct kobj_attribute *attr, char *buf)
-{
-	int cnt = 0, cpu;
-	struct cpu_sync *s;
-
-	for_each_possible_cpu(cpu) {
-		s = &per_cpu(sync_info, cpu);
-		cnt += snprintf(buf + cnt, PAGE_SIZE - cnt,
-				"%d:%u ", cpu, s->input_boost_freq);
-	}
-	cnt += snprintf(buf + cnt, PAGE_SIZE - cnt, "\n");
-	return cnt;
-}
-
-cpu_boost_attr_rw(input_boost_freq);
-static ssize_t store_powerkey_input_boost_freq(struct kobject *kobj,
-				      struct kobj_attribute *attr,
-				      const char *buf, size_t count)
-{
-	int i, ntokens = 0;
-	unsigned int val, cpu;
-	const char *cp = buf;
-	bool enabled = false;
-
-	while ((cp = strpbrk(cp + 1, " :")))
-		ntokens++;
-
-	/* single number: apply to all CPUs */
-	if (!ntokens) {
-		if (sscanf(buf, "%u\n", &val) != 1)
-			return -EINVAL;
-		for_each_possible_cpu(i)
-			per_cpu(sync_info, i).powerkey_input_boost_freq = val;
-		goto check_enable;
-	}
-
-	/* CPU:value pair */
-	if (!(ntokens % 2))
-		return -EINVAL;
-
-	cp = buf;
-	for (i = 0; i < ntokens; i += 2) {
-		if (sscanf(cp, "%u:%u", &cpu, &val) != 2)
-			return -EINVAL;
-		if (cpu >= num_possible_cpus())
-			return -EINVAL;
-		per_cpu(sync_info, cpu).powerkey_input_boost_freq = val;
-		cp = strnchr(cp, PAGE_SIZE - (cp - buf), ' ');
-		cp++;
-	}
-
-check_enable:
-	for_each_possible_cpu(i) {
-		if (per_cpu(sync_info, i).powerkey_input_boost_freq) {
-			enabled = true;
-			break;
-		}
-	}
-	input_boost_enabled = enabled;
-
-	return count;
-}
-
-static ssize_t show_powerkey_input_boost_freq(struct kobject *kobj,
-				     struct kobj_attribute *attr, char *buf)
+static int get_input_boost_freq(char *buf, const struct kernel_param *kp)
 {
 	int cnt = 0, cpu;
 	struct cpu_sync *s;
 	unsigned int boost_freq = 0;
+	enum input_boost_type type;
+
+	if (strstr(kp->name, "input_boost_freq"))
+		type = default_input_boost;
+	if (strstr(kp->name, "powerkey_input_boost_freq"))
+		type = powerkey_input_boost;
+
 	for_each_possible_cpu(cpu) {
 		s = &per_cpu(sync_info, cpu);
-		boost_freq = s->powerkey_input_boost_freq;
+		if (type == default_input_boost)
+			boost_freq = s->input_boost_freq;
+		else if(type == powerkey_input_boost)
+			boost_freq = s->powerkey_input_boost_freq;
 		cnt += snprintf(buf + cnt, PAGE_SIZE - cnt,
 				"%d:%u ", cpu, boost_freq);
 	}
@@ -209,8 +147,13 @@ static ssize_t show_powerkey_input_boost_freq(struct kobject *kobj,
 	return cnt;
 }
 
+static const struct kernel_param_ops param_ops_input_boost_freq = {
+	.set = set_input_boost_freq,
+	.get = get_input_boost_freq,
+};
+module_param_cb(input_boost_freq, &param_ops_input_boost_freq, NULL, 0644);
 
-cpu_boost_attr_rw(powerkey_input_boost_freq);
+module_param_cb(powerkey_input_boost_freq, &param_ops_input_boost_freq, NULL, 0644);
 
 /*
  * The CPUFREQ_ADJUST notifier is used to override the current policy min to
@@ -378,6 +321,7 @@ static void cpuboost_input_event(struct input_handle *handle,
 void touch_irq_boost(void)
 {
 	u64 now;
+
 	if (!input_boost_enabled)
 		return;
 
@@ -465,7 +409,6 @@ static struct input_handler cpuboost_input_handler = {
 	.id_table       = cpuboost_ids,
 };
 
-struct kobject *cpu_boost_kobj;
 static int cpu_boost_init(void)
 {
 	int cpu, ret;
@@ -484,36 +427,6 @@ static int cpu_boost_init(void)
 		s->cpu = cpu;
 	}
 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
-
-	cpu_boost_kobj = kobject_create_and_add("cpu_boost",
-						&cpu_subsys.dev_root->kobj);
-	if (!cpu_boost_kobj)
-		pr_err("Failed to initialize sysfs node for cpu_boost.\n");
-
-	ret = sysfs_create_file(cpu_boost_kobj, &input_boost_ms_attr.attr);
-	if (ret)
-		pr_err("Failed to create input_boost_ms node: %d\n", ret);
-
-	ret = sysfs_create_file(cpu_boost_kobj, &powerkey_input_boost_ms_attr.attr);
-	if (ret)
-		pr_err("Failed to create powerkey_input_boost_ms node: %d\n", ret);
-
-	ret = sysfs_create_file(cpu_boost_kobj, &input_boost_freq_attr.attr);
-	if (ret)
-		pr_err("Failed to create input_boost_freq node: %d\n", ret);
-	ret = sysfs_create_file(cpu_boost_kobj, &powerkey_input_boost_freq_attr.attr);
-		if (ret)
-			pr_err("Failed to create powerkey_input_boost_freq node: %d\n", ret);
-
-	ret = sysfs_create_file(cpu_boost_kobj,
-				&sched_boost_on_input_attr.attr);
-	if (ret)
-		pr_err("Failed to create sched_boost_on_input node: %d\n", ret);
-
-	ret = sysfs_create_file(cpu_boost_kobj,
-				&sched_boost_on_powerkey_input_attr.attr);
-	if (ret)
-		pr_err("Failed to create sched_boost_on_powerkey_input node: %d\n", ret);
 
 	ret = input_register_handler(&cpuboost_input_handler);
 	return 0;

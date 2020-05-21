@@ -139,8 +139,7 @@ static int xen_blkif_alloc_rings(struct xen_blkif *blkif)
 {
 	unsigned int r;
 
-	blkif->rings = kcalloc(blkif->nr_rings, sizeof(struct xen_blkif_ring),
-			       GFP_KERNEL);
+	blkif->rings = kzalloc(blkif->nr_rings * sizeof(struct xen_blkif_ring), GFP_KERNEL);
 	if (!blkif->rings)
 		return -ENOMEM;
 
@@ -368,7 +367,7 @@ int __init xen_blkif_interface_init(void)
 out:									\
 		return sprintf(buf, format, result);			\
 	}								\
-	static DEVICE_ATTR(name, 0444, show_##name, NULL)
+	static DEVICE_ATTR(name, S_IRUGO, show_##name, NULL)
 
 VBD_SHOW_ALLRING(oo_req,  "%llu\n");
 VBD_SHOW_ALLRING(rd_req,  "%llu\n");
@@ -404,7 +403,7 @@ static const struct attribute_group xen_vbdstat_group = {
 									\
 		return sprintf(buf, format, ##args);			\
 	}								\
-	static DEVICE_ATTR(name, 0444, show_##name, NULL)
+	static DEVICE_ATTR(name, S_IRUGO, show_##name, NULL)
 
 VBD_SHOW(physical_device, "%x:%x\n", be->major, be->minor);
 VBD_SHOW(mode, "%s\n", be->mode);
@@ -974,7 +973,6 @@ static int read_per_ring_refs(struct xen_blkif_ring *ring, const char *dir)
 	}
 	blkif->nr_ring_pages = nr_grefs;
 
-	err = -ENOMEM;
 	for (i = 0; i < nr_grefs * XEN_BLKIF_REQS_PER_PAGE; i++) {
 		req = kzalloc(sizeof(*req), GFP_KERNEL);
 		if (!req)
@@ -997,7 +995,7 @@ static int read_per_ring_refs(struct xen_blkif_ring *ring, const char *dir)
 	err = xen_blkif_map(ring, ring_ref, nr_grefs, evtchn);
 	if (err) {
 		xenbus_dev_fatal(dev, err, "mapping ring-ref port %u", evtchn);
-		goto fail;
+		return err;
 	}
 
 	return 0;
@@ -1017,7 +1015,8 @@ fail:
 		}
 		kfree(req);
 	}
-	return err;
+	return -ENOMEM;
+
 }
 
 static int connect_ring(struct backend_info *be)

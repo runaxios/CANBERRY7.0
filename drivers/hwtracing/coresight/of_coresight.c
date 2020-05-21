@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
- * Copyright (c) 2012,2017-2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2017-2019 The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/types.h>
@@ -71,30 +78,27 @@ static int of_coresight_alloc_memory(struct device *dev,
 			struct coresight_platform_data *pdata)
 {
 	/* List of output port on this component */
-	pdata->outports = devm_kcalloc(dev,
-				       pdata->nr_outport,
+	pdata->outports = devm_kzalloc(dev, pdata->nr_outport *
 				       sizeof(*pdata->outports),
 				       GFP_KERNEL);
 	if (!pdata->outports)
 		return -ENOMEM;
 
 	pdata->source_names = devm_kzalloc(dev, pdata->nr_outport *
-					  sizeof(*pdata->source_names),
-					  GFP_KERNEL);
+					sizeof(*pdata->source_names),
+					GFP_KERNEL);
 	if (!pdata->source_names)
 		return -ENOMEM;
 
 	/* Children connected to this component via @outports */
-	pdata->child_names = devm_kcalloc(dev,
-					  pdata->nr_outport,
+	pdata->child_names = devm_kzalloc(dev, pdata->nr_outport *
 					  sizeof(*pdata->child_names),
 					  GFP_KERNEL);
 	if (!pdata->child_names)
 		return -ENOMEM;
 
 	/* Port number on the child this component is connected to */
-	pdata->child_ports = devm_kcalloc(dev,
-					  pdata->nr_outport,
+	pdata->child_ports = devm_kzalloc(dev, pdata->nr_outport *
 					  sizeof(*pdata->child_ports),
 					  GFP_KERNEL);
 	if (!pdata->child_ports)
@@ -109,16 +113,13 @@ int of_coresight_get_cpu(const struct device_node *node)
 	struct device_node *dn;
 
 	dn = of_parse_phandle(node, "cpu", 0);
-
 	/* Affinity defaults to invalid */
 	if (!dn)
 		return -ENODEV;
-
 	cpu = of_cpu_node_to_id(dn);
 	of_node_put(dn);
 
-	/* Affinity to invalid if no cpu nodes are found */
-	return (cpu < 0) ? -ENODEV : cpu;
+	return cpu;
 }
 EXPORT_SYMBOL_GPL(of_coresight_get_cpu);
 
@@ -255,7 +256,8 @@ of_get_coresight_platform_data(struct device *dev,
 			sn = of_parse_phandle(ep, "source", 0);
 			if (sn) {
 				ret = of_property_read_string(sn,
-				"coresight-name", &pdata->source_names[i]);
+						"coresight-name",
+						&pdata->source_names[i]);
 				of_node_put(sn);
 			}
 
@@ -272,24 +274,6 @@ of_get_coresight_platform_data(struct device *dev,
 	return pdata;
 }
 EXPORT_SYMBOL_GPL(of_get_coresight_platform_data);
-
-int of_get_coresight_csr_name(struct device_node *node, const char **csr_name)
-{
-	int  ret;
-	struct device_node *csr_node;
-
-	csr_node = of_parse_phandle(node, "coresight-csr", 0);
-	if (!csr_node)
-		return -EINVAL;
-
-	ret = of_property_read_string(csr_node, "coresight-name", csr_name);
-	of_node_put(csr_node);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-EXPORT_SYMBOL(of_get_coresight_csr_name);
 
 struct coresight_cti_data *of_get_coresight_cti_data(
 				struct device *dev, struct device_node *node)
@@ -332,3 +316,21 @@ struct coresight_cti_data *of_get_coresight_cti_data(
 	return ctidata;
 }
 EXPORT_SYMBOL(of_get_coresight_cti_data);
+
+int of_get_coresight_csr_name(struct device_node *node, const char **csr_name)
+{
+	int  ret;
+	struct device_node *csr_node;
+
+	csr_node = of_parse_phandle(node, "coresight-csr", 0);
+	if (!csr_node)
+		return -EINVAL;
+
+	ret = of_property_read_string(csr_node, "coresight-name", csr_name);
+	of_node_put(csr_node);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+EXPORT_SYMBOL(of_get_coresight_csr_name);

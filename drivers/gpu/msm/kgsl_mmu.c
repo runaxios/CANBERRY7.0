@@ -1,13 +1,27 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
-
+#include <linux/export.h>
+#include <linux/types.h>
+#include <linux/device.h>
+#include <linux/spinlock.h>
+#include <linux/genalloc.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/types.h>
 
-#include "kgsl_device.h"
+#include "kgsl.h"
 #include "kgsl_mmu.h"
+#include "kgsl_device.h"
 #include "kgsl_sharedmem.h"
 
 static void pagetable_remove_sysfs_objects(struct kgsl_pagetable *pagetable);
@@ -84,7 +98,7 @@ sysfs_show_entries(struct kobject *kobj,
 	if (pt) {
 		unsigned int val = atomic_read(&pt->stats.entries);
 
-		ret += scnprintf(buf, PAGE_SIZE, "%d\n", val);
+		ret += snprintf(buf, PAGE_SIZE, "%d\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -104,7 +118,7 @@ sysfs_show_mapped(struct kobject *kobj,
 	if (pt) {
 		uint64_t val = atomic_long_read(&pt->stats.mapped);
 
-		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
+		ret += snprintf(buf, PAGE_SIZE, "%llu\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -124,7 +138,7 @@ sysfs_show_max_mapped(struct kobject *kobj,
 	if (pt) {
 		uint64_t val = atomic_long_read(&pt->stats.max_mapped);
 
-		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
+		ret += snprintf(buf, PAGE_SIZE, "%llu\n", val);
 	}
 
 	kgsl_put_pagetable(pt);
@@ -639,9 +653,11 @@ static bool nommu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
 static int nommu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 		struct kgsl_memdesc *memdesc)
 {
-	if (WARN_ONCE(memdesc->sgt->nents > 1,
-		"Attempt to map non-contiguous memory with NOMMU\n"))
+	if (memdesc->sgt->nents > 1) {
+		WARN_ONCE(1,
+			"Attempt to map non-contiguous memory with NOMMU\n");
 		return -EINVAL;
+	}
 
 	memdesc->gpuaddr = (uint64_t) sg_phys(memdesc->sgt->sgl);
 
@@ -725,10 +741,31 @@ static struct {
 	{ "nommu", KGSL_MMU_TYPE_NONE, &kgsl_nommu_ops },
 };
 
-int kgsl_mmu_probe(struct kgsl_device *device)
+int kgsl_mmu_probe(struct kgsl_device *device, char *mmutype)
 {
 	struct kgsl_mmu *mmu = &device->mmu;
 	int ret, i;
+
+	if (mmutype != NULL) {
+		for (i = 0; i < ARRAY_SIZE(kgsl_mmu_subtypes); i++) {
+			if (strcmp(kgsl_mmu_subtypes[i].name, mmutype))
+				continue;
+
+			ret = kgsl_mmu_subtypes[i].ops->probe(device);
+
+			if (ret == 0) {
+				mmu->type = kgsl_mmu_subtypes[i].type;
+				mmu->mmu_ops = kgsl_mmu_subtypes[i].ops;
+
+				if (MMU_OP_VALID(mmu, mmu_init))
+					return mmu->mmu_ops->mmu_init(mmu);
+			}
+
+			return ret;
+		}
+
+		KGSL_CORE_ERR("mmu: MMU type '%s' unknown\n", mmutype);
+	}
 
 	for (i = 0; i < ARRAY_SIZE(kgsl_mmu_subtypes); i++) {
 		ret = kgsl_mmu_subtypes[i].ops->probe(device);
@@ -744,7 +781,7 @@ int kgsl_mmu_probe(struct kgsl_device *device)
 		}
 	}
 
-	dev_err(device->dev, "mmu: couldn't detect any known MMU types\n");
+	KGSL_CORE_ERR("mmu: couldn't detect any known MMU types\n");
 	return -ENODEV;
 }
 EXPORT_SYMBOL(kgsl_mmu_probe);

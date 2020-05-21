@@ -140,7 +140,6 @@ void gfs2_glock_free(struct gfs2_glock *gl)
 {
 	struct gfs2_sbd *sdp = gl->gl_name.ln_sbd;
 
-	BUG_ON(atomic_read(&gl->gl_revokes));
 	rhashtable_remove_fast(&gl_hash_table, &gl->gl_node, ht_parms);
 	smp_mb();
 	wake_up_glock(gl);
@@ -184,19 +183,15 @@ static int demote_ok(const struct gfs2_glock *gl)
 
 void gfs2_glock_add_to_lru(struct gfs2_glock *gl)
 {
-	if (!(gl->gl_ops->go_flags & GLOF_LRU))
-		return;
-
 	spin_lock(&lru_lock);
 
-	list_del(&gl->gl_lru);
-	list_add_tail(&gl->gl_lru, &lru_list);
-
-	if (!test_bit(GLF_LRU, &gl->gl_flags)) {
-		set_bit(GLF_LRU, &gl->gl_flags);
+	if (!list_empty(&gl->gl_lru))
+		list_del_init(&gl->gl_lru);
+	else
 		atomic_inc(&lru_count);
-	}
 
+	list_add_tail(&gl->gl_lru, &lru_list);
+	set_bit(GLF_LRU, &gl->gl_flags);
 	spin_unlock(&lru_lock);
 }
 
@@ -206,7 +201,7 @@ static void gfs2_glock_remove_from_lru(struct gfs2_glock *gl)
 		return;
 
 	spin_lock(&lru_lock);
-	if (test_bit(GLF_LRU, &gl->gl_flags)) {
+	if (!list_empty(&gl->gl_lru)) {
 		list_del_init(&gl->gl_lru);
 		atomic_dec(&lru_count);
 		clear_bit(GLF_LRU, &gl->gl_flags);
@@ -1163,7 +1158,8 @@ void gfs2_glock_dq(struct gfs2_holder *gh)
 		    !test_bit(GLF_DEMOTE, &gl->gl_flags))
 			fast_path = 1;
 	}
-	if (!test_bit(GLF_LFLUSH, &gl->gl_flags) && demote_ok(gl))
+	if (!test_bit(GLF_LFLUSH, &gl->gl_flags) && demote_ok(gl) &&
+	    (glops->go_flags & GLOF_LRU))
 		gfs2_glock_add_to_lru(gl);
 
 	trace_gfs2_glock_queue(gh, 0);
@@ -1307,8 +1303,7 @@ int gfs2_glock_nq_m(unsigned int num_gh, struct gfs2_holder *ghs)
 	default:
 		if (num_gh <= 4)
 			break;
-		pph = kmalloc_array(num_gh, sizeof(struct gfs2_holder *),
-				    GFP_NOFS);
+		pph = kmalloc(num_gh * sizeof(struct gfs2_holder *), GFP_NOFS);
 		if (!pph)
 			return -ENOMEM;
 	}
@@ -1459,7 +1454,6 @@ __acquires(&lru_lock)
 		if (!spin_trylock(&gl->gl_lockref.lock)) {
 add_back_to_lru:
 			list_add(&gl->gl_lru, &lru_list);
-			set_bit(GLF_LRU, &gl->gl_flags);
 			atomic_inc(&lru_count);
 			continue;
 		}
@@ -1467,6 +1461,7 @@ add_back_to_lru:
 			spin_unlock(&gl->gl_lockref.lock);
 			goto add_back_to_lru;
 		}
+		clear_bit(GLF_LRU, &gl->gl_flags);
 		gl->gl_lockref.count++;
 		if (demote_ok(gl))
 			handle_callback(gl, LM_ST_UNLOCKED, 0, false);
@@ -1501,7 +1496,6 @@ static long gfs2_scan_glock_lru(int nr)
 		if (!test_bit(GLF_LOCK, &gl->gl_flags)) {
 			list_move(&gl->gl_lru, &dispose);
 			atomic_dec(&lru_count);
-			clear_bit(GLF_LRU, &gl->gl_flags);
 			freed++;
 			continue;
 		}
@@ -1555,13 +1549,16 @@ static void glock_hash_walk(glock_examiner examiner, const struct gfs2_sbd *sdp)
 	rhashtable_walk_enter(&gl_hash_table, &iter);
 
 	do {
-		rhashtable_walk_start(&iter);
+		gl = ERR_PTR(rhashtable_walk_start(&iter));
+		if (IS_ERR(gl))
+			goto walk_stop;
 
 		while ((gl = rhashtable_walk_next(&iter)) && !IS_ERR(gl))
 			if (gl->gl_name.ln_sbd == sdp &&
 			    lockref_get_not_dead(&gl->gl_lockref))
 				examiner(gl);
 
+walk_stop:
 		rhashtable_walk_stop(&iter);
 	} while (cond_resched(), gl == ERR_PTR(-EAGAIN));
 
@@ -1927,63 +1924,38 @@ void gfs2_glock_exit(void)
 	destroy_workqueue(gfs2_delete_workqueue);
 }
 
-static void gfs2_glock_iter_next(struct gfs2_glock_iter *gi, loff_t n)
+static void gfs2_glock_iter_next(struct gfs2_glock_iter *gi)
 {
-	struct gfs2_glock *gl = gi->gl;
-
-	if (gl) {
-		if (n == 0)
+	while ((gi->gl = rhashtable_walk_next(&gi->hti))) {
+		if (IS_ERR(gi->gl)) {
+			if (PTR_ERR(gi->gl) == -EAGAIN)
+				continue;
+			gi->gl = NULL;
 			return;
-		if (!lockref_put_not_zero(&gl->gl_lockref))
-			gfs2_glock_queue_put(gl);
-	}
-	for (;;) {
-		gl = rhashtable_walk_next(&gi->hti);
-		if (IS_ERR_OR_NULL(gl)) {
-			if (gl == ERR_PTR(-EAGAIN)) {
-				n = 1;
-				continue;
-			}
-			gl = NULL;
-			break;
 		}
-		if (gl->gl_name.ln_sbd != gi->sdp)
-			continue;
-		if (n <= 1) {
-			if (!lockref_get_not_dead(&gl->gl_lockref))
-				continue;
-			break;
-		} else {
-			if (__lockref_is_dead(&gl->gl_lockref))
-				continue;
-			n--;
-		}
+		/* Skip entries for other sb and dead entries */
+		if (gi->sdp == gi->gl->gl_name.ln_sbd &&
+		    !__lockref_is_dead(&gi->gl->gl_lockref))
+			return;
 	}
-	gi->gl = gl;
 }
 
 static void *gfs2_glock_seq_start(struct seq_file *seq, loff_t *pos)
 	__acquires(RCU)
 {
 	struct gfs2_glock_iter *gi = seq->private;
-	loff_t n;
+	loff_t n = *pos;
 
-	/*
-	 * We can either stay where we are, skip to the next hash table
-	 * entry, or start from the beginning.
-	 */
-	if (*pos < gi->last_pos) {
-		rhashtable_walk_exit(&gi->hti);
-		rhashtable_walk_enter(&gl_hash_table, &gi->hti);
-		n = *pos + 1;
-	} else {
-		n = *pos - gi->last_pos;
-	}
+	rhashtable_walk_enter(&gl_hash_table, &gi->hti);
+	if (rhashtable_walk_start(&gi->hti) != 0)
+		return NULL;
 
-	rhashtable_walk_start(&gi->hti);
+	do {
+		gfs2_glock_iter_next(gi);
+	} while (gi->gl && n--);
 
-	gfs2_glock_iter_next(gi, n);
 	gi->last_pos = *pos;
+
 	return gi->gl;
 }
 
@@ -1994,7 +1966,8 @@ static void *gfs2_glock_seq_next(struct seq_file *seq, void *iter_ptr,
 
 	(*pos)++;
 	gi->last_pos = *pos;
-	gfs2_glock_iter_next(gi, 1);
+	gfs2_glock_iter_next(gi);
+
 	return gi->gl;
 }
 
@@ -2003,7 +1976,9 @@ static void gfs2_glock_seq_stop(struct seq_file *seq, void *iter_ptr)
 {
 	struct gfs2_glock_iter *gi = seq->private;
 
+	gi->gl = NULL;
 	rhashtable_walk_stop(&gi->hti);
+	rhashtable_walk_exit(&gi->hti);
 }
 
 static int gfs2_glock_seq_show(struct seq_file *seq, void *iter_ptr)
@@ -2069,13 +2044,7 @@ static int __gfs2_glocks_open(struct inode *inode, struct file *file,
 		seq->buf = kmalloc(GFS2_SEQ_GOODSIZE, GFP_KERNEL | __GFP_NOWARN);
 		if (seq->buf)
 			seq->size = GFS2_SEQ_GOODSIZE;
-		/*
-		 * Initially, we are "before" the first hash table entry; the
-		 * first call to rhashtable_walk_next gets us the first entry.
-		 */
-		gi->last_pos = -1;
 		gi->gl = NULL;
-		rhashtable_walk_enter(&gl_hash_table, &gi->hti);
 	}
 	return ret;
 }
@@ -2090,9 +2059,7 @@ static int gfs2_glocks_release(struct inode *inode, struct file *file)
 	struct seq_file *seq = file->private_data;
 	struct gfs2_glock_iter *gi = seq->private;
 
-	if (gi->gl)
-		gfs2_glock_put(gi->gl);
-	rhashtable_walk_exit(&gi->hti);
+	gi->gl = NULL;
 	return seq_release_private(inode, file);
 }
 

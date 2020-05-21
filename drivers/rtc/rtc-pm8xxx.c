@@ -1,5 +1,4 @@
 /* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -218,6 +217,12 @@ static int pm8xxx_rtc_read_time(struct device *dev, struct rtc_time *tm)
 
 	rtc_time_to_tm(secs, tm);
 
+	rc = rtc_valid_tm(tm);
+	if (rc < 0) {
+		dev_err(dev, "Invalid time read from RTC\n");
+		return rc;
+	}
+
 	dev_dbg(dev, "secs = %lu, h:m:s == %d:%d:%d, d/m/y = %d/%d/%d\n",
 		secs, tm->tm_hour, tm->tm_min, tm->tm_sec,
 		tm->tm_mday, tm->tm_mon, tm->tm_year);
@@ -299,13 +304,6 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 		return rc;
 	}
 
-	rc = regmap_bulk_read(rtc_dd->regmap, regs->alarm_ctrl, value, 1);
-	if (rc) {
-		dev_err(dev, "Read from ALARM CTRL failed\n");
-		return rc;
-	}
-	alarm->enabled = !!(value[0] & PM8xxx_RTC_ENABLE);
-
 	dev_dbg(dev, "Alarm set for - h:r:s=%d:%d:%d, d/m/y=%d/%d/%d\n",
 		alarm->time.tm_hour, alarm->time.tm_min,
 		alarm->time.tm_sec, alarm->time.tm_mday,
@@ -321,7 +319,6 @@ static int pm8xxx_rtc_alarm_irq_enable(struct device *dev, unsigned int enable)
 	struct pm8xxx_rtc *rtc_dd = dev_get_drvdata(dev);
 	const struct pm8xxx_rtc_regs *regs = rtc_dd->regs;
 	unsigned int ctrl_reg;
-	u8 value[4] = {0};
 
 	spin_lock_irqsave(&rtc_dd->ctrl_reg_lock, irq_flags);
 
@@ -338,13 +335,6 @@ static int pm8xxx_rtc_alarm_irq_enable(struct device *dev, unsigned int enable)
 	if (rc) {
 		dev_err(dev, "Write to RTC control register failed\n");
 		goto rtc_rw_fail;
-	}
-
-	/* Clear Alarm register */
-	if (!enable) {
-		rc = regmap_bulk_write(rtc_dd->regmap, regs->alarm_rw, value, NUM_8_BIT_RTC_REGS);
-		if (rc)
-			dev_err(dev, "Clear ALARM value reg failed\n");
 	}
 
 rtc_rw_fail:

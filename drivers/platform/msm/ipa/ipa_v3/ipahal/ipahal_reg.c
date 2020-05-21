@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -840,7 +847,7 @@ static u8 ipareg_timers_pulse_gran_code(
 	default:
 		IPAHAL_ERR("Invalid granularity %d\n", gran);
 		break;
-	}
+	};
 
 	return 3;
 }
@@ -860,7 +867,7 @@ static enum ipa_timers_time_gran_type
 	default:
 		IPAHAL_ERR("Invalid coded granularity %d\n", code);
 		break;
-	}
+	};
 
 	return IPA_TIMERS_TIME_GRAN_100_USEC;
 }
@@ -1180,112 +1187,6 @@ static void ipareg_parse_comp_cfg_v4_5(
 		IPA_COMP_CFG_IPA_FULL_FLUSH_WAIT_RSC_CLOSURE_EN_BMSK_v4_5);
 }
 
-static void ipareg_parse_state_tx_wrapper_v4_5(
-	enum ipahal_reg_name reg, void *fields, u32 val)
-{
-	struct ipahal_reg_tx_wrapper *tx =
-		(struct ipahal_reg_tx_wrapper *)fields;
-
-	tx->tx0_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_TX0_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_TX0_IDLE_BMSK);
-
-	tx->tx1_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_TX1_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_TX1_IDLE_BMSK);
-
-	tx->ipa_prod_ackmngr_db_empty = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_DB_EMPTY_SHFT,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_DB_EMPTY_BMSK);
-
-	tx->ipa_prod_ackmngr_state_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_STATE_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_STATE_IDLE_BMSK);
-
-	tx->ipa_prod_prod_bresp_empty = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_SHFT,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_BMSK);
-
-	tx->ipa_prod_prod_bresp_toggle_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_SHFT,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_BMSK);
-
-	tx->ipa_mbim_pkt_fms_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_MBIM_PKT_FMS_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_IPA_MBIM_PKT_FMS_IDLE_BMSK);
-
-	tx->mbim_direct_dma = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_MBIM_DIRECT_DMA_SHFT,
-		IPA_STATE_TX_WRAPPER_MBIM_DIRECT_DMA_BMSK);
-
-	tx->trnseq_force_valid = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_TRNSEQ_FORCE_VALID_SHFT,
-		IPA_STATE_TX_WRAPPER_TRNSEQ_FORCE_VALID_BMSK);
-
-	tx->pkt_drop_cnt_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_PKT_DROP_CNT_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_PKT_DROP_CNT_IDLE_BMSK);
-
-	tx->nlo_direct_dma = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_NLO_DIRECT_DMA_SHFT,
-		IPA_STATE_TX_WRAPPER_NLO_DIRECT_DMA_BMSK);
-
-	tx->coal_direct_dma = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_DIRECT_DMA_SHFT,
-		IPA_STATE_TX_WRAPPER_COAL_DIRECT_DMA_BMSK);
-
-	tx->coal_slave_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_IDLE_BMSK);
-
-	tx->coal_slave_ctx_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_CTX_IDLE_SHFT,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_CTX_IDLE_BMSK);
-
-	tx->coal_slave_open_frame = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_OPEN_FRAME_SHFT,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_OPEN_FRAME_BMSK);
-}
-
-static void ipareg_parse_state_tx_wrapper_v4_7(
-	enum ipahal_reg_name reg, void *fields, u32 val)
-{
-	struct ipahal_reg_tx_wrapper *tx =
-		(struct ipahal_reg_tx_wrapper *)fields;
-
-	tx->tx0_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_TX0_IDLE_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_TX0_IDLE_BMSK_v4_7);
-
-	tx->tx1_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_TX1_IDLE_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_TX1_IDLE_BMSK_v4_7);
-
-	tx->ipa_prod_ackmngr_db_empty = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_DB_EMPTY_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_DB_EMPTY_BMSK_v4_7);
-
-	tx->ipa_prod_ackmngr_state_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_STATE_IDLE_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_ACKMNGR_STATE_IDLE_BMSK_v4_7);
-
-	tx->ipa_prod_prod_bresp_empty = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_IPA_PROD_BRESP_EMPTY_BMSK_v4_7);
-
-	tx->coal_slave_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_IDLE_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_IDLE_BMSK_v4_7);
-
-	tx->coal_slave_ctx_idle = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_CTX_IDLE_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_CTX_IDLE_BMSK_v4_7);
-
-	tx->coal_slave_open_frame = IPA_GETFIELD_FROM_REG(val,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_OPEN_FRAME_SHFT_v4_7,
-		IPA_STATE_TX_WRAPPER_COAL_SLAVE_OPEN_FRAME_BMSK_v4_7);
-}
-
 static void ipareg_construct_qcncm(
 	enum ipahal_reg_name reg, const void *fields, u32 *val)
 {
@@ -1392,7 +1293,7 @@ static void ipareg_construct_debug_cnt_ctrl_n(
 		WARN_ON(1);
 		return;
 
-	}
+	};
 
 	IPA_SETFIELD_IN_REG(*val, type,
 		IPA_DEBUG_CNT_CTRL_n_DBG_CNT_TYPE_SHFT,
@@ -3074,9 +2975,6 @@ static struct ipahal_reg_obj ipahal_reg_objs[IPA_HW_MAX][IPA_REG_MAX] = {
 	[IPA_HW_v4_5][IPA_COMP_CFG] = {
 		ipareg_construct_comp_cfg_v4_5, ipareg_parse_comp_cfg_v4_5,
 		0x0000003C, 0, 0, 0, 0},
-	[IPA_HW_v4_5][IPA_STATE_TX_WRAPPER] = {
-		ipareg_construct_dummy, ipareg_parse_state_tx_wrapper_v4_5,
-		0x00000090, 0, 0, 0, 1 },
 	[IPA_HW_v4_5][IPA_STATE_FETCHER_MASK] = {
 		ipareg_construct_dummy, ipareg_parse_dummy,
 		-1, 0, 0, 0, 0},
@@ -3276,9 +3174,6 @@ static struct ipahal_reg_obj ipahal_reg_objs[IPA_HW_MAX][IPA_REG_MAX] = {
 	[IPA_HW_v4_5][IPA_COAL_QMAP_CFG] = {
 		ipareg_construct_coal_qmap_cfg, ipareg_parse_coal_qmap_cfg,
 		0x00001810, 0, 0, 0, 0},
-	[IPA_HW_v4_7][IPA_STATE_TX_WRAPPER] = {
-		ipareg_construct_dummy, ipareg_parse_state_tx_wrapper_v4_7,
-		0x00000090, 0, 0, 0, 1 },
 };
 
 /*
@@ -3626,7 +3521,7 @@ u32 ipahal_get_reg_base(void)
 void ipahal_get_aggr_force_close_valmask(int ep_idx,
 	struct ipahal_reg_valmask *valmask)
 {
-	u32 shft = 0;
+	u32 shft;
 	u32 bmsk = 0;
 
 	if (!valmask) {
@@ -3659,11 +3554,6 @@ void ipahal_get_aggr_force_close_valmask(int ep_idx,
 		IPA_AGGR_FORCE_CLOSE_AGGR_FORCE_CLOSE_PIPE_BITMAP_SHFT_V4_5;
 		bmsk =
 		IPA_AGGR_FORCE_CLOSE_AGGR_FORCE_CLOSE_PIPE_BITMAP_BMSK_V4_5;
-	} else if (ipahal_ctx->hw_type <= IPA_HW_v4_7) {
-		shft =
-		IPA_AGGR_FORCE_CLOSE_AGGR_FORCE_CLOSE_PIPE_BITMAP_SHFT_V4_7;
-		bmsk =
-		IPA_AGGR_FORCE_CLOSE_AGGR_FORCE_CLOSE_PIPE_BITMAP_BMSK_V4_7;
 	}
 
 	if (ep_idx > (sizeof(valmask->val) * 8 - 1)) {

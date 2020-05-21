@@ -3,7 +3,14 @@
  *
  * (C) 2004 Nadia Yvette Chambers, Oracle
  */
-#include "sched.h"
+#include <linux/init.h>
+#include <linux/export.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/debug.h>
+#include <linux/mm.h>
+#include <linux/wait.h>
+#include <linux/hash.h>
+#include <linux/kthread.h>
 
 void __init_waitqueue_head(struct wait_queue_head *wq_head, const char *name, struct lock_class_key *key)
 {
@@ -69,8 +76,6 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 	wait_queue_entry_t *curr, *next;
 	int cnt = 0;
 
-	lockdep_assert_held(&wq_head->lock);
-
 	if (bookmark && (bookmark->flags & WQ_FLAG_BOOKMARK)) {
 		curr = list_next_entry(bookmark, entry);
 
@@ -102,7 +107,6 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 			break;
 		}
 	}
-
 	return nr_exclusive;
 }
 
@@ -136,8 +140,8 @@ static void __wake_up_common_lock(struct wait_queue_head *wq_head, unsigned int 
  * @nr_exclusive: how many wake-one or wake-many threads to wake up
  * @key: is directly passed to the wakeup function
  *
- * If this function wakes up a task, it executes a full memory barrier before
- * accessing the task state.
+ * It may be assumed that this function implies a write memory barrier before
+ * changing the task state if and only if any tasks are woken up.
  */
 void __wake_up(struct wait_queue_head *wq_head, unsigned int mode,
 			int nr_exclusive, void *key)
@@ -182,8 +186,8 @@ EXPORT_SYMBOL_GPL(__wake_up_locked_key_bookmark);
  *
  * On UP it can prevent extra preemption.
  *
- * If this function wakes up a task, it executes a full memory barrier before
- * accessing the task state.
+ * It may be assumed that this function implies a write memory barrier before
+ * changing the task state if and only if any tasks are woken up.
  */
 void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode,
 			int nr_exclusive, void *key)
@@ -313,7 +317,6 @@ int do_wait_intr(wait_queue_head_t *wq, wait_queue_entry_t *wait)
 	spin_unlock(&wq->lock);
 	schedule();
 	spin_lock(&wq->lock);
-
 	return 0;
 }
 EXPORT_SYMBOL(do_wait_intr);
@@ -330,7 +333,6 @@ int do_wait_intr_irq(wait_queue_head_t *wq, wait_queue_entry_t *wait)
 	spin_unlock_irq(&wq->lock);
 	schedule();
 	spin_lock_irq(&wq->lock);
-
 	return 0;
 }
 EXPORT_SYMBOL(do_wait_intr_irq);
@@ -376,7 +378,6 @@ int autoremove_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, i
 
 	if (ret)
 		list_del_init(&wq_entry->entry);
-
 	return ret;
 }
 EXPORT_SYMBOL(autoremove_wake_function);

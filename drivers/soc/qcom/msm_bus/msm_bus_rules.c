@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/list_sort.h>
@@ -123,7 +130,7 @@ static bool do_compare_op(u64 op1, u64 op2, int op)
 		ret = true;
 		break;
 	default:
-		pr_info("Invalid OP %d\n", op);
+		pr_info("Invalid OP %d", op);
 		break;
 	}
 	return ret;
@@ -189,7 +196,7 @@ static bool check_rule(struct rules_def *rule,
 		break;
 	}
 	default:
-		pr_err("Unsupported op %d\n", rule->rule_ops.op);
+		pr_err("Unsupported op %d", rule->rule_ops.op);
 		break;
 	}
 	return ret;
@@ -374,7 +381,7 @@ static void print_rules(struct rule_node_info *node_it)
 	int i;
 
 	if (!node_it) {
-		pr_err("%s: no node for found\n", __func__);
+		pr_err("%s: no node for found", __func__);
 		return;
 	}
 
@@ -464,7 +471,7 @@ static int copy_rule(struct bus_rule_type *src, struct rules_def *node_rule,
 			(sizeof(int) * node_rule->rule_ops.num_src),
 							GFP_KERNEL);
 	if (!node_rule->rule_ops.src_id) {
-		pr_err("%s:Failed to allocate for src_id\n",
+		pr_err("%s:Failed to allocate for src_id",
 					__func__);
 		return -ENOMEM;
 	}
@@ -487,7 +494,7 @@ static int copy_rule(struct bus_rule_type *src, struct rules_def *node_rule,
 		(sizeof(struct node_vote_info) * node_rule->rule_ops.num_src),
 							GFP_KERNEL);
 	if (!node_rule->src_info) {
-		pr_err("%s:Failed to allocate for src_id\n",
+		pr_err("%s:Failed to allocate for src_id",
 						__func__);
 		return -ENOMEM;
 	}
@@ -525,7 +532,7 @@ static bool __rule_register(int num_rules, struct bus_rule_type *rule,
 
 			node = gen_node(id, nb);
 			if (!node) {
-				pr_info("Error getting rule\n");
+				pr_info("Error getting rule");
 				reg_success = false;
 				goto exit_rule_register;
 			}
@@ -537,7 +544,7 @@ static bool __rule_register(int num_rules, struct bus_rule_type *rule,
 			}
 
 			if (copy_rule(&rule[i], node_rule, nb)) {
-				pr_err("Error copying rule\n");
+				pr_err("Error copying rule");
 				reg_success = false;
 				goto exit_rule_register;
 			}
@@ -599,7 +606,7 @@ static bool __rule_unregister(int num_rules, struct bus_rule_type *rule,
 	if (nb) {
 		node = get_node(NB_ID, nb);
 		if (!node) {
-			pr_err("%s: Can't find node\n", __func__);
+			pr_err("%s: Can't find node", __func__);
 			goto exit_unregister_rule;
 		}
 		match_found = true;
@@ -646,7 +653,7 @@ static bool __rule_unregister(int num_rules, struct bus_rule_type *rule,
 	list_for_each_entry_safe(node, node_tmp,
 					&node_list, link) {
 		if (!node->num_rules) {
-			pr_debug("Deleting Rule node %d\n", node->id);
+			pr_debug("Deleting Rule node %d", node->id);
 			list_del(&node->link);
 			kfree(node);
 		}

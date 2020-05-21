@@ -368,18 +368,11 @@ int setScanMode(u8 mode, u8 settings)
 */
 int setFeatures(u8 feat, u8 *settings, int size)
 {
-	u8 *cmd;
+	u8 cmd[2 + size];
 	int i = 0;
 	int ret;
-
 	logError(0, "%s %s: Setting feature: feat = %02X !\n", tag, __func__,
 		 feat);
-
-	cmd = kzalloc(2 + size, GFP_KERNEL);
-	if (cmd == NULL) {
-		logError(1, "%s %s no memory\n", tag, __func__);
-		return -ENOMEM;
-	}
 	cmd[0] = FTS_CMD_FEATURE;
 	cmd[1] = feat;
 	logError(0, "%s %s: Settings = ", tag, __func__);
@@ -395,8 +388,6 @@ int setFeatures(u8 feat, u8 *settings, int size)
 		return ret | ERROR_SET_FEATURE_FAIL;
 	}
 	logError(0, "%s %s: Setting feature OK!\n", tag, __func__);
-	kfree(cmd);
-	cmd = NULL;
 	return OK;
 }
 
@@ -419,7 +410,7 @@ int writeSysCmd(u8 sys_cmd, u8 *sett, int size)
 
 	cmd = (u8 *)kzalloc(sizeof(u8) * size + 2, GFP_KERNEL);
 	if (!cmd) {
-		ret = -ENOMEM;
+		ret = ERROR_ALLOC;
 		goto end;
 	}
 
@@ -441,9 +432,8 @@ int writeSysCmd(u8 sys_cmd, u8 *sett, int size)
 		} else {
 			logError(1, "%s %s: No setting argument! ERROR %08X\n",
 				 tag, __func__, ERROR_OP_NOT_ALLOW);
-			if (cmd)
-				kfree(cmd);
-			return ERROR_OP_NOT_ALLOW;
+			ret = ERROR_OP_NOT_ALLOW;
+			goto end;
 		}
 	}
 	if (ret < OK) {

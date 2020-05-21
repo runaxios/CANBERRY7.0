@@ -18,6 +18,11 @@
 
 #define pr_fmt(fmt) "cma: " fmt
 
+#ifdef CONFIG_CMA_DEBUG
+#ifndef DEBUG
+#  define DEBUG
+#endif
+#endif
 #define CREATE_TRACE_POINTS
 
 #include <linux/memblock.h>
@@ -30,7 +35,6 @@
 #include <linux/cma.h>
 #include <linux/highmem.h>
 #include <linux/io.h>
-#include <linux/kmemleak.h>
 #include <linux/delay.h>
 #include <linux/show_mem_notifier.h>
 #include <trace/events/cma.h>
@@ -126,10 +130,8 @@ static int __init cma_activate_area(struct cma *cma)
 
 	cma->bitmap = kzalloc(bitmap_size, GFP_KERNEL);
 
-	if (!cma->bitmap) {
-		cma->count = 0;
+	if (!cma->bitmap)
 		return -ENOMEM;
-	}
 
 	WARN_ON_ONCE(!pfn_valid(pfn));
 	zone = page_zone(pfn_to_page(pfn));
@@ -194,9 +196,6 @@ core_initcall(cma_init_reserved_areas);
  * @base: Base address of the reserved area
  * @size: Size of the reserved area (in bytes),
  * @order_per_bit: Order of pages represented by one bit on bitmap.
- * @name: The name of the area. If this parameter is NULL, the name of
- *        the area will be set to "cmaN", where N is a running counter of
- *        used areas.
  * @res_cma: Pointer to store the created cma region.
  *
  * This function creates custom contiguous area from already reserved memory.
@@ -259,7 +258,6 @@ int __init cma_init_reserved_mem(phys_addr_t base, phys_addr_t size,
  * @alignment: Alignment for the CMA area, should be power of 2 or zero
  * @order_per_bit: Order of pages represented by one bit on bitmap.
  * @fixed: hint about where to place the reserved area
- * @name: The name of the area. See function cma_init_reserved_mem()
  * @res_cma: Pointer to store the created cma region.
  *
  * This function reserves memory from early allocator. It should be
@@ -308,12 +306,6 @@ int __init cma_declare_contiguous(phys_addr_t base,
 	 */
 	alignment = max(alignment,  (phys_addr_t)PAGE_SIZE <<
 			  max_t(unsigned long, MAX_ORDER - 1, pageblock_order));
-	if (fixed && base & (alignment - 1)) {
-		ret = -EINVAL;
-		pr_err("Region at %pa must be aligned to %pa bytes\n",
-			&base, &alignment);
-		goto err;
-	}
 	base = ALIGN(base, alignment);
 	size = ALIGN(size, alignment);
 	limit &= ~(alignment - 1);
@@ -343,13 +335,6 @@ int __init cma_declare_contiguous(phys_addr_t base,
 	 */
 	if (limit == 0 || limit > memblock_end)
 		limit = memblock_end;
-
-	if (base + size > limit) {
-		ret = -EINVAL;
-		pr_err("Size (%pa) of region at %pa exceeds limit (%pa)\n",
-			&size, &base, &limit);
-		goto err;
-	}
 
 	/* Reserve memory */
 	if (fixed) {
@@ -410,26 +395,23 @@ err:
 #ifdef CONFIG_CMA_DEBUG
 static void cma_debug_show_areas(struct cma *cma)
 {
-	unsigned long next_zero_bit, next_set_bit, nr_zero;
+	unsigned long next_zero_bit, next_set_bit;
 	unsigned long start = 0;
-	unsigned long nr_part, nr_total = 0;
-	unsigned long nbits = cma_bitmap_maxno(cma);
+	unsigned int nr_zero, nr_total = 0;
 
 	mutex_lock(&cma->lock);
 	pr_info("number of available pages: ");
 	for (;;) {
-		next_zero_bit = find_next_zero_bit(cma->bitmap, nbits, start);
-		if (next_zero_bit >= nbits)
+		next_zero_bit = find_next_zero_bit(cma->bitmap, cma->count, start);
+		if (next_zero_bit >= cma->count)
 			break;
-		next_set_bit = find_next_bit(cma->bitmap, nbits, next_zero_bit);
+		next_set_bit = find_next_bit(cma->bitmap, cma->count, next_zero_bit);
 		nr_zero = next_set_bit - next_zero_bit;
-		nr_part = nr_zero << cma->order_per_bit;
-		pr_cont("%s%lu@%lu", nr_total ? "+" : "", nr_part,
-			next_zero_bit);
-		nr_total += nr_part;
+		pr_cont("%s%u@%lu", nr_total ? "+" : "", nr_zero, next_zero_bit);
+		nr_total += nr_zero;
 		start = next_zero_bit + nr_zero;
 	}
-	pr_cont("=> %lu free of %lu total pages\n", nr_total, cma->count);
+	pr_cont("=> %u free of %lu total pages\n", nr_total, cma->count);
 	mutex_unlock(&cma->lock);
 }
 #else
@@ -441,13 +423,12 @@ static inline void cma_debug_show_areas(struct cma *cma) { }
  * @cma:   Contiguous memory region for which the allocation is performed.
  * @count: Requested number of pages.
  * @align: Requested alignment of pages (in PAGE_SIZE order).
- * @no_warn: Avoid printing message about failed allocation
  *
  * This function allocates part of contiguous memory on specific
  * contiguous memory area.
  */
 struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
-		       bool no_warn)
+		       gfp_t gfp_mask)
 {
 	unsigned long mask, offset;
 	unsigned long pfn = -1;
@@ -524,7 +505,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 		pfn = cma->base_pfn + (bitmap_no << cma->order_per_bit);
 		mutex_lock(&cma_mutex);
 		ret = alloc_contig_range(pfn, pfn + count, MIGRATE_CMA,
-				     GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
+					 gfp_mask);
 		mutex_unlock(&cma_mutex);
 		if (ret == 0) {
 			page = pfn_to_page(pfn);
@@ -545,9 +526,9 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 
 	trace_cma_alloc(pfn, page, count, align);
 
-	if (ret && !no_warn) {
-		pr_err("%s: %s: alloc failed, req-size: %zu pages, ret: %d\n",
-			__func__, cma->name, cma->count, ret);
+	if (ret && !(gfp_mask & __GFP_NOWARN)) {
+		pr_info("%s: alloc failed, req-size: %zu pages, ret: %d\n",
+			__func__, count, ret);
 		cma_debug_show_areas(cma);
 	}
 

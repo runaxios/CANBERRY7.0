@@ -1,11 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ * CDSP Request Manager
+ *
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
-/*
- * This driver uses rpmsg to communicate with CDSP and receive requests
+/* This module uses rpmsg to communicate with CDSP and receive requests
  * for CPU L3 frequency and QoS along with Cx Limit management and
  * thermal cooling handling.
  */
@@ -191,7 +199,7 @@ struct cdsprm {
 
 static struct cdsprm gcdsprm;
 static LIST_HEAD(cdsprm_list);
-static DECLARE_WAIT_QUEUE_HEAD(cdsprm_wq);
+DECLARE_WAIT_QUEUE_HEAD(cdsprm_wq);
 
 /**
  * cdsprm_register_cdspl3gov() - Register a method to set L3 clock
@@ -906,7 +914,7 @@ static int cdsprm_compute_prio_write(void *data, u64 val)
 	return 0;
 }
 
-DEFINE_DEBUGFS_ATTRIBUTE(cdsprm_debugfs_fops,
+DEFINE_SIMPLE_ATTRIBUTE(cdsprm_debugfs_fops,
 			cdsprm_compute_prio_read,
 			cdsprm_compute_prio_write,
 			"%llu\n");
@@ -975,7 +983,7 @@ static int cdsp_rm_driver_probe(struct platform_device *pdev)
 		thermal_cdev_update(tcdev);
 	}
 
-	dev_dbg(dev, "CDSP request manager driver probe called\n");
+	dev_info(dev, "CDSP request manager driver probe called\n");
 	gcdsprm.b_qosinitdone = true;
 
 	return 0;
@@ -1125,4 +1133,24 @@ err_wq:
 	return err;
 }
 
-late_initcall(cdsprm_init);
+static void __exit cdsprm_exit(void)
+{
+	if (gcdsprm.b_rpmsg_register)
+		unregister_rpmsg_driver(&cdsprm_rpmsg_client);
+
+	gcdsprm.b_rpmsg_register = false;
+	platform_driver_unregister(&cdsp_rm);
+	platform_driver_unregister(&hvx_rm);
+	complete(&gcdsprm.msg_avail);
+
+	if (gcdsprm.cdsprm_wq_task)
+		kthread_stop(gcdsprm.cdsprm_wq_task);
+
+	destroy_workqueue(gcdsprm.delay_work_queue);
+	debugfs_remove_recursive(gcdsprm.debugfs_dir);
+}
+
+module_init(cdsprm_init);
+module_exit(cdsprm_exit);
+
+MODULE_LICENSE("GPL v2");

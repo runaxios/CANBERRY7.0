@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * RMNET configuration engine
  *
@@ -16,7 +23,6 @@
 #include "rmnet_private.h"
 #include "rmnet_map.h"
 #include "rmnet_descriptor.h"
-#include "rmnet_genl.h"
 #include <soc/qcom/rmnet_qmi.h>
 #include <soc/qcom/qmi_rmnet.h>
 
@@ -81,14 +87,14 @@ static int rmnet_unregister_real_device(struct net_device *real_dev,
 	if (port->nr_rmnet_devs)
 		return -EINVAL;
 
-	netdev_rx_handler_unregister(real_dev);
-
 	rmnet_map_cmd_exit(port);
 	rmnet_map_tx_aggregate_exit(port);
 
 	rmnet_descriptor_deinit(port);
 
 	kfree(port);
+
+	netdev_rx_handler_unregister(real_dev);
 
 	/* release reference on real_dev */
 	dev_put(real_dev);
@@ -257,9 +263,9 @@ static void rmnet_dellink(struct net_device *dev, struct list_head *head)
 	if (!port->nr_rmnet_devs)
 		qmi_rmnet_qmi_exit(port->qmi_info, port);
 
-	unregister_netdevice(dev);
-
 	rmnet_unregister_real_device(real_dev, port);
+
+	unregister_netdevice_queue(dev, head);
 }
 
 static void rmnet_force_unassociate_device(struct net_device *dev)
@@ -289,9 +295,7 @@ static void rmnet_force_unassociate_device(struct net_device *dev)
 		synchronize_rcu();
 		kfree(ep);
 	}
-	/* Unregistering devices in context before freeing port.
-	 * If this API becomes non-context their order should switch.
-	 */
+
 	unregister_netdevice_many(&list);
 
 	rmnet_unregister_real_device(real_dev, port);
@@ -393,13 +397,14 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 	}
 
 	if (data[IFLA_RMNET_UL_AGG_PARAMS]) {
-		struct rmnet_egress_agg_params *agg_params;
+		void *agg_params;
+		unsigned long irq_flags;
 
 		agg_params = nla_data(data[IFLA_RMNET_UL_AGG_PARAMS]);
-		rmnet_map_update_ul_agg_config(port, agg_params->agg_size,
-					       agg_params->agg_count,
-					       agg_params->agg_features,
-					       agg_params->agg_time);
+		spin_lock_irqsave(&port->agg_lock, irq_flags);
+		memcpy(&port->egress_agg_params, agg_params,
+		       sizeof(port->egress_agg_params));
+		spin_unlock_irqrestore(&port->agg_lock, irq_flags);
 	}
 
 	return 0;
@@ -493,8 +498,7 @@ struct rmnet_endpoint *rmnet_get_endpoint(struct rmnet_port *port, u8 mux_id)
 EXPORT_SYMBOL(rmnet_get_endpoint);
 
 int rmnet_add_bridge(struct net_device *rmnet_dev,
-		     struct net_device *slave_dev,
-		     struct netlink_ext_ack *extack)
+		     struct net_device *slave_dev)
 {
 	struct rmnet_priv *priv = netdev_priv(rmnet_dev);
 	struct net_device *real_dev = priv->real_dev;
@@ -557,12 +561,9 @@ EXPORT_SYMBOL(rmnet_get_qmi_pt);
 
 void *rmnet_get_qos_pt(struct net_device *dev)
 {
-	struct rmnet_priv *priv;
-
-	if (dev) {
-		priv = netdev_priv(dev);
-		return rcu_dereference(priv->qos_info);
-	}
+	if (dev)
+		return rcu_dereference(
+			((struct rmnet_priv *)netdev_priv(dev))->qos_info);
 
 	return NULL;
 }
@@ -703,16 +704,6 @@ int rmnet_get_powersave_notif(void *port)
 	return ((struct rmnet_port *)port)->data_format & RMNET_FORMAT_PS_NOTIF;
 }
 EXPORT_SYMBOL(rmnet_get_powersave_notif);
-
-struct net_device *rmnet_get_real_dev(void *port)
-{
-	if (port)
-		return ((struct rmnet_port *)port)->dev;
-
-	return NULL;
-}
-EXPORT_SYMBOL(rmnet_get_real_dev);
-
 #endif
 
 /* Startup/Shutdown */
@@ -730,8 +721,6 @@ static int __init rmnet_init(void)
 		unregister_netdevice_notifier(&rmnet_dev_notifier);
 		return rc;
 	}
-	rmnet_core_genl_init();
-
 	return rc;
 }
 
@@ -739,7 +728,6 @@ static void __exit rmnet_exit(void)
 {
 	unregister_netdevice_notifier(&rmnet_dev_notifier);
 	rtnl_link_unregister(&rmnet_link_ops);
-	rmnet_core_genl_deinit();
 }
 
 module_init(rmnet_init)

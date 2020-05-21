@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -18,10 +25,10 @@
 #include <linux/interrupt.h>
 #include <linux/timer.h>
 #include <linux/pm_opp.h>
+#include <linux/cpufreq.h>
 #include <linux/cpu_cooling.h>
 #include <linux/atomic.h>
 #include <linux/regulator/consumer.h>
-#include <linux/cpufreq.h>
 
 #include <asm/smp_plat.h>
 #include <asm/cacheflush.h>
@@ -90,6 +97,7 @@ struct limits_dcvs_hw {
 	struct device_attribute lmh_freq_attr;
 	struct list_head list;
 	bool is_irq_enabled;
+	bool is_plat_mit_disabled;
 	struct mutex access_lock;
 	struct __limits_cdev_data *cdev_data;
 	uint32_t cdev_registered;
@@ -402,30 +410,51 @@ static void register_cooling_device(struct work_struct *work)
 {
 	struct limits_dcvs_hw *hw;
 	unsigned int cpu = 0, idx = 0;
-	struct cpufreq_policy *policy = NULL;
+	struct device_node *cpu_node;
+	struct cpufreq_policy *policy;
 
 	mutex_lock(&lmh_dcvs_list_access);
 	list_for_each_entry(hw, &lmh_dcvs_hw_list, list) {
 		if (hw->max_freq[0] == U32_MAX)
 			limits_dcvs_get_freq_limits(hw);
 
+		if (cpumask_weight(&hw->online_mask) == 0)
+			continue;
 		idx = 0;
 		for_each_cpu(cpu, &hw->core_map) {
-			if (hw->cdev_data[idx].cdev ||
-				!cpumask_test_cpu(cpu, &hw->online_mask)) {
+			cpumask_t cpu_mask  = { CPU_BITS_NONE };
+
+			if (hw->cdev_data[idx].cdev) {
 				idx++;
-				continue;
-			}
-			policy = cpufreq_cpu_get(cpu);
-			if (!policy) {
-				pr_err("no policy for cpu%d\n", cpu);
 				continue;
 			}
 			hw->cdev_data[idx].max_freq = U32_MAX;
 			hw->cdev_data[idx].min_freq = 0;
-			hw->cdev_data[idx].cdev =
+
+			if (!hw->is_plat_mit_disabled) {
+				cpumask_set_cpu(cpu, &cpu_mask);
+				hw->cdev_data[idx].cdev =
 					cpufreq_platform_cooling_register(
-							policy, &cd_ops);
+							&cpu_mask, &cd_ops);
+			} else {
+				cpu_node = of_cpu_device_node_get(cpu);
+				if (WARN_ON(!cpu_node)) {
+					hw->cdev_data[idx].cdev = NULL;
+					continue;
+				}
+
+				policy = cpufreq_cpu_get(cpu);
+				if (!policy) {
+					pr_err("No policy for cpu%d\n", cpu);
+					hw->cdev_data[idx].cdev = NULL;
+					of_node_put(cpu_node);
+					continue;
+				}
+				hw->cdev_data[idx].cdev =
+					of_cpufreq_cooling_register(cpu_node,
+						policy);
+				of_node_put(cpu_node);
+			}
 			if (IS_ERR_OR_NULL(hw->cdev_data[idx].cdev)) {
 				pr_err("CPU:%u cdev register error:%ld\n",
 					cpu, PTR_ERR(hw->cdev_data[idx].cdev));
@@ -529,7 +558,6 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 	int cpu, idx = 0;
 	cpumask_t mask = { CPU_BITS_NONE };
 	const __be32 *addr;
-	bool no_cdev_register = false;
 
 	for_each_possible_cpu(cpu) {
 		cpu_node = of_cpu_device_node_get(cpu);
@@ -544,22 +572,16 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		of_node_put(lmh_node);
 	}
 
+	/*
+	 * We return error if none of the CPUs have
+	 * reference to our LMH node
+	 */
+	if (cpumask_empty(&mask))
+		return -EINVAL;
+
 	hw = devm_kzalloc(&pdev->dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
 		return -ENOMEM;
-	/*
-	 * We just init regulator if none of the CPUs have
-	 * reference to our LMH node
-	 */
-	if (cpumask_empty(&mask)) {
-		limits_isens_vref_ldo_init(pdev, hw);
-		mutex_lock(&lmh_dcvs_list_access);
-		INIT_LIST_HEAD(&hw->list);
-		list_add_tail(&hw->list, &lmh_dcvs_hw_list);
-		mutex_unlock(&lmh_dcvs_list_access);
-		return 0;
-	}
-
 	hw->cdev_data = devm_kcalloc(&pdev->dev, cpumask_weight(&mask),
 				   sizeof(*hw->cdev_data),
 				   GFP_KERNEL);
@@ -589,10 +611,11 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		break;
 	default:
 		return -EINVAL;
-	}
+	};
 
-	no_cdev_register = of_property_read_bool(dn,
-				"qcom,no-cooling-device-register");
+	/* Check whether platform mitigation needs to enable or not */
+	hw->is_plat_mit_disabled = of_property_read_bool(dn,
+				"qcom,plat-mitigation-disable");
 
 	addr = of_get_address(dn, 0, NULL, NULL);
 	if (!addr) {
@@ -679,14 +702,11 @@ probe_exit:
 	mutex_unlock(&lmh_dcvs_list_access);
 	lmh_debug_register(pdev);
 
-	if (!no_cdev_register) {
-		ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN,
-					"lmh-dcvs/cdev:online",
-					limits_cpu_online, NULL);
-		if (ret < 0)
-			goto unregister_sensor;
-		ret = 0;
-	}
+	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "lmh-dcvs/cdev:online",
+				limits_cpu_online, NULL);
+	if (ret < 0)
+		goto unregister_sensor;
+	ret = 0;
 
 	return ret;
 

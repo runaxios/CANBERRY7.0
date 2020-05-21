@@ -18,7 +18,7 @@
 
 #define NFSDBG_FACILITY		NFSDBG_PNFS_LD
 
-static unsigned int dataserver_timeo = NFS_DEF_TCP_TIMEO;
+static unsigned int dataserver_timeo = NFS_DEF_TCP_RETRANS;
 static unsigned int dataserver_retrans;
 
 static bool ff_layout_has_available_ds(struct pnfs_layout_segment *lseg);
@@ -99,8 +99,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 	version_count = be32_to_cpup(p);
 	dprintk("%s: version count %d\n", __func__, version_count);
 
-	ds_versions = kcalloc(version_count,
-			      sizeof(struct nfs4_ff_ds_version),
+	ds_versions = kzalloc(version_count * sizeof(struct nfs4_ff_ds_version),
 			      gfp_flags);
 	if (!ds_versions)
 		goto out_scratch;
@@ -307,7 +306,7 @@ int ff_layout_track_ds_error(struct nfs4_flexfile_layout *flo,
 	if (status == 0)
 		return 0;
 
-	if (IS_ERR_OR_NULL(mirror->mirror_ds))
+	if (mirror->mirror_ds == NULL)
 		return -EINVAL;
 
 	dserr = kmalloc(sizeof(*dserr), gfp_flags);

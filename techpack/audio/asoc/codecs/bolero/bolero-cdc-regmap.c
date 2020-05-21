@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/regmap.h>
@@ -609,7 +617,6 @@ static const struct reg_default bolero_defaults[] = {
 	/* VA macro */
 	{ BOLERO_CDC_VA_CLK_RST_CTRL_MCLK_CONTROL, 0x00},
 	{ BOLERO_CDC_VA_CLK_RST_CTRL_FS_CNT_CONTROL, 0x00},
-	{ BOLERO_CDC_VA_CLK_RST_CTRL_SWR_CONTROL, 0x00},
 	{ BOLERO_CDC_VA_TOP_CSR_TOP_CFG0, 0x00},
 	{ BOLERO_CDC_VA_TOP_CSR_DMIC0_CTL, 0x00},
 	{ BOLERO_CDC_VA_TOP_CSR_DMIC1_CTL, 0x00},
@@ -625,10 +632,6 @@ static const struct reg_default bolero_defaults[] = {
 	{ BOLERO_CDC_VA_TOP_CSR_CORE_ID_1, 0x00},
 	{ BOLERO_CDC_VA_TOP_CSR_CORE_ID_2, 0x00},
 	{ BOLERO_CDC_VA_TOP_CSR_CORE_ID_3, 0x00},
-	{ BOLERO_CDC_VA_TOP_CSR_SWR_MIC_CTL0, 0xEE},
-	{ BOLERO_CDC_VA_TOP_CSR_SWR_MIC_CTL1, 0xEE},
-	{ BOLERO_CDC_VA_TOP_CSR_SWR_MIC_CTL2, 0xEE},
-	{ BOLERO_CDC_VA_TOP_CSR_SWR_CTRL, 0x06},
 
 	/* VA core */
 	{ BOLERO_CDC_VA_INP_MUX_ADC_MUX0_CFG0, 0x00},
@@ -814,13 +817,9 @@ static bool bolero_is_volatile_register(struct device *dev,
 	case BOLERO_CDC_WSA_SPLINE_ASRC1_STATUS_FMAX_CNTR_MSB:
 	case BOLERO_CDC_WSA_SPLINE_ASRC1_STATUS_FIFO:
 	case BOLERO_CDC_RX_TOP_HPHL_COMP_RD_LSB:
-	case BOLERO_CDC_RX_TOP_HPHL_COMP_WR_LSB:
 	case BOLERO_CDC_RX_TOP_HPHL_COMP_RD_MSB:
-	case BOLERO_CDC_RX_TOP_HPHL_COMP_WR_MSB:
 	case BOLERO_CDC_RX_TOP_HPHR_COMP_RD_LSB:
-	case BOLERO_CDC_RX_TOP_HPHR_COMP_WR_LSB:
 	case BOLERO_CDC_RX_TOP_HPHR_COMP_RD_MSB:
-	case BOLERO_CDC_RX_TOP_HPHR_COMP_WR_MSB:
 	case BOLERO_CDC_RX_TOP_DSD0_DEBUG_CFG2:
 	case BOLERO_CDC_RX_TOP_DSD1_DEBUG_CFG2:
 	case BOLERO_CDC_RX_BCL_VBAT_GAIN_MON_VAL:

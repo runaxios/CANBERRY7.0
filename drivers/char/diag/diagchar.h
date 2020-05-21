@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef DIAGCHAR_H
@@ -55,11 +62,6 @@
 #define DIAG_CTRL_MSG_LOG_MASK	9
 #define DIAG_CTRL_MSG_EVENT_MASK	10
 #define DIAG_CTRL_MSG_F3_MASK	11
-
-#define DIAG_CTRL_MSG_F3_MS_MASK	36
-#define DIAG_CTRL_MSG_LOG_MS_MASK	37
-#define DIAG_CTRL_MSG_EVENT_MS_MASK	38
-
 #define CONTROL_CHAR	0x7E
 
 #define DIAG_ID_ROOT_STRING "root"
@@ -71,21 +73,19 @@
 #define DIAG_CON_SENSORS	(0x0010)	/* Bit mask for Sensors */
 #define DIAG_CON_WDSP		(0x0020)	/* Bit mask for WDSP */
 #define DIAG_CON_CDSP		(0x0040)	/* Bit mask for CDSP */
-#define DIAG_CON_NPU		(0x0080)	/* Bit mask for NPU */
 
 #define DIAG_CON_UPD_WLAN		(0x1000) /*Bit mask for WLAN PD*/
 #define DIAG_CON_UPD_AUDIO		(0x2000) /*Bit mask for AUDIO PD*/
 #define DIAG_CON_UPD_SENSORS	(0x4000) /*Bit mask for SENSORS PD*/
-#define DIAG_CON_UPD_CHARGER	(0x8000) /* Bit mask for CHARGER PD */
+
 #define DIAG_CON_NONE		(0x0000)	/* Bit mask for No SS*/
 #define DIAG_CON_ALL		(DIAG_CON_APSS | DIAG_CON_MPSS \
 				| DIAG_CON_LPASS | DIAG_CON_WCNSS \
 				| DIAG_CON_SENSORS | DIAG_CON_WDSP \
-				| DIAG_CON_CDSP | DIAG_CON_NPU)
+				| DIAG_CON_CDSP)
 #define DIAG_CON_UPD_ALL	(DIAG_CON_UPD_WLAN \
 				| DIAG_CON_UPD_AUDIO \
-				| DIAG_CON_UPD_SENSORS \
-				| DIAG_CON_UPD_CHARGER)
+				| DIAG_CON_UPD_SENSORS)
 
 #define DIAG_STM_MODEM	0x01
 #define DIAG_STM_LPASS	0x02
@@ -93,7 +93,6 @@
 #define DIAG_STM_APPS	0x08
 #define DIAG_STM_SENSORS 0x10
 #define DIAG_STM_CDSP 0x20
-#define DIAG_STM_NPU 0x40
 
 #define INVALID_PID		-1
 #define DIAG_CMD_FOUND		1
@@ -103,7 +102,6 @@
 #define DIAG_CMD_ADD		1
 #define DIAG_CMD_REMOVE		0
 
-#define DIAG_SS_CMD_OFFSET	2
 #define DIAG_CMD_VERSION	0
 #define DIAG_CMD_ERROR		0x13
 #define DIAG_CMD_DOWNLOAD	0x3A
@@ -142,8 +140,6 @@
 #define DIAG_GET_TIME_API	0x21B
 #define DIAG_SET_TIME_API	0x21C
 #define DIAG_GET_DIAG_ID	0x222
-#define DIAG_HW_ACCEL_CMD	0x224
-#define DIAG_FEATURE_QUERY	0x225
 #define DIAG_SWITCH_COMMAND	0x081B
 #define DIAG_BUFFERING_MODE	0x080C
 
@@ -158,10 +154,6 @@
 #define DIAG_CMD_OP_SET_MSG_MASK	4
 #define DIAG_CMD_OP_SET_ALL_MSG_MASK	5
 
-#define DIAG_CMD_OP_GET_EVENT_MSK	1
-#define DIAG_CMD_OP_SET_EVENT_MSK	2
-#define DIAG_CMD_OP_EVENT_TOGGLE	3
-
 #define DIAG_CMD_OP_GET_MSG_ALLOC       0x33
 #define DIAG_CMD_OP_GET_MSG_DROP	0x30
 #define DIAG_CMD_OP_RESET_MSG_STATS	0x2F
@@ -173,10 +165,6 @@
 #define DIAG_CMD_OP_RESET_EVENT_STATS	0x2D
 
 #define DIAG_CMD_OP_HDLC_DISABLE	0x218
-
-#define DIAG_SUB_SYS_CMD_MSG	0x6D
-#define DIAG_SUB_SYS_CMD_LOG	0x6E
-#define DIAG_SUB_SYS_CMD_EVENT	0x6F
 
 #define BAD_PARAM_RESPONSE_MESSAGE 20
 
@@ -192,10 +180,6 @@
 #define PKT_RESET	2
 
 #define FEATURE_MASK_LEN	4
-
-#define F_DIAG_EVENT_REPORT	0
-#define F_DIAG_HW_ACCELERATION	1
-#define F_DIAG_MULTI_SIM_MASK	2
 
 #define DIAG_MD_NONE			0
 #define DIAG_MD_PERIPHERAL		1
@@ -223,9 +207,6 @@
 #define DEFAULT_LOW_WM_VAL	15
 #define DEFAULT_HIGH_WM_VAL	85
 
-#define HDLC_CTXT 1
-#define NON_HDLC_CTXT 2
-
 #define TYPE_DATA		0
 #define TYPE_CNTL		1
 #define TYPE_DCI		2
@@ -239,17 +220,15 @@
 #define PERIPHERAL_SENSORS	3
 #define PERIPHERAL_WDSP		4
 #define PERIPHERAL_CDSP		5
-#define PERIPHERAL_NPU		6
-#define NUM_PERIPHERALS		7
+#define NUM_PERIPHERALS		6
 #define APPS_DATA		(NUM_PERIPHERALS)
 
-#define UPD_WLAN		8
-#define UPD_AUDIO		9
-#define UPD_SENSORS		10
-#define UPD_CHARGER		11
-#define NUM_UPD			4
+#define UPD_WLAN		7
+#define UPD_AUDIO		8
+#define UPD_SENSORS		9
+#define NUM_UPD			3
 
-#define MAX_PERIPHERAL_UPD			3
+#define MAX_PERIPHERAL_UPD			2
 /* Number of sessions possible in Memory Device Mode. +1 for Apps data */
 #define NUM_MD_SESSIONS		(NUM_PERIPHERALS \
 					+ NUM_UPD + 1)
@@ -262,15 +241,6 @@ do {						\
 	for (i = 0; i <= fwd_info->num_pd - 2; i++)	\
 		pd_mask |= (1 << fwd_info->upd_diag_id[i].pd);\
 } while (0)
-
-#define DIAGIDV2_FEATURE(f_index)	\
-	driver->diagid_v2_feature[f_index]
-
-#define DIAGIDV2_STATUS(f_index)	\
-	driver->diagid_v2_status[f_index]
-
-#define P_FMASK_DIAGID_V2(peripheral)	\
-	driver->feature[peripheral].diagid_v2_feature_mask
 
 /*
  * Number of stm processors includes all the peripherals and
@@ -319,6 +289,10 @@ do {						\
 #define DIAG_NUM_PROC	(1 + NUM_REMOTE_DEV)
 #endif
 
+#define DIAG_MSM_MASK (0x0001)   /* Bit mask for MSM */
+#define DIAG_MDM_MASK (0x0002)   /* Bit mask for first mdm device */
+#define DIAG_MDM2_MASK (0x0004) /* Bit mask for second mdm device */
+
 #define DIAG_WS_DCI		0
 #define DIAG_WS_MUX		1
 
@@ -335,42 +309,8 @@ do {						\
 #define DIAG_ID_UNKNOWN		0
 #define DIAG_ID_APPS		1
 
-#define DIAGID_V2_FEATURE_COUNT 3
-
-/*
- * HW Acceleration operation definition
- */
-#define DIAG_HW_ACCEL_OP_DISABLE	0
-#define DIAG_HW_ACCEL_OP_ENABLE	1
-#define DIAG_HW_ACCEL_OP_QUERY	2
-
-/*
- * HW Acceleration TYPE definition
- */
-#define DIAG_HW_ACCEL_TYPE_ALL	0
-#define DIAG_HW_ACCEL_TYPE_STM	1
-#define DIAG_HW_ACCEL_TYPE_ATB	2
-#define DIAG_HW_ACCEL_TYPE_MAX	2
-
-#define DIAG_HW_ACCEL_VER_MIN 1
-#define DIAG_HW_ACCEL_VER_MAX 1
-
-/*
- * HW Acceleration CMD Error codes
- */
-#define DIAG_HW_ACCEL_STATUS_SUCCESS	0
-#define DIAG_HW_ACCEL_FAIL	1
-#define DIAG_HW_ACCEL_INVALID_TYPE	2
-#define DIAG_HW_ACCEL_INVALID_VER	3
-
-/*
- * HW Acceleration Transport types
- */
-#define DIAG_TRANSPORT_UNKNOWN 0
-#define DIAG_TRANSPORT_UART    1
-#define DIAG_TRANSPORT_USB     2
-#define DIAG_TRANSPORT_PCIE    3
-
+#define DIAG_ROUTE_TO_USB 0
+#define DIAG_ROUTE_TO_PCIE 1
 /* List of remote processor supported */
 enum remote_procs {
 	MDM = 1,
@@ -382,8 +322,7 @@ enum remote_procs {
 #define DIAG_MD_BRIDGE_BASE	DIAG_MD_LOCAL_LAST
 #define DIAG_MD_MDM		(DIAG_MD_BRIDGE_BASE)
 #define DIAG_MD_MDM2		(DIAG_MD_BRIDGE_BASE + 1)
-#define DIAG_MD_SMUX		(DIAG_MD_BRIDGE_BASE + 2)
-#define DIAG_MD_BRIDGE_LAST	(DIAG_MD_BRIDGE_BASE + 3)
+#define DIAG_MD_BRIDGE_LAST	(DIAG_MD_BRIDGE_BASE + 2)
 
 #ifndef CONFIG_DIAGFWD_BRIDGE_CODE
 #define NUM_DIAG_MD_DEV		DIAG_MD_LOCAL_LAST
@@ -405,86 +344,6 @@ struct diag_cmd_ext_mobile_rsp_t {
 	uint32_t chip_id;
 } __packed;
 
-/*
- * hw acceleration command request payload structure
- */
-struct diag_hw_accel_op_t {
-	uint8_t hw_accel_type;
-	uint8_t hw_accel_ver;
-	uint32_t diagid_mask;
-} __packed;
-
-/*
- * hw acceleration command request structure
- */
-
-struct diag_hw_accel_cmd_req_t {
-	struct diag_pkt_header_t header;
-	uint8_t version;
-	uint8_t operation;
-	uint16_t reserved;
-	struct diag_hw_accel_op_t op_req;
-} __packed;
-
-/*
- * hw acceleration command response payload structure
- */
-
-struct diag_hw_accel_op_resp_payload_t {
-	uint8_t status;
-	uint8_t hw_accel_type;
-	uint8_t hw_accel_ver;
-	uint32_t diagid_status;
-} __packed;
-
-/*
- * hw acceleration command op response structure
- */
-
-struct diag_hw_accel_cmd_op_resp_t {
-	struct diag_pkt_header_t header;
-	uint8_t version;
-	uint8_t operation;
-	uint16_t reserved;
-	struct diag_hw_accel_op_resp_payload_t op_rsp;
-} __packed;
-
-/*
- * hw acceleration query response sub payload
- * in mulitples of the num_accel_rsp
- */
-
-struct diag_hw_accel_query_sub_payload_rsp_t {
-	uint8_t hw_accel_type;
-	uint8_t hw_accel_ver;
-	uint32_t diagid_mask_supported;
-	uint32_t diagid_mask_enabled;
-} __packed;
-
-/*
- * hw acceleration query operation response payload structure
- */
-
-struct diag_hw_accel_query_rsp_payload_t {
-	uint8_t status;
-	uint8_t diag_transport;
-	uint8_t num_accel_rsp;
-	struct diag_hw_accel_query_sub_payload_rsp_t
-		sub_query_rsp[DIAG_HW_ACCEL_TYPE_MAX][DIAG_HW_ACCEL_VER_MAX];
-} __packed;
-
-/*
- * hw acceleration command query response structure
- */
-
-struct diag_hw_accel_cmd_query_resp_t {
-	struct diag_pkt_header_t header;
-	uint8_t version;
-	uint8_t operation;
-	uint16_t reserved;
-	struct diag_hw_accel_query_rsp_payload_t query_rsp;
-} __packed;
-
 struct diag_cmd_diag_id_query_req_t {
 	struct diag_pkt_header_t header;
 	uint8_t version;
@@ -495,10 +354,8 @@ struct diag_id_tbl_t {
 	uint8_t diag_id;
 	uint8_t pd_val;
 	uint8_t peripheral;
-	uint8_t pd_feature_mask;
 	char *process_name;
 } __packed;
-
 struct diag_id_t {
 	uint8_t diag_id;
 	uint8_t len;
@@ -623,12 +480,6 @@ struct diag_cmd_hdlc_disable_rsp_t {
 	uint8_t result;
 };
 
-struct diag_cmd_feature_query_rsp_t {
-	struct diag_pkt_header_t header;
-	uint8_t version;
-	uint8_t feature_len;
-};
-
 struct diag_pkt_frame_t {
 	uint8_t start;
 	uint8_t version;
@@ -666,7 +517,6 @@ struct diag_query_pid_t {
 struct diag_con_all_param_t {
 	uint32_t diag_con_all;
 	uint32_t num_peripherals;
-	uint32_t upd_map_supported;
 };
 
 struct diag_md_session_t {
@@ -685,28 +535,17 @@ struct diag_md_session_t {
  * High level structure for storing Diag masks.
  *
  * @ptr: Pointer to the buffer that stores the masks
- * @ms_ptr: Pointer to the list having mask based upon subscription
  * @mask_len: Length of the buffer pointed by ptr
  * @update_buf: Buffer for performing mask updates to peripherals
  * @update_buf_len: Length of the buffer pointed by buf
  * @status: status of the mask - all enable, disabled, valid
  * @lock: To protect access to the mask variables
  */
-
-struct diag_multisim_masks {
-	uint8_t *sub_ptr;
-	uint8_t status;
-	struct diag_multisim_masks *next;
-};
-
 struct diag_mask_info {
 	uint8_t *ptr;
-	struct diag_multisim_masks *ms_ptr;
 	int mask_len;
 	uint8_t *update_buf;
 	int update_buf_len;
-	uint8_t *update_buf_client;
-	int update_buf_client_len;
 	uint8_t status;
 	struct mutex lock;
 };
@@ -732,8 +571,6 @@ struct diag_feature_t {
 	uint8_t sockets_enabled;
 	uint8_t sent_feature_mask;
 	uint8_t diag_id_support;
-	uint8_t diagid_v2_feature_mask;
-	uint8_t multi_sim_support;
 };
 
 struct diagchar_dev {
@@ -761,7 +598,6 @@ struct diagchar_dev {
 	int supports_apps_hdlc_encoding;
 	int supports_apps_header_untagging;
 	int supports_pd_buffering;
-	int supports_diagid_v2_feature_mask;
 	int peripheral_untag[NUM_PERIPHERALS];
 	int supports_sockets;
 	/* The state requested in the STM command */
@@ -786,7 +622,7 @@ struct diagchar_dev {
 	int dci_tag;
 	int dci_client_id[MAX_DCI_CLIENTS];
 	struct mutex dci_mutex;
-	struct mutex rpmsginfo_mutex[NUM_PERIPHERALS];
+	spinlock_t rpmsginfo_lock[NUM_PERIPHERALS];
 	int num_dci_client;
 	unsigned char *apps_dci_buf;
 	int dci_state;
@@ -794,10 +630,11 @@ struct diagchar_dev {
 	struct list_head cmd_reg_list;
 	struct list_head diag_id_list;
 	struct mutex diag_id_mutex;
-	struct mutex diagid_v2_mutex;
 	struct mutex cmd_reg_mutex;
 	uint32_t cmd_reg_count;
 	struct mutex diagfwd_channel_mutex[NUM_PERIPHERALS];
+	int transport_set;
+	int pcie_transport_def;
 	/* Sizes that reflect memory pool sizes */
 	unsigned int poolsize;
 	unsigned int poolsize_hdlc;
@@ -819,7 +656,6 @@ struct diagchar_dev {
 	struct diagfwd_info *diagfwd_cmd[NUM_PERIPHERALS];
 	struct diagfwd_info *diagfwd_dci_cmd[NUM_PERIPHERALS];
 	struct diag_feature_t feature[NUM_PERIPHERALS];
-	uint32_t apps_feature;
 	struct diag_buffering_mode_t buffering_mode[NUM_MD_SESSIONS];
 	uint8_t buffering_flag[NUM_MD_SESSIONS];
 	struct mutex mode_lock;
@@ -852,6 +688,8 @@ struct diagchar_dev {
 #ifdef CONFIG_DIAG_OVER_USB
 	int usb_connected;
 #endif
+	int pcie_connected;
+	int pcie_switch_pid;
 	struct workqueue_struct *diag_wq;
 	struct work_struct diag_drain_work;
 	struct work_struct update_user_clients;
@@ -884,7 +722,6 @@ struct diagchar_dev {
 	struct diag_mask_info *log_mask;
 	struct diag_mask_info *event_mask;
 	struct diag_mask_info *build_time_mask;
-	uint8_t multisim_feature_rcvd;
 	uint8_t set_mask_cmd;
 	uint8_t msg_mask_tbl_count;
 	uint8_t bt_msg_mask_tbl_count;
@@ -902,9 +739,6 @@ struct diagchar_dev {
 #endif
 	int time_sync_enabled;
 	uint8_t uses_time_api;
-	uint32_t diagid_v2_feature[DIAGID_V2_FEATURE_COUNT];
-	uint32_t diagid_v2_status[DIAGID_V2_FEATURE_COUNT];
-	uint32_t diag_hw_accel[DIAGID_V2_FEATURE_COUNT];
 };
 
 extern struct diagchar_dev *driver;
@@ -957,10 +791,6 @@ void diag_record_stats(int type, int flag);
 struct diag_md_session_t *diag_md_session_get_pid(int pid);
 struct diag_md_session_t *diag_md_session_get_peripheral(int dev_id,
 							uint8_t peripheral);
-int diag_md_session_match_pid_peripheral(int proc, int pid,
-					uint8_t peripheral);
-int diag_map_hw_accel_type_ver(uint8_t hw_accel_type, uint8_t hw_accel_ver);
-void diag_map_index_to_hw_accel(uint8_t index, uint8_t *hw_accel_type,
-			uint8_t *hw_accel_ver);
+int diag_md_session_match_pid_peripheral(int proc, int pid, uint8_t peripheral);
 
 #endif

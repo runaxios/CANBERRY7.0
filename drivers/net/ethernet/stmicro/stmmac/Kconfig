@@ -97,6 +97,16 @@ config DWMAC_OXNAS
 	  This selects the Oxford Semiconductor OXNASSoC glue layer support for
 	  the stmmac device driver. This driver is used for OX820.
 
+config DWMAC_QCOM_ETHQOS
+	tristate "Qualcomm Technologies, Inc. ETHQOS support"
+	default ARCH_QCOM
+	depends on OF && (ARCH_QCOM || COMPILE_TEST)
+	help
+	  Support for the Qualcomm Technologies, Inc. ETHQOS core.
+
+	  This selects the Qualcomm Technologies, Inc. ETHQOS glue layer support for the
+	  stmmac device driver.
+
 config DWMAC_ROCKCHIP
 	tristate "Rockchip dwmac support"
 	default ARCH_ROCKCHIP
@@ -110,7 +120,7 @@ config DWMAC_ROCKCHIP
 
 config DWMAC_SOCFPGA
 	tristate "SOCFPGA dwmac support"
-	default (ARCH_SOCFPGA || ARCH_STRATIX10)
+	default ARCH_SOCFPGA
 	depends on OF && (ARCH_SOCFPGA || ARCH_STRATIX10 || COMPILE_TEST)
 	select MFD_SYSCON
 	help
@@ -159,7 +169,6 @@ config DWMAC_SUN8I
 	tristate "Allwinner sun8i GMAC support"
 	default ARCH_SUNXI
 	depends on OF && (ARCH_SUNXI || COMPILE_TEST)
-	select MDIO_BUS_MUX
 	---help---
 	  Support for Allwinner H3 A83T A64 EMAC ethernet controllers.
 

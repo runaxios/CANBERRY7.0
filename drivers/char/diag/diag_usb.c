@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -86,29 +94,7 @@ struct diag_usb_info diag_usb[NUM_DIAG_USB_DEV] = {
 	}
 #endif
 };
-static int diag_usb_event_add(struct diag_usb_info *usb_info, int data)
-{
-	struct diag_usb_event_q *entry = NULL;
 
-	entry = kzalloc(sizeof(struct diag_usb_event_q), GFP_ATOMIC);
-	if (!entry)
-		return -ENOMEM;
-
-	entry->data = data;
-	INIT_LIST_HEAD(&entry->link);
-	list_add_tail(&entry->link, &usb_info->event_q);
-
-	return 0;
-}
-static void diag_usb_event_remove(struct diag_usb_event_q *entry)
-{
-	if (!entry)
-		return;
-
-	list_del(&entry->link);
-	kfree(entry);
-	entry = NULL;
-}
 static int diag_usb_buf_tbl_add(struct diag_usb_info *usb_info,
 				unsigned char *buf, uint32_t len, int ctxt)
 {
@@ -216,6 +202,25 @@ static void usb_connect(struct diag_usb_info *ch)
 	queue_work(ch->usb_wq, &(ch->read_work));
 }
 
+static void usb_connect_work_fn(struct work_struct *work)
+{
+	struct diag_usb_info *ch = container_of(work, struct diag_usb_info,
+						connect_work);
+
+	wait_event_interruptible(ch->wait_q, ch->enabled > 0);
+	ch->max_size = usb_diag_request_size(ch->hdl);
+	atomic_set(&ch->connected, 1);
+
+	DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+	"diag: USB channel %s: disconnected_status: %d, connected_status: %d\n",
+	ch->name, atomic_read(&ch->disconnected), atomic_read(&ch->connected));
+
+	usb_connect(ch);
+
+	if (atomic_read(&ch->disconnected))
+		wake_up_interruptible(&ch->wait_q);
+}
+
 /*
  * This function is called asynchronously when USB is disconnected
  * and synchronously when Diag wants to disconnect from USB
@@ -227,48 +232,31 @@ static void usb_disconnect(struct diag_usb_info *ch)
 		ch->ops->close(ch->ctxt, DIAG_USB_MODE);
 }
 
-static void usb_event_work_fn(struct work_struct *work)
+static void usb_disconnect_work_fn(struct work_struct *work)
 {
 	struct diag_usb_info *ch = container_of(work, struct diag_usb_info,
-						event_work);
-	struct diag_usb_event_q *entry = NULL;
+						disconnect_work);
 
 	if (!ch)
 		return;
-	entry = list_first_entry(&(ch->event_q), struct diag_usb_event_q, link);
-	if (!entry)
-		return;
 
-	switch (entry->data) {
-	case USB_DIAG_CONNECT:
-		wait_event_interruptible(ch->wait_q, ch->enabled > 0);
-		ch->max_size = usb_diag_request_size(ch->hdl);
-		atomic_set(&ch->connected, 1);
+	atomic_set(&ch->disconnected, 1);
+	DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+	"diag: USB channel %s: disconnected_status: %d, connected_status: %d\n",
+	ch->name, atomic_read(&ch->disconnected), atomic_read(&ch->connected));
 
-		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-		"diag: USB channel %s: connected_status: %d\n",
-		ch->name, atomic_read(&ch->connected));
+	wait_event_interruptible(ch->wait_q, atomic_read(&ch->connected) > 0);
+	atomic_set(&ch->connected, 0);
+	atomic_set(&ch->disconnected, 0);
+	DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+	"diag: USB channel %s: Cleared disconnected(%d) and connected(%d) status\n",
+	ch->name, atomic_read(&ch->disconnected), atomic_read(&ch->connected));
 
-		usb_connect(ch);
-		break;
-	case USB_DIAG_DISCONNECT:
-		atomic_set(&ch->connected, 0);
-		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-				 "diag: USB channel %s: Cleared connected(%d) status\n",
-				 ch->name, atomic_read(&ch->connected));
+	if (!atomic_read(&ch->connected) &&
+		driver->usb_connected && diag_mask_param())
+		diag_clear_masks(0);
 
-		if (!atomic_read(&ch->connected) &&
-			driver->usb_connected &&
-			(ch->id == DIAG_USB_LOCAL) && diag_mask_param())
-			diag_clear_masks(0);
-
-		usb_disconnect(ch);
-		break;
-	}
-	diag_usb_event_remove(entry);
-	if (!list_empty(&ch->event_q))
-		queue_work(ch->usb_wq, &(ch->event_work));
-
+	usb_disconnect(ch);
 }
 
 static void usb_read_work_fn(struct work_struct *work)
@@ -395,20 +383,17 @@ static void diag_usb_notifier(void *priv, unsigned int event,
 
 	switch (event) {
 	case USB_DIAG_CONNECT:
-		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-			"diag: USB channel %s: Received Connect event\n",
+		pr_info("diag: USB channel %s: Received Connect event\n",
 			usb_info->name);
-		diag_usb_event_add(usb_info, USB_DIAG_CONNECT);
-		queue_work(usb_info->usb_wq,
-			   &usb_info->event_work);
+		if (!atomic_read(&usb_info->connected))
+			queue_work(usb_info->usb_wq,
+			   &usb_info->connect_work);
 		break;
 	case USB_DIAG_DISCONNECT:
-		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
-			"diag: USB channel %s: Received Disconnect event\n",
+		pr_info("diag: USB channel %s: Received Disconnect event\n",
 			usb_info->name);
-		diag_usb_event_add(usb_info, USB_DIAG_DISCONNECT);
 		queue_work(usb_info->usb_wq,
-			   &usb_info->event_work);
+			   &usb_info->disconnect_work);
 		break;
 	case USB_DIAG_READ_DONE:
 		spin_lock_irqsave(&usb_info->lock, flags);
@@ -623,11 +608,11 @@ void diag_usb_connect_device(int id)
 {
 	struct diag_usb_info *usb_info = NULL;
 
-		usb_info = &diag_usb[id];
-		if (!usb_info->enabled)
-			return;
-		atomic_set(&usb_info->diag_state, 1);
-		usb_connect(usb_info);
+	usb_info = &diag_usb[id];
+	if (!usb_info->enabled)
+		return;
+	atomic_set(&usb_info->diag_state, 1);
+	usb_connect(usb_info);
 }
 
 /*
@@ -653,12 +638,11 @@ void diag_usb_disconnect_device(int id)
 {
 	struct diag_usb_info *usb_info = NULL;
 
-		usb_info = &diag_usb[id];
-		if (!usb_info->enabled)
-			return;
-		atomic_set(&usb_info->diag_state, 0);
-		usb_disconnect(usb_info);
-
+	usb_info = &diag_usb[id];
+	if (!usb_info->enabled)
+		return;
+	atomic_set(&usb_info->diag_state, 0);
+	usb_disconnect(usb_info);
 }
 int diag_usb_register(int id, int ctxt, struct diag_mux_ops *ops)
 {
@@ -687,6 +671,7 @@ int diag_usb_register(int id, int ctxt, struct diag_mux_ops *ops)
 	if (!ch->read_ptr)
 		goto err;
 	atomic_set(&ch->connected, 0);
+	atomic_set(&ch->disconnected, 0);
 	atomic_set(&ch->read_pending, 0);
 	/*
 	 * This function is called when the mux registers with Diag-USB.
@@ -695,11 +680,11 @@ int diag_usb_register(int id, int ctxt, struct diag_mux_ops *ops)
 	 */
 	atomic_set(&ch->diag_state, 1);
 	INIT_LIST_HEAD(&ch->buf_tbl);
-	INIT_LIST_HEAD(&ch->event_q);
 	diagmem_init(driver, ch->mempool);
 	INIT_WORK(&(ch->read_work), usb_read_work_fn);
 	INIT_WORK(&(ch->read_done_work), usb_read_done_work_fn);
-	INIT_WORK(&(ch->event_work), usb_event_work_fn);
+	INIT_WORK(&(ch->connect_work), usb_connect_work_fn);
+	INIT_WORK(&(ch->disconnect_work), usb_disconnect_work_fn);
 	init_waitqueue_head(&ch->wait_q);
 	strlcpy(wq_name, "DIAG_USB_", sizeof(wq_name));
 	strlcat(wq_name, ch->name, sizeof(wq_name));

@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #ifndef __MSM_PERIPHERAL_LOADER_H
 #define __MSM_PERIPHERAL_LOADER_H
@@ -8,20 +15,11 @@
 #include <linux/mailbox_client.h>
 #include <linux/mailbox/qmp.h>
 #include "minidump_private.h"
-#include <linux/ipc_logging.h>
 
 struct device;
 struct module;
 struct pil_priv;
 
-extern void *pil_ipc_log;
-
-#define pil_ipc(__msg, ...) \
-do { \
-	if (pil_ipc_log) \
-		ipc_log_string(pil_ipc_log, \
-			"[%s]: "__msg, __func__,  ##__VA_ARGS__); \
-} while (0)
 /**
  * struct pil_desc - PIL descriptor
  * @name: string used for pil_get()
@@ -43,7 +41,6 @@ do { \
  * @modem_ssr: true if modem is restarting, false if booting for first time.
  * @clear_fw_region: Clear fw region on failure in loading.
  * @subsys_vmid: memprot id for the subsystem.
- * @extra_size: extra memory allocated at the end of the image.
  */
 struct pil_desc {
 	const char *name;
@@ -72,8 +69,6 @@ struct pil_desc {
 	int minidump_id;
 	int *aux_minidump_ids;
 	int num_aux_minidump_ids;
-	bool minidump_as_elf32;
-	u32 extra_size;
 };
 
 /**

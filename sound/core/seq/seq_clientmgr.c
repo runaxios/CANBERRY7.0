@@ -311,9 +311,10 @@ static int snd_seq_open(struct inode *inode, struct file *file)
 	if (err < 0)
 		return err;
 
-	mutex_lock(&register_mutex);
+	if (mutex_lock_interruptible(&register_mutex))
+		return -ERESTARTSYS;
 	client = seq_create_client1(-1, SNDRV_SEQ_DEFAULT_EVENTS);
-	if (!client) {
+	if (client == NULL) {
 		mutex_unlock(&register_mutex);
 		return -ENOMEM;	/* failure code */
 	}
@@ -802,10 +803,6 @@ static int snd_seq_deliver_event(struct snd_seq_client *client, struct snd_seq_e
 		return -EMLINK;
 	}
 
-	if (snd_seq_ev_is_variable(event) &&
-	    snd_BUG_ON(atomic && (event->data.ext.len & SNDRV_SEQ_EXT_USRPTR)))
-		return -EINVAL;
-
 	if (event->queue == SNDRV_SEQ_ADDRESS_SUBSCRIBERS ||
 	    event->dest.client == SNDRV_SEQ_ADDRESS_SUBSCRIBERS)
 		result = deliver_to_subscribers(client, event, atomic, hop);
@@ -1004,7 +1001,7 @@ static ssize_t snd_seq_write(struct file *file, const char __user *buf,
 {
 	struct snd_seq_client *client = file->private_data;
 	int written = 0, len;
-	int err, handled;
+	int err;
 	struct snd_seq_event event;
 
 	if (!(snd_seq_file_flags(file) & SNDRV_SEQ_LFLG_OUTPUT))
@@ -1017,8 +1014,6 @@ static ssize_t snd_seq_write(struct file *file, const char __user *buf,
 	if (!client->accept_output || client->pool == NULL)
 		return -ENXIO;
 
- repeat:
-	handled = 0;
 	/* allocate the pool now if the pool is not allocated yet */ 
 	mutex_lock(&client->ioctl_mutex);
 	if (client->pool->size > 0 && !snd_seq_write_pool_allocated(client)) {
@@ -1078,19 +1073,12 @@ static ssize_t snd_seq_write(struct file *file, const char __user *buf,
 						   0, 0, &client->ioctl_mutex);
 		if (err < 0)
 			break;
-		handled++;
 
 	__skip_event:
 		/* Update pointers and counts */
 		count -= len;
 		buf += len;
 		written += len;
-
-		/* let's have a coffee break if too many events are queued */
-		if (++handled >= 200) {
-			mutex_unlock(&client->ioctl_mutex);
-			goto repeat;
-		}
 	}
 
  out:
@@ -1102,21 +1090,21 @@ static ssize_t snd_seq_write(struct file *file, const char __user *buf,
 /*
  * handle polling
  */
-static __poll_t snd_seq_poll(struct file *file, poll_table * wait)
+static unsigned int snd_seq_poll(struct file *file, poll_table * wait)
 {
 	struct snd_seq_client *client = file->private_data;
-	__poll_t mask = 0;
+	unsigned int mask = 0;
 
 	/* check client structures are in place */
 	if (snd_BUG_ON(!client))
-		return EPOLLERR;
+		return -ENXIO;
 
 	if ((snd_seq_file_flags(file) & SNDRV_SEQ_LFLG_INPUT) &&
 	    client->data.user.fifo) {
 
 		/* check if data is available in the outqueue */
 		if (snd_seq_fifo_poll_wait(client->data.user.fifo, file, wait))
-			mask |= EPOLLIN | EPOLLRDNORM;
+			mask |= POLLIN | POLLRDNORM;
 	}
 
 	if (snd_seq_file_flags(file) & SNDRV_SEQ_LFLG_OUTPUT) {
@@ -1124,7 +1112,7 @@ static __poll_t snd_seq_poll(struct file *file, poll_table * wait)
 		/* check if data is available in the pool */
 		if (!snd_seq_write_pool_allocated(client) ||
 		    snd_seq_pool_poll_wait(client->pool, file, wait))
-			mask |= EPOLLOUT | EPOLLWRNORM;
+			mask |= POLLOUT | POLLWRNORM;
 	}
 
 	return mask;
@@ -1712,7 +1700,10 @@ static int snd_seq_ioctl_get_queue_timer(struct snd_seq_client *client,
 	if (queue == NULL)
 		return -EINVAL;
 
-	mutex_lock(&queue->timer_mutex);
+	if (mutex_lock_interruptible(&queue->timer_mutex)) {
+		queuefree(queue);
+		return -ERESTARTSYS;
+	}
 	tmr = queue->timer;
 	memset(timer, 0, sizeof(*timer));
 	timer->queue = queue->queue;
@@ -1746,7 +1737,10 @@ static int snd_seq_ioctl_set_queue_timer(struct snd_seq_client *client,
 		q = queueptr(timer->queue);
 		if (q == NULL)
 			return -ENXIO;
-		mutex_lock(&q->timer_mutex);
+		if (mutex_lock_interruptible(&q->timer_mutex)) {
+			queuefree(q);
+			return -ERESTARTSYS;
+		}
 		tmr = q->timer;
 		snd_seq_queue_timer_close(timer->queue);
 		tmr->type = timer->type;
@@ -1818,7 +1812,8 @@ static int snd_seq_ioctl_get_client_pool(struct snd_seq_client *client,
 	if (cptr->type == USER_CLIENT) {
 		info->input_pool = cptr->data.user.fifo_pool_size;
 		info->input_free = info->input_pool;
-		info->input_free = snd_seq_fifo_unused_cells(cptr->data.user.fifo);
+		if (cptr->data.user.fifo)
+			info->input_free = snd_seq_unused_cells(cptr->data.user.fifo->pool);
 	} else {
 		info->input_pool = 0;
 		info->input_free = 0;
@@ -1847,6 +1842,7 @@ static int snd_seq_ioctl_set_client_pool(struct snd_seq_client *client,
 				return -EBUSY;
 			/* remove all existing cells */
 			snd_seq_pool_mark_closing(client->pool);
+			snd_seq_queue_client_leave_cells(client->number);
 			snd_seq_pool_done(client->pool);
 		}
 		client->pool->size = info->output_pool;
@@ -1908,14 +1904,20 @@ static int snd_seq_ioctl_get_subscription(struct snd_seq_client *client,
 	int result;
 	struct snd_seq_client *sender = NULL;
 	struct snd_seq_client_port *sport = NULL;
+	struct snd_seq_subscribers *p;
 
 	result = -EINVAL;
 	if ((sender = snd_seq_client_use_ptr(subs->sender.client)) == NULL)
 		goto __end;
 	if ((sport = snd_seq_port_use_ptr(sender, subs->sender.port)) == NULL)
 		goto __end;
-	result = snd_seq_port_get_subscription(&sport->c_src, &subs->dest,
-					       subs);
+	p = snd_seq_port_get_subscription(&sport->c_src, &subs->dest);
+	if (p) {
+		result = 0;
+		*subs = p->info;
+	} else
+		result = -ENOENT;
+
       __end:
       	if (sport)
 		snd_seq_port_unlock(sport);
@@ -2175,7 +2177,8 @@ int snd_seq_create_kernel_client(struct snd_card *card, int client_index,
 	if (card == NULL && client_index >= SNDRV_SEQ_GLOBAL_CLIENTS)
 		return -EINVAL;
 
-	mutex_lock(&register_mutex);
+	if (mutex_lock_interruptible(&register_mutex))
+		return -ERESTARTSYS;
 
 	if (card) {
 		client_index += SNDRV_SEQ_GLOBAL_CLIENTS
@@ -2516,15 +2519,19 @@ int __init snd_sequencer_device_init(void)
 	snd_device_initialize(&seq_dev, NULL);
 	dev_set_name(&seq_dev, "seq");
 
-	mutex_lock(&register_mutex);
+	if (mutex_lock_interruptible(&register_mutex))
+		return -ERESTARTSYS;
+
 	err = snd_register_device(SNDRV_DEVICE_TYPE_SEQUENCER, NULL, 0,
 				  &snd_seq_f_ops, NULL, &seq_dev);
-	mutex_unlock(&register_mutex);
 	if (err < 0) {
+		mutex_unlock(&register_mutex);
 		put_device(&seq_dev);
 		return err;
 	}
 	
+	mutex_unlock(&register_mutex);
+
 	return 0;
 }
 
@@ -2533,7 +2540,7 @@ int __init snd_sequencer_device_init(void)
 /* 
  * unregister sequencer device 
  */
-void snd_sequencer_device_done(void)
+void __exit snd_sequencer_device_done(void)
 {
 	snd_unregister_device(&seq_dev);
 	put_device(&seq_dev);

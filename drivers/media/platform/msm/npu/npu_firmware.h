@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _NPU_FIRMWARE_H
@@ -29,6 +36,11 @@
 /* Data value for debug */
 #define REG_NPU_FW_DEBUG_DATA       NPU_GPR13
 
+/* Started job count */
+#define REG_FW_JOB_CNT_START        NPU_GPR14
+/* Finished job count */
+#define REG_FW_JOB_CNT_END          NPU_GPR15
+
 /* NPU FW Control/Status Register */
 /* bit fields definitions in CTRL STATUS REG */
 #define FW_CTRL_STATUS_IPC_READY_BIT            0
@@ -39,8 +51,6 @@
 #define FW_CTRL_STATUS_EXECUTING_ACO_BIT        5
 #define FW_CTRL_STATUS_SHUTDOWN_DONE_BIT        12
 #define FW_CTRL_STATUS_STACK_CORRUPT_BIT        13
-#define FW_CTRL_STATUS_PWR_NOTIFY_DONE_BIT      16
-#define FW_CTRL_STATUS_PWR_NOTIFY_ERR_BIT       17
 
 /* 32 bit values of the bit fields above */
 #define FW_CTRL_STATUS_IPC_READY_VAL    (1 << FW_CTRL_STATUS_IPC_READY_BIT)
@@ -57,10 +67,6 @@
 			(1 << FW_CTRL_STATUS_SHUTDOWN_DONE_BIT)
 #define FW_CTRL_STATUS_STACK_CORRUPT_VAL \
 			(1 << FW_CTRL_STATUS_STACK_CORRUPT_BIT)
-#define FW_CTRL_STATUS_PWR_NOTIFY_DONE_VAL \
-				(1 << FW_CTRL_STATUS_PWR_NOTIFY_DONE_BIT)
-#define FW_CTRL_STATUS_PWR_NOTIFY_ERR_VAL \
-				(1 << FW_CTRL_STATUS_PWR_NOTIFY_ERR_BIT)
 
 /* NPU HOST Control/Status Register */
 /* bit fields definitions in CTRL STATUS REG */
