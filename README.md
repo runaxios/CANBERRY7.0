@@ -6,7 +6,7 @@ The original code source is from here: https://github.com/MiCode/Xiaomi_Kernel_O
 
 My original commits are also here which allow the Xiaomi source to compile, with full history: https://github.com/mrslezak/Cepheus-Raphael-Q-GCC10
 
-Changes added to the kernel can be found by searching GitHub repos for the features listed below in the kernel.  Search the author name and the name of the feature, for example, adrenoboost flar2, click under commits, you will find the commmit that was merged.  Do a diff with my source code if you'd like to see my modifications.  If an author isn't listed, it's generic items like defconfig entries or my customizations.
+Changes added to the kernel can be found by searching GitHub repos for the features listed below in the kernel.  Search the author name and the name of the feature, for example, adrenoboost flar2, click under commits, you will find the commit that was merged.  Do a diff with my source code if you'd like to see my modifications.  If an author isn't listed, it's generic items like defconfig entries or my customizations.
 
 Or just build as is, it compiles directly using the scripts in the repo.
 
