@@ -2,7 +2,6 @@
 rm .version
 
 clear
-cd ~/cepheus-q-oss/
 cp Makefile.clang11 Makefile
 
 # Resources
@@ -10,7 +9,7 @@ THREAD="-j8"
 KERNEL="Image"
 DTBIMAGE="dtb"
 
-export CLANG_PATH=~/toolchains/Clang-11/bin/
+export CLANG_PATH=${HOME}/toolchains/Clang-11/bin/
 export PATH=${CLANG_PATH}:${PATH}
 export CLANG_TRIPLE=aarch64-linux-gnu-
 export CROSS_COMPILE=${HOME}/toolchains/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=clang CXX=clang++
@@ -23,19 +22,19 @@ DEFCONFIG="raphael_user_defconfig"
 
 # Paths
 KERNEL_DIR=`pwd`
-ZIMAGE_DIR="${HOME}/cepheus-q-oss/out-clang9TP/arch/arm64/boot/"
+ZIMAGE_DIR="${PWD}/out-clang9TP/arch/arm64/boot/"
 
 # Kernel Details
 VER=".1.5"
 
 # Vars
-BASE_AK_VER="MOD"
+BASE_AK_VER="MOD_LelaoNN"
 AK_VER="$BASE_AK_VER$VER"
 export LOCALVERSION=~`echo $AK_VER`
 export ARCH=arm64
 export SUBARCH=arm64
-export KBUILD_BUILD_USER=MattoftheDead
-export KBUILD_BUILD_HOST=Ubuntu18.04
+export KBUILD_BUILD_USER=LelaoNN
+export KBUILD_BUILD_HOST=Xubuntu20.04
 
 DATE_START=$(date +"%s")
 
