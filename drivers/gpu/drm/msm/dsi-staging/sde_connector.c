@@ -751,8 +751,8 @@ int sde_connector_update_hbm(struct sde_connector *c_conn)
 			mutex_lock(&dsi_display->panel->panel_lock);
 			sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
 			//HBM OFF
-			if ((dsi_display->drm_dev && dsi_display->drm_dev->state == MSM_DRM_BLANK_LP1) ||
-				(dsi_display->drm_dev && dsi_display->drm_dev->state == MSM_DRM_BLANK_LP2)) {
+			if ((dsi_display->drm_dev && dsi_display->drm_dev == MSM_DRM_BLANK_LP1) ||
+				(dsi_display->drm_dev && dsi_display->drm_dev == MSM_DRM_BLANK_LP2)) {
 				if (dsi_display->panel->last_bl_lvl > dsi_display->panel->doze_backlight_threshold) {
 					pr_info("hbm fod off doze hbm on\n");
 					dsi_display_write_panel(dsi_display, &dsi_display->panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_DOZE_HBM]);
@@ -793,8 +793,8 @@ int sde_connector_update_hbm(struct sde_connector *c_conn)
 			mutex_lock(&dsi_display->panel->panel_lock);
 			sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
 			pr_debug("wait one frame for hbm on\n");
-			if (dsi_display->panel->last_bl_lvl || dsi_display->drm_dev->state == MSM_DRM_BLANK_LP1
-							|| dsi_display->drm_dev->state == MSM_DRM_BLANK_LP2) {
+			if (dsi_display->panel->last_bl_lvl || dsi_display->drm_dev == MSM_DRM_BLANK_LP1
+							|| dsi_display->drm_dev == MSM_DRM_BLANK_LP2) {
 				/* enable FOD HBM */
 				if (dsi_display->panel->elvss_dimming_check_enable) {
 					rc = dsi_display_write_panel(dsi_display, &dsi_display->panel->hbm_fod_on);
