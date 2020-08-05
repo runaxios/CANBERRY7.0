@@ -4,8 +4,6 @@ MOD is one of best kernel for Mi9 so i decided to try to fix the issues with Miu
 
 All credits for the hard work go to Matt: https://github.com/mrslezak
 
-FOD Fix from https://github.com/Marisa-Open-Source/marisa_kernel_xiaomi_sm8150_q
-
 Credits for FOD fix go to: Sekaiacg Laulan56 Ayrton990 Wloot
 
 Kernel Info:
