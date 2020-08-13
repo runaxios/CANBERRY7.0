@@ -2,14 +2,14 @@
 rm .version
 
 clear
-cp Makefile.clang11 Makefile
+cp Makefile.clang Makefile
 
 # Resources
 THREAD="-j8"
 KERNEL="Image"
 DTBIMAGE="dtb"
 
-export CLANG_PATH=${HOME}/toolchains/proton-clang/bin/
+export CLANG_PATH=${HOME}/toolchains/bin/
 export PATH=${CLANG_PATH}:${PATH}
 export CROSS_COMPILE=aarch64-linux-gnu- CC=clang CXX=clang++
 export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
@@ -23,7 +23,7 @@ KERNEL_DIR=`pwd`
 ZIMAGE_DIR="${PWD}/out-proton9TP/arch/arm64/boot/"
 
 # Kernel Details
-VER=".1.5"
+VER=".1.6"
 
 # Vars
 BASE_AK_VER="MOD_LelaoNN"
