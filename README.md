@@ -1,10 +1,6 @@
-A fork repo of MOD 1.5Q to fix fod and other stuffs.
+MOD is one of best kernel for Mi9 so i decided to try to fix the issues with Miui and add new stuff
 
-MOD is one of best kernel for Mi9 so i decided to try to fix the issues with Miui.
-
-All credits for the hard work go to Matt: https://github.com/mrslezak
-
-Credits for FOD fix go to: Sekaiacg Laulan56 Ayrton990 Wloot
+All credits for the hard work go to MattoftheDead: https://github.com/mrslezak
 
 Kernel Info:
 

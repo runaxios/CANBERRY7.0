@@ -2,7 +2,6 @@
 rm .version
 
 clear
-cp Makefile.clang Makefile
 
 # Resources
 THREAD="-j8"
@@ -16,11 +15,11 @@ export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 export KBUILD_COMPILER_STRING=$(~/android/Toolchains/clang/clang10/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
 export DTC_EXT=dtc
 
-DEFCONFIG="cepheus_user_defconfig"
+DEFCONFIG="raphael_user_defconfig"
 
 # Paths
 KERNEL_DIR=`pwd`
-ZIMAGE_DIR="${PWD}/out-proton/arch/arm64/boot/"
+ZIMAGE_DIR="${PWD}/out-proton9TP/arch/arm64/boot/"
 
 # Kernel Details
 VER=".1.6"
@@ -43,8 +42,8 @@ echo "-------------------"
 echo -e "${restore}"
 
 echo
-make CC=clang CXX=clang++ O=out-proton $DEFCONFIG
-make CC=clang CXX=clang++ O=out-proton $THREAD 2>&1 | tee kernel.log
+make CC=clang CXX=clang++ O=out-proton9TP $DEFCONFIG
+make CC=clang CXX=clang++ O=out-proton9TP $THREAD 2>&1 | tee kernel.log
 
 echo -e "${green}"
 echo "-------------------"
