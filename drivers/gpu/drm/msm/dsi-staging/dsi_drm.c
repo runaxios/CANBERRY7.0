@@ -17,7 +17,7 @@
 #define pr_fmt(fmt)	"dsi-drm:[%s] " fmt, __func__
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic.h>
-#include <linux/msm_drm_notify.h>
+#include <drm/drm_notifier.h>
 #include <linux/notifier.h>
 #include <drm/drm_bridge.h>
 #include <linux/pm_wakeup.h>
@@ -50,6 +50,8 @@ struct dsi_bridge *gbridge;
 static struct delayed_work prim_panel_work;
 static atomic_t prim_panel_is_on;
 static struct wakeup_source prim_panel_wakelock;
+
+struct drm_notify_data g_notify_data;
 
 /*
  *	drm_register_client - register a client notifier
@@ -203,17 +205,16 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	int rc = 0;
 	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
 	struct drm_device *dev = bridge->dev;
-	struct msm_drm_notifier notify_data;
 	int event = 0;
 
-	if (dev->state == MSM_DRM_BLANK_POWERDOWN) {
-		dev->state = MSM_DRM_BLANK_UNBLANK;
+	if (dev->doze_state == DRM_BLANK_POWERDOWN) {
+		dev->doze_state = DRM_BLANK_UNBLANK;
 		pr_info("%s power on from power off\n", __func__);
 	}
 
-	event = dev->state;
+	event = dev->doze_state;
 
-	notify_data.data = &event;
+	g_notify_data.data = &event;
 
 	if (!bridge) {
 		pr_err("Invalid params\n");
@@ -231,17 +232,17 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		cancel_delayed_work_sync(&prim_panel_work);
 		__pm_relax(&prim_panel_wakelock);
 		if (dev->fp_quickon &&
-			(dev->state == MSM_DRM_BLANK_LP1 || dev->state == MSM_DRM_BLANK_LP2)) {
-			event = MSM_DRM_BLANK_POWERDOWN;
-			msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK, &notify_data);
-			msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK, &notify_data);
+			(dev->doze_state == DRM_BLANK_LP1 || dev->doze_state == DRM_BLANK_LP2)) {
+			event = DRM_BLANK_POWERDOWN;
+			drm_notifier_call_chain(DRM_EARLY_EVENT_BLANK, &g_notify_data);
+			drm_notifier_call_chain(DRM_EVENT_BLANK, &g_notify_data);
 			dev->fp_quickon = false;
 		}
 		pr_info("%s panel already on\n", __func__);
 		return;
 	}
 
-	msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK, &notify_data);
+	drm_notifier_call_chain(DRM_EARLY_EVENT_BLANK, &g_notify_data);
 
 	/* By this point mode should have been validated through mode_fixup */
 	rc = dsi_display_set_mode(c_bridge->display,
@@ -277,7 +278,7 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		(void)dsi_display_unprepare(c_bridge->display);
 	}
 
-	msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK, &notify_data);
+	drm_notifier_call_chain(DRM_EVENT_BLANK, &g_notify_data);
 
 	SDE_ATRACE_END("dsi_display_enable");
 
@@ -422,69 +423,21 @@ static void dsi_bridge_disable(struct drm_bridge *bridge)
 	}
 }
 
-int dsi_panel_set_doze_backlight(struct dsi_display *display);
-
-ssize_t dsi_panel_get_doze_backlight(struct dsi_display *display, char *buf);
-
-int dsi_bridge_disp_set_doze_backlight(struct drm_connector *connector,
-			int doze_backlight)
-{
-	struct dsi_display *display = NULL;
-	struct dsi_bridge *c_bridge = NULL;
-
-	if (!connector || !connector->encoder || !connector->encoder->bridge) {
-		pr_err("Invalid connector/encoder/bridge ptr\n");
-		return -EINVAL;
-	}
-
-	c_bridge =  to_dsi_bridge(connector->encoder->bridge);
-	display = c_bridge->display;
-	if (!display || !display->panel || !display->drm_dev) {
-		pr_err("Invalid display/panel/drm_dev ptr\n");
-		return -EINVAL;
-	} else
-		display->drm_dev->doze_brightness = doze_backlight;
-
-	return dsi_panel_set_doze_backlight(display);
-}
-
-ssize_t dsi_bridge_disp_get_doze_backlight(struct drm_connector *connector,
-			char *buf)
-{
-	struct dsi_display *display = NULL;
-	struct dsi_bridge *c_bridge = NULL;
-
-	if (!connector || !connector->encoder || !connector->encoder->bridge) {
-		pr_err("Invalid connector/encoder/bridge ptr\n");
-		return -EINVAL;
-	}
-
-	c_bridge =  to_dsi_bridge(connector->encoder->bridge);
-	display = c_bridge->display;
-	if (!display || !display->panel) {
-		pr_err("Invalid display/panel ptr\n");
-		return -EINVAL;
-	}
-
-	return dsi_panel_get_doze_backlight(display, buf);
-}
-
 static void dsi_bridge_post_disable(struct drm_bridge *bridge)
 {
 	int rc = 0;
 	struct dsi_bridge *c_bridge = to_dsi_bridge(bridge);
 	struct drm_device *dev = bridge->dev;
-	struct msm_drm_notifier notify_data;
 	int event = 0;
 
-	if (dev->state == MSM_DRM_BLANK_UNBLANK) {
-		dev->state = MSM_DRM_BLANK_POWERDOWN;
+	if (dev->doze_state == DRM_BLANK_UNBLANK) {
+		dev->doze_state = DRM_BLANK_POWERDOWN;
 		pr_info("%s wrong doze state\n", __func__);
 	}
 
-	event = dev->state;
+	event = dev->doze_state;
 
-	notify_data.data = &event;
+	g_notify_data.data = &event;
 
 	if (!bridge) {
 		pr_err("Invalid params\n");
@@ -496,10 +449,15 @@ static void dsi_bridge_post_disable(struct drm_bridge *bridge)
 		return;
 	}
 
-	if (dev->state == MSM_DRM_BLANK_LP1 || dev->state == MSM_DRM_BLANK_LP2) {
+	if (dev->doze_state == DRM_BLANK_LP1 || dev->doze_state == DRM_BLANK_LP2) {
 		pr_err("%s doze state can't power off panel\n", __func__);
+		event = DRM_BLANK_POWERDOWN;
+		drm_notifier_call_chain(DRM_EARLY_EVENT_BLANK, &g_notify_data);
+		drm_notifier_call_chain(DRM_EVENT_BLANK, &g_notify_data);
 		return;
 	}
+
+	drm_notifier_call_chain(DRM_EARLY_EVENT_BLANK, &g_notify_data);
 
 	SDE_ATRACE_BEGIN("dsi_bridge_post_disable");
 	SDE_ATRACE_BEGIN("dsi_display_disable");
@@ -520,6 +478,8 @@ static void dsi_bridge_post_disable(struct drm_bridge *bridge)
 		return;
 	}
 	SDE_ATRACE_END("dsi_bridge_post_disable");
+
+	drm_notifier_call_chain(DRM_EVENT_BLANK, &g_notify_data);
 
 	if (gbridge)
 		gbridge->base.dev->fp_quickon = false;
