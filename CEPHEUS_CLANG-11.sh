@@ -3,10 +3,10 @@ rm .version
 
 clear
 cd ~/cepheus-q-oss/
-cp Makefile.clang11 Makefile
+cp -v Makefile.clang11 Makefile
 
 # Resources
-THREAD="-j8"
+THREAD="-j2"
 KERNEL="Image"
 DTBIMAGE="dtb"
 
@@ -15,7 +15,7 @@ export PATH=${CLANG_PATH}:${PATH}
 export CLANG_TRIPLE=aarch64-linux-gnu-
 export CROSS_COMPILE=${HOME}/toolchains/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=clang CXX=clang++
 export CROSS_COMPILE_ARM32=${HOME}/toolchains/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
-export KBUILD_COMPILER_STRING=$(~/android/Toolchains/clang/clang10/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
+export KBUILD_COMPILER_STRING=${HOME}/toolchains/Clang-11/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//'
 export CXXFLAGS="$CXXFLAGS -fPIC"
 export DTC_EXT=dtc
 
@@ -26,16 +26,16 @@ KERNEL_DIR=`pwd`
 ZIMAGE_DIR="${HOME}/cepheus-q-oss/out-clang/arch/arm64/boot/"
 
 # Kernel Details
-VER=".1.5"
+VER=".7.0"
 
 # Vars
-BASE_AK_VER="MOD"
+BASE_AK_VER="CANBERRY"
 AK_VER="$BASE_AK_VER$VER"
 export LOCALVERSION=~`echo $AK_VER`
 export ARCH=arm64
 export SUBARCH=arm64
-export KBUILD_BUILD_USER=MattoftheDead
-export KBUILD_BUILD_HOST=Ubuntu18.04
+export KBUILD_BUILD_USER=Runaxios
+export KBUILD_BUILD_HOST=Ubuntu24.04
 
 DATE_START=$(date +"%s")
 
@@ -47,7 +47,7 @@ echo -e "${restore}"
 
 echo
 make CC=clang CXX=clang++ O=out-clang $DEFCONFIG
-make CC=clang CXX=clang++ O=out-clang $THREAD 2>&1 | tee kernel.log
+make CC=clang CXX=clang++ O=out-clang $THREAD 2>&1 | tee ${HOME}/cepheus-q-oss/out-clang/kernel.log
 
 echo -e "${green}"
 echo "-------------------"
